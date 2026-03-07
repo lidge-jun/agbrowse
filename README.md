@@ -262,6 +262,80 @@ node vision-click.mjs "Play button"
 | `CHROME_NO_SANDBOX`  | `0`                      | `1`로 설정 시 sandbox 비활성화 (Docker/CI) |
 | `BROWSER_SCRIPT`     | `../browser/browser.mjs` | vision-click용 browser.mjs 경로            |
 
+## 테스트 결과
+
+headless Chrome에서 전체 명령어 검증 (2026-03-08):
+
+```
+$ node browser.mjs start --headless
+🌐 Chrome started (CDP: http://127.0.0.1:9222)
+
+$ node browser.mjs navigate "https://example.com"
+navigated → https://example.com/
+
+$ node browser.mjs snapshot --interactive
+e4     link       "Learn more"
+
+$ node browser.mjs screenshot --json
+{"path":"/Users/.../.browser-agent/screenshots/screenshot_1772907354485.png","dpr":1,"viewport":null}
+
+$ node browser.mjs evaluate "document.title"
+"Example Domain"
+
+$ node browser.mjs text
+Example Domain
+This domain is for use in documentation examples without needing permission. Avoid use in operations.
+Learn more
+
+$ node browser.mjs tabs
+1. Example Domain
+   https://example.com/
+
+$ node browser.mjs click e4
+clicked e4
+
+$ node browser.mjs snapshot --interactive    # (navigated to IANA)
+e2     link       "Homepage"
+e6         link       "Domains"
+e8         link       "Protocols"
+e10        link       "Numbers"
+...
+
+$ node browser.mjs stop
+🌐 Chrome stopped
+```
+
+| 명령                       |       상태       |
+| -------------------------- | :--------------: |
+| `start --headless`         |        ✅         |
+| `navigate`                 |        ✅         |
+| `snapshot --interactive`   |        ✅         |
+| `screenshot --json`        |        ✅         |
+| `evaluate`                 |        ✅         |
+| `text`                     |        ✅         |
+| `tabs`                     |        ✅         |
+| `click`                    |        ✅         |
+| `mouse-click`              |        ✅         |
+| `type` / `press` / `hover` |        ✅         |
+| `stop`                     |        ✅         |
+| `status`                   |        ✅         |
+| `reset`                    |        ✅         |
+| `vision-click` (help)      |        ✅         |
+| `vision-click` (e2e)       | ⚠️ Codex CLI 필요 |
+
+## Vision Provider 지원 현황
+
+| Provider        |   상태   | 비고                                           |
+| --------------- | :------: | ---------------------------------------------- |
+| **Codex (GPT)** |  ✅ 지원  | `codex exec -i` — 이미지 분석 + JSON 좌표 반환 |
+| Gemini          | ❌ 미지원 | REST API 프로바이더 구현 필요                  |
+| Claude          | ❌ 미지원 | REST API 프로바이더 구현 필요                  |
+| 로컬 모델       | ❌ 미지원 | ollama 등 비전 모델 연동 필요                  |
+
+현재 Codex CLI의 `exec -i` 명령이 유일하게 **에이전트 컨텍스트에서 이미지를 입력받아 구조화된 JSON을 반환**하는 인터페이스를 제공하기 때문. 다른 프로바이더는 아직 동등한 CLI 인터페이스가 없어서 미구현.
+
+---
+
 ## 크레딧
 
 [cli-jaw/openclaw](https://github.com/nicepkg/cli-jaw) 브라우저 엔진에서 추출 및 보강.
