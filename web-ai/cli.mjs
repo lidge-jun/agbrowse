@@ -3,6 +3,7 @@ import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi }
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
 import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
+import { wrapError } from './errors.mjs';
 
 const COMMANDS = new Set(['render', 'status', 'send', 'poll', 'query', 'stop', 'context-dry-run', 'context-render']);
 export const WEB_AI_USAGE = `
@@ -65,6 +66,28 @@ Examples:
 `;
 
 export async function runWebAiCli(argv = [], deps) {
+    try {
+        return await runWebAiCliInner(argv, deps);
+    } catch (err) {
+        const wrapped = wrapError(err);
+        emitCliError(wrapped, argv);
+        wrapped.alreadyReported = true;
+        throw wrapped;
+    }
+}
+
+function emitCliError(err, argv = []) {
+    const forceJson = process.env.AGBROWSE_JSON_ERRORS === '1' || argv.includes('--json');
+    if (forceJson) {
+        const payload = { ok: false, status: 'error', error: err.toJSON() };
+        console.error(JSON.stringify(payload, null, 2));
+        return;
+    }
+    console.error(`[web-ai error] ${err.errorCode}: ${err.message}`);
+    if (err.retryHint) console.error(`[hint] retryHint: ${err.retryHint}`);
+}
+
+async function runWebAiCliInner(argv = [], deps) {
     const command = argv[0];
     if (!command || command === '--help' || command === 'help' || argv.includes('--help')) {
         console.log(WEB_AI_USAGE.trim());

@@ -1668,6 +1668,6 @@ try {
     // Force exit — playwright CDP WebSocket keeps event loop alive
     process.exit(0);
 } catch (e) {
-    console.error(`❌ ${e.message}`);
+    if (!e?.alreadyReported) console.error(`❌ ${e.message}`);
     process.exit(1);
 }

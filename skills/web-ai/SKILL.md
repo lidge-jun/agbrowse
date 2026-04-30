@@ -241,6 +241,50 @@ agbrowse web-ai query \
 The runtime intercepts the page's `navigator.clipboard.writeText/write` during
 the provider Copy button click. It does not read the OS clipboard.
 
+## Error taxonomy
+
+Set `AGBROWSE_JSON_ERRORS=1` for agent integrations. When set (or when the
+command was invoked with `--json`), any failure is printed on stderr as a
+parseable JSON envelope:
+
+```json
+{
+  "ok": false,
+  "status": "error",
+  "error": {
+    "name": "WebAiError",
+    "errorCode": "cdp.target-mismatch",
+    "stage": "connect",
+    "message": "active tab is not ChatGPT: https://example.com/",
+    "retryHint": "tab-switch",
+    "vendor": "chatgpt",
+    "mutationAllowed": false,
+    "selectorsTried": [],
+    "evidence": { "url": "https://example.com/" }
+  }
+}
+```
+
+Otherwise human mode prints `[web-ai error] <code>: <message>` on the first
+line and `[hint] retryHint: <hint>` on the second line. Exit code is `1`
+in both modes.
+
+Initial code catalog (full list and PR2 call-site coverage live in
+`devlog/03_phase2_errors.md`):
+
+- `cdp.unreachable`, `cdp.target-mismatch`
+- `provider.composer-not-visible`, `provider.model-mismatch`,
+  `provider.attachment-preflight`, `provider.attachment-evidence-missing`,
+  `provider.commit-not-verified`, `provider.poll-timeout`,
+  `provider.runtime-disabled`
+- `capability.unsupported`
+- `context.over-budget`, `context.symlink-rejected`
+- `grok.context-pack-not-allowed`
+- `internal.unhandled`
+
+PR1 ships the class shape and the CLI/JSON wrapper. PR2 converts every
+provider/context-pack `throw new Error(` to `WebAiError`.
+
 ## Safety
 
 - Never claim live web-ai success from render/dry-run alone.
