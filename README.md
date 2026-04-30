@@ -284,6 +284,10 @@ Model aliases:
 - `thinking`, `think`, `gpt-5.5-thinking`
 - `pro`, `gpt-5.5-pro`
 
+Current headed ChatGPT UI may expose Pro as a `Heavy` composer pill. The runtime
+treats `Heavy` as active Pro/Heavy and can select the direct DOM fallback
+`[data-testid="model-switcher-gpt-5-5-pro-thinking-effort"]`.
+
 ### Gemini
 
 ```bash

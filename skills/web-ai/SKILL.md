@@ -155,6 +155,16 @@ ChatGPT:
 - `thinking`, `think`, `gpt-5.5-thinking`
 - `pro`, `gpt-5.5-pro`
 
+2026-04-30 ChatGPT UI note:
+
+- The visible model opener can be a bottom composer pill labeled `Heavy`
+  instead of the older top `model-switcher-dropdown-button`.
+- Treat a visible `Heavy` model pill as the active ChatGPT Pro/Heavy state.
+- For direct DOM fallback, open the model pill and select
+  `[data-testid="model-switcher-gpt-5-5-pro-thinking-effort"]` for Pro.
+- If selector automation fails, inspect with `agbrowse snapshot --interactive`
+  and click the visible `Heavy` model pill before sending.
+
 Gemini:
 
 - `fast`, `flash`, `gemini-fast`
