@@ -413,6 +413,47 @@ npx vitest run test/unit/browser-active-tab.test.mjs --reporter=verbose
 npx vitest run test/integration/web-ai-cli-contract.test.mjs --reporter=verbose
 ```
 
+## Release
+
+`agbrowse` ships with a release script modeled after the cli-jaw release
+scripts.
+
+```bash
+npm run release          # first release keeps package.json version; later releases bump patch
+npm run release -- minor
+npm run release -- major
+npm run release -- 0.2.0
+```
+
+Preview releases:
+
+```bash
+npm run release:preview
+npm run release:preview -- 0.2.0
+```
+
+The default script verifies the package, pushes a git tag, then runs
+`npm publish --access public`. If the npm account requires browser-based
+authentication, npm will print the auth URL during that publish step.
+
+For npm trusted publishing through GitHub Actions, configure npm's trusted
+publisher for:
+
+```text
+Repository: lidge-jun/agbrowse
+Workflow:   release.yml
+```
+
+Then run:
+
+```bash
+AGBROWSE_PUBLISH_VIA_GITHUB=1 npm run release
+```
+
+That path pushes the version tag and dispatches `.github/workflows/release.yml`
+with `id-token: write`, so npm can publish through OIDC instead of a long-lived
+token or OTP prompt.
+
 ## Security Notes
 
 - Do not expose the CDP port to untrusted networks.

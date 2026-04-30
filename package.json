@@ -36,7 +36,9 @@
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:e2e": "vitest run test/e2e",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "release": "bash scripts/release.sh",
+    "release:preview": "bash scripts/release-preview.sh"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",

@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish, for example v0.1.0'
+        required: true
+      npm_tag:
+        description: 'npm dist-tag'
+        required: false
+        default: latest
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      NPM_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_tag || 'latest' }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@latest
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit
+        run: npm audit --audit-level=high
+
+      - name: Test
+        run: npm test
+
+      - name: Verify package
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish --access public --tag "$NPM_TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$NPM_TAG" = "latest" ]; then
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes --latest || \
+              gh release edit "$TAG_NAME" --title "$TAG_NAME" --latest
+          else
+            gh release create "$TAG_NAME" --title "$TAG_NAME ($NPM_TAG)" --generate-notes --prerelease || \
+              gh release edit "$TAG_NAME" --title "$TAG_NAME ($NPM_TAG)" --prerelease
+          fi
