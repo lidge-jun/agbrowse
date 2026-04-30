@@ -500,3 +500,48 @@ resolves that session before any URL-based fallback.
   against a temp store; assert all sessions survive and JSON parses.
 - **Secondary:** `bin/agbrowse-sessions.mjs` shortcut tempting to add later;
   resist it — duplicate command surface for no new capability.
+
+## cli-jaw mirror
+
+cli-jaw is **already partially ahead** of agbrowse on sessions:
+
+- `src/browser/web-ai/session.ts` exports `createSession`,
+  `findSessionByTarget`, `getSession`, `listSessions`,
+  `updateSessionStatus`, `updateSessionResult`, `assertSameTarget`. Records
+  carry `sessionId` (UUID), `targetId`, `url`, `conversationUrl`,
+  `promptHash`, `assistantCount`, `status`, `timeoutMs`, `notifyOnComplete`,
+  `capabilityMode`, `createdAt`, `updatedAt`.
+- `src/browser/web-ai/watcher.ts` is a production watcher with reattach,
+  notify-on-complete, and stale-session detection. The agbrowse Phase 6
+  watcher work mirrors this back into the standalone.
+- HTTP routes already exist: `/api/browser/web-ai/sessions`,
+  `/api/browser/web-ai/watchers`, `/api/browser/web-ai/notifications`. CLI
+  surface in `bin/commands/browser-web-ai.ts` already accepts a `--session`
+  flag on `poll`/`watch`.
+
+| Item | cli-jaw status |
+| --- | --- |
+| `sessionId` shape | **Already exists** — but uses `randomUUID()` not ULID. Phase 1 should align to ULID for sortability and pass through to agbrowse via the `generateSessionId` helper, or accept the difference and document it. Recommend: keep cli-jaw's UUID for now, add a `sortKey` derived from `createdAt` for ordering. |
+| `findActiveSession` | **Already exists** as `findSessionByTarget`. Add `findByConversationUrl` fallback if needed. |
+| `sessions resume` | **Missing CLI command** — server route exists; add `bin/commands/browser-web-ai.ts` `resume` subcommand that calls `/api/browser/web-ai/poll?session=<id>`. |
+| `sessions reattach` | **Missing CLI command** — `bin/commands/browser-web-ai.ts` should add `reattach` that switches the active tab to the session's `targetId` (not URL — cli-jaw is targetId-keyed). |
+| `sessions prune --older-than` | **Missing** — add to `session.ts` and expose via `/api/browser/web-ai/sessions/prune`. |
+| `--deadline` flag | **Missing** — add to `bin/commands/browser-web-ai.ts` and pipe to `timeoutMs`. |
+| `--navigate` flag for `resume` | **Missing** — add when implementing `resume`. |
+| Provider integration | **Already wired** — `chatgpt.ts:230` already does `getSession(input.session) ?? findSessionByTarget(...)`. Just align on shape. |
+| `withStoreLock` for concurrent writes | **Missing** in cli-jaw too. Both repos need it; share design. |
+| `sessions-command.mjs` ↔ cli-jaw | agbrowse uses local `runSessionsCommand`; cli-jaw uses HTTP routes. Each repo keeps its style. |
+
+PR slicing for cli-jaw:
+
+- **PR1**: agbrowse already shipped. Mirror the store improvements
+  (`withStoreLock`, `prune`, ULID sortKey) to `session.ts` plus contract
+  tests that match `tests/unit/browser-web-ai-session-lifecycle.test.ts`.
+- **PR2**: align provider integration with the agbrowse changes; ensure
+  `chatgpt.ts`/`gemini-live.ts`/`grok-live.ts` use the same `findSession`
+  priority order. Most of this is already done.
+- **PR3**: add the missing CLI surfaces (`resume`/`reattach`/`prune` +
+  `--deadline`/`--navigate`) and HTTP routes; sync `cli-jaw/skills_ref/web-ai/SKILL.md`.
+
+Watcher reattach (Phase 6) stays cli-jaw-led; agbrowse Phase 6 ports a
+minimal subset of `watcher.ts` only after Phase 1 ships in both repos.

@@ -274,3 +274,13 @@ appears to differ from agbrowse's persisted browser state.
 - **Test:** create two baselines for `chatgpt.com`, one old `/` and one new
   `/c/<id>`; assert strict URL wins; remove strict; same-host latest wins;
   remove same-host; vendor-latest wins; otherwise null.
+
+## cli-jaw mirror (shipped 2026-05-01 commit `3d54c1f`)
+
+| Item | cli-jaw status |
+| --- | --- |
+| Grok hard-gate | **Ports as-is** — `src/browser/web-ai/grok-live.ts` mirrors agbrowse's check; `src/browser/web-ai/types.ts` adds `allowGrokContextPack`; `bin/commands/browser-web-ai.ts` adds `--allow-grok-context-pack`. |
+| Foreign CDP warning | **Ports as-is** — `src/browser/connection.ts` `launchChrome` emits a stderr warning whenever it reuses an external CDP. cli-jaw already differentiates `createExternalBrowserRuntime` vs `createJawOwnedBrowserRuntime` so the warning rides on the existing reuse branch. |
+| ChatGPT three-tier baseline fallback | **Not applicable** — cli-jaw keys baselines by CDP `targetId` (not URL). The agbrowse url-shift bug never reproduces here. Phase 0 in cli-jaw skips this fix. |
+| Skill docs | **Updated** — `cli-jaw/skills_ref/web-ai/SKILL.md` documents the hard-gate; submodule commit `256956c`. |
+| Tests | `BWAG-006` (hard-gate) + `BWAG-007` (warning only on override) added to `tests/unit/browser-web-ai-grok-live-policy.test.ts`. 103/103 browser-web-ai unit tests pass; `npm run typecheck` clean. |

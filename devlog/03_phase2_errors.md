@@ -345,3 +345,33 @@ helpers and tests can keep plain `Error` if the message is purely diagnostic.
   `err.alreadyReported` flag.
 - **Test:** force a wrong vendor with `AGBROWSE_JSON_ERRORS=1`; assert
   exactly one parseable JSON object on stderr/stdout and non-zero exit.
+
+## cli-jaw mirror
+
+cli-jaw already has a rudimentary error helper that this phase replaces:
+
+- `src/browser/web-ai/chatgpt.ts` (and others) wrap throws with
+  `stageError(err, 'poll-timeout')` style — ad-hoc, untyped.
+- `src/routes/browser.ts` has `toWebAiHttpError(e)` that converts thrown
+  errors into HTTP error JSON. Phase 2 should replace the hand-rolled
+  serializer with `WebAiError.toJSON()`.
+
+| Item | cli-jaw status |
+| --- | --- |
+| `WebAiError` class | **Ports as-is** to `src/browser/web-ai/errors.ts`. Same code catalog (`provider.composer-not-visible`, etc.). |
+| `wrapError` helper | **Ports as-is**. |
+| `stageError` helper | **Replace** — every call site that does `stageError(err, '<stage>')` becomes `throw new WebAiError({ stage, ... })`. |
+| `toWebAiHttpError` | **Modify** — delegates to `WebAiError.toJSON()` when the error is an instance, falls back to legacy shape otherwise (during transition). |
+| `AGBROWSE_JSON_ERRORS` env | **Skip** for cli-jaw — HTTP responses are already JSON. CLI side prints human messages from the JSON response by default; add `--json` to dump the full payload (already supported). |
+| Call-site conversions | All `throw new Error(` in `src/browser/web-ai/**.ts` and `src/browser/web-ai/context-pack/**.ts` get the same conversion as agbrowse. |
+| Tests | Add `tests/unit/browser-web-ai-errors.test.ts` mirroring the agbrowse `WebAiError` coverage. |
+
+PR slicing for cli-jaw matches agbrowse:
+
+- **PR1**: `errors.ts`, `toWebAiHttpError` delegation, docs, tests. Lands
+  before Phase 1 PR2 in cli-jaw too so session failures get typed shape.
+- **PR2**: convert call sites in providers + context-pack; remove
+  `stageError`.
+
+Skill docs: `cli-jaw/skills_ref/web-ai/SKILL.md` adds the same Error
+taxonomy section pointing at the catalog (replicated from agbrowse devlog).

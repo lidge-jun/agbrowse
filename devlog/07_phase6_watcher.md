@@ -57,3 +57,44 @@ to land.
 Deferred. Re-open after Phase 5 ships. Until then, agents needing watcher
 behavior should run their own loop calling `agbrowse web-ai sessions resume
 <id>` on a cron or supervisor.
+
+## cli-jaw mirror
+
+**Direction reverses for this phase:** cli-jaw is the source of truth, not
+agbrowse.
+
+cli-jaw already has a production watcher:
+
+- `src/browser/web-ai/watcher.ts` — long-running poll loop with reattach,
+  notify-on-complete, expired-session detection, and resume-after-restart
+  recovery (`resumeStoredWebAiWatchers`).
+- `src/browser/web-ai/notifications.ts` — channel send + ledger.
+- HTTP routes `/api/browser/web-ai/watch` and `/api/browser/web-ai/watchers`
+  expose the lifecycle.
+- CLI command `cli-jaw browser web-ai watch --vendor <v> --session <id>`
+  starts a watcher; `web-ai watchers` lists them.
+- Tests `tests/unit/browser-web-ai-watcher.test.ts` cover 8+ lifecycle
+  scenarios.
+
+| Item | cli-jaw status |
+| --- | --- |
+| Long-running poll | **Already production** — Phase 6 work in cli-jaw is incremental: e.g. better webhook target story, multi-machine sync (out of scope). |
+| Notification target | **Already production** — channel send endpoint (`/api/channel/send`). |
+| Resume after restart | **Already production** — `resumeStoredWebAiWatchers` runs at server start. |
+| Stale session detection | **Already production** — `WEB-AI-WATCH-005`. |
+
+Phase 6 in **agbrowse** therefore ports a minimal subset:
+
+- A polling-loop helper (`web-ai watcher start --session <id>` that just
+  re-runs poll on a configurable interval until terminal).
+- No notification channels initially — print to stdout so a user-supplied
+  cron/supervisor can pipe to whatever they want.
+- No HTTP server, no resume-after-restart-of-agbrowse-itself (each shell
+  starts a fresh loop).
+
+If agbrowse needs the full feature set later, fold the agbrowse runtime
+into cli-jaw rather than reimplementing.
+
+Open question for the phase: **does agbrowse even need a watcher**, or is
+"call `agbrowse web-ai sessions resume <id>` from cron" enough? Likely the
+latter for v1; revisit after Phase 5 ships and real users ask.

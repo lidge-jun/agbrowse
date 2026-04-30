@@ -300,3 +300,43 @@ contains `capabilities[]` rows with `capabilityId`, `state`, `evidence`, and
   opening model menus and not closing them.
 - **Test:** fake page with model menu; run probe; assert it returns within
   budget and sends `Escape`/closes the menu before resolving.
+
+## cli-jaw mirror
+
+cli-jaw is **significantly further ahead** than agbrowse here:
+
+- `src/browser/web-ai/capability-registry.ts` — registry + lookup primitives.
+- `src/browser/web-ai/capability-types.ts` — typed capability rows.
+- `src/browser/web-ai/capability-observation-presets.ts` — provider preset
+  bundles.
+- HTTP route `/api/browser/web-ai/capabilities` exposes them; CLI accepts
+  `--family` and `--frontend-status` filters.
+- Tests already cover the registry (`tests/unit/browser-web-ai-capability-registry.test.ts`).
+
+Phase 3 in cli-jaw is therefore "consume what already exists":
+
+| Item | cli-jaw status |
+| --- | --- |
+| `defineCapability`/`runCapabilities` runtime | **Already exists** — registry-driven instead of array-driven. agbrowse should consider porting the registry shape back rather than inventing a parallel one. |
+| `<vendor>.host.matches` / `composer.visible` / `model.alias-selectable` / `copy.button-present` | **Already partly modeled** — verify each is registered with a probe; add the ones that are missing. |
+| `web-ai status --json --vendor <v>` returns `capabilities[]` | **Partially shipped** — `status` returns a basic `{ ok, vendor, status, url, warnings }`. Phase 3 adds `capabilities[]` to that response so the CLI gets parity with the existing `/api/browser/web-ai/capabilities` route. |
+| `--probe <capabilityId>` flag | **Missing** — add to `bin/commands/browser-web-ai.ts`. |
+| Side-effect contract (probes never submit) | **Apply equally** — audit the existing probes in cli-jaw to confirm they only read DOM. |
+| SKILL matrix replacement | **Apply** — `cli-jaw/skills_ref/web-ai/SKILL.md` static "Provider Matrix" already minimal; replace with a pointer to runtime capabilities. |
+
+Direction reversal — when this phase runs:
+
+1. **First**: agbrowse imports the cli-jaw capability shape rather than
+   inventing a new one. The agbrowse `web-ai/capability.mjs` skeleton in
+   this phase file becomes a port of `capability-registry.ts`, not greenfield.
+2. **Then**: cli-jaw augments `status` to embed `capabilities[]` and adds
+   the `--probe` CLI flag.
+3. Both repos share the canonical capability ID list.
+
+PR slicing:
+
+- **PR1 (cli-jaw)**: extend `status` response with `capabilities[]`, add
+  `--probe` flag, update SKILL.
+- **PR1 (agbrowse)**: port registry shape; implement host/composer probes
+  using the cli-jaw catalog as source of truth.
+- **PR2 (both)**: model/upload/copy/streaming probes + SKILL matrix removal.

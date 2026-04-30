@@ -322,3 +322,35 @@ upload never appears | provider UI changed | run `agbrowse web-ai doctor --vendo
   report is under 4 KB by default and raw snippets only appear with
   `--full`. Cover the copy-fallback feature's `interceptStatus` does not
   carry the actual copied text.
+
+## cli-jaw mirror
+
+cli-jaw already has a **diagnose** surface that this phase folds into the
+same shape:
+
+- `src/browser/web-ai/...` exports diagnostics primitives (per the
+  `tests/unit/browser-web-ai-diagnostics.test.ts` suite).
+- HTTP route `/api/browser/web-ai/diagnose` accepts `--vendor` and
+  `--stage` filters; CLI exposes it as `web-ai diagnose`.
+
+Phase 4 reconciles the two surfaces:
+
+| Item | cli-jaw status |
+| --- | --- |
+| `dom-hash` primitive | **Ports as-is** to `src/browser/web-ai/dom-hash.ts`. Reuse from cli-jaw's diagnose helpers if equivalent already exists. |
+| `runDoctor` | **Rename / consolidate** — keep the HTTP `/diagnose` name on the route; CLI command becomes `web-ai doctor` (alias of existing `diagnose`) so terminology matches agbrowse. Or vice versa: pick one name in both repos. Recommend: standardize on `doctor` in both because it implies more than a single-stage probe. |
+| Feature-level `domHash` | **Add** — current diagnose lists stages but not selector hashes. Phase 4 augments diagnose output with `domHash` per feature. |
+| `lastSession.composerBefore/composerAfter` snippets | **Wire through** — Phase 1 in cli-jaw will save these on `session.ts` records. Phase 4 reads them back. |
+| Privacy cap (≤4 KB default) | **Apply equally** — same test asserts in both repos. |
+| Skill docs | `cli-jaw/skills_ref/web-ai/SKILL.md` already mentions `web-ai diagnose`. Update to `doctor` (or add alias) and document the new fields. |
+
+Open question for the phase: do we **rename `diagnose` to `doctor` in
+cli-jaw** to match agbrowse, or **keep both and alias**? The renaming
+breaks any user scripts that hit `cli-jaw browser web-ai diagnose`. Default
+recommendation: keep `diagnose` as a deprecated alias for one minor release.
+
+PR slicing in cli-jaw mirrors agbrowse:
+
+- **PR1**: `dom-hash.ts` + tests.
+- **PR2**: extend `/api/browser/web-ai/diagnose` response with
+  `features[].domHash`, add the `web-ai doctor` CLI alias, update SKILL.

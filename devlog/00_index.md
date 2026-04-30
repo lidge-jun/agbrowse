@@ -84,3 +84,42 @@ Keep: Phase 0 + minimal Phase 1 (store + resume) + Phase 2 JSON errors.
   marked "schematic".
 - Source of truth for diff sketches is `context/260501_gpt_pro_phase_critique.md`;
   this devlog mirrors the relevant slices only.
+
+## Dual-repo patching strategy
+
+Every phase ships to **both** repos in lockstep:
+
+- `agbrowse` — `/Users/jun/Developer/new/700_projects/agbrowse` (`.mjs`),
+  `npm install -g agbrowse`. Standalone consumer.
+- `cli-jaw` — `/Users/jun/Developer/new/700_projects/cli-jaw` (`.ts`,
+  HTTP-routed). Production runtime; richer existing infrastructure.
+
+Each phase file ends with a `## cli-jaw mirror` section that maps:
+
+- **Ports as-is** — same change, just `.mjs` ↔ `.ts` translation.
+- **Already exists** — cli-jaw is further ahead; the phase aligns shape, not
+  builds from scratch.
+- **Not applicable** — agbrowse-only fix that does not reproduce in cli-jaw
+  (e.g. Phase 0 ChatGPT baseline fallback because cli-jaw keys by
+  `targetId`).
+- **Skill docs** — `cli-jaw/skills_ref/{browser,web-ai}/SKILL.md` (a separate
+  submodule with its own remote at `lidge-jun/cli-jaw-skills`) updates next
+  to the runtime change.
+
+Phase 0 was the proof of the pattern: shipped to agbrowse `main` (`3c1ea8e`,
+`1b4b238`) and cli-jaw `master` (`3d54c1f`) plus skills_ref `main`
+(`256956c`) on the same day.
+
+Sequence inside one phase:
+
+1. Implement in agbrowse first (lighter surface, faster feedback).
+2. Run agbrowse unit tests + live smoke.
+3. Mirror to cli-jaw with the differences listed in the phase's mirror
+   section.
+4. Run cli-jaw `npm run typecheck` + targeted unit tests.
+5. Update `cli-jaw/skills_ref/web-ai/SKILL.md` (submodule commit) and bump
+   the submodule pointer in cli-jaw.
+6. Two commits per repo at most: one feature commit + one docs/devlog commit.
+
+If a phase only applies to one repo, the mirror section says so explicitly
+and the other repo is skipped.

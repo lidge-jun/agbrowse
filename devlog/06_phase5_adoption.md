@@ -283,3 +283,35 @@ beside cli-jaw or other browser automation tools.
   overrides.
 - **Secondary:** profile lock left dangling after a `kill -9` of the agbrowse
   process; mitigated by the `STALE_AFTER_MS` reclaim path.
+
+## cli-jaw mirror
+
+cli-jaw already differentiates Chrome ownership at the runtime layer:
+
+- `src/browser/connection.ts` exports `createExternalBrowserRuntime` and
+  `createJawOwnedBrowserRuntime`. `runtimeOwner` tracks which one is
+  active. The Phase 0 stderr warning already fires from the external
+  branch.
+- cli-jaw also has an idle reaper that auto-closes Chrome after 10 min
+  idle (`ensureIdleReaperStarted`) — agbrowse has no equivalent and Phase
+  5 should consider whether to port it.
+
+| Item | cli-jaw status |
+| --- | --- |
+| `--port-strict` | **Ports as-is** — reject fast when port is occupied by foreign CDP unless `--reuse-foreign-chrome` is passed. |
+| `--reuse-foreign-chrome` | **Ports as-is** — flips the existing best-effort warning into an explicit ack. |
+| `BROWSER_AGENT_HOME/profile.lock` | **Apply both** — even though cli-jaw has runtime ownership tracking, the lock file is the cross-process guard. cli-jaw uses `JAW_HOME` style path (`process.env.JAW_HOME` or default); name it `profile.lock` under there. |
+| `churn-log.jsonl` | **Ports as-is** — same JSONL semantics; tied to whichever command emits feature-level `domHash` (Phase 4 doctor/diagnose). |
+| `AGBROWSE_CHURN_LOG=1` env | **Rename to `JAW_CHURN_LOG=1`** for cli-jaw to avoid agbrowse-prefixed env in cli-jaw runtime. Both can coexist. |
+| Adoption checklist | `docs/adoption-checklist.md` lives in agbrowse; cli-jaw points at it from `cli-jaw/skills_ref/web-ai/SKILL.md` rather than maintaining a duplicate. |
+| Idle reaper | **cli-jaw-only** — agbrowse Phase 5 may consider adding a simple equivalent in `skills/browser/browser.mjs`, but it is out of scope here. |
+
+PR slicing in cli-jaw mirrors agbrowse three-way:
+
+- **PR1**: profile lock + port guards in `src/browser/connection.ts`.
+- **PR2**: churn-log wired to `web-ai doctor`/`diagnose`.
+- **PR3**: cross-link adoption checklist; sync SKILL with the new flags
+  and env vars.
+
+Source of truth: agbrowse `docs/adoption-checklist.md` is canonical;
+cli-jaw skills link out rather than duplicate.
