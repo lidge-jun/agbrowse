@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/agbrowse-logo.png" alt="agbrowse logo" width="220">
+</p>
+
 # agbrowse
 
 Standalone Chrome/CDP browser automation and web-ai CLI for AI agents.
