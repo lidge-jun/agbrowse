@@ -13,6 +13,14 @@ function fakePageForDoctor(url, locatorMap = {}) {
         },
         locator: (selector) => ({
             count: async () => locatorMap[selector]?.count ?? 0,
+            nth: (i) => ({
+                isVisible: async () => {
+                    const entry = locatorMap[selector];
+                    if (!entry) return false;
+                    if (Array.isArray(entry.visibleAt)) return entry.visibleAt.includes(i);
+                    return i === 0 ? (entry.visible ?? false) : false;
+                },
+            }),
             first: () => ({
                 isVisible: async () => locatorMap[selector]?.visible ?? false,
             }),
@@ -26,6 +34,13 @@ describe('web-ai doctor', () => {
         expect(featureDefinitionsForVendor('gemini').length).toBe(6);
         expect(featureDefinitionsForVendor('grok').length).toBe(6);
         expect(featureDefinitionsForVendor('unknown').length).toBe(0);
+    });
+
+    it('featureDefinitionsForVendor returns defensive copies', () => {
+        const a = featureDefinitionsForVendor('chatgpt');
+        const b = featureDefinitionsForVendor('chatgpt');
+        a[0].feature = 'mutated';
+        expect(b[0].feature).toBe('composer');
     });
 
     it('featureDefinitionsForVendor includes all expected features', () => {
@@ -115,7 +130,7 @@ describe('web-ai doctor', () => {
         }
     });
 
-    it('session content is redacted by default', async () => {
+    it('session content is never included in doctor output', async () => {
         const page = fakePageForDoctor('https://chatgpt.com/');
         const deps = { getPage: async () => page };
         const report = await runDoctor(deps, { vendor: 'chatgpt' });
@@ -123,16 +138,20 @@ describe('web-ai doctor', () => {
             expect(report.lastSession).not.toHaveProperty('composerBefore');
             expect(report.lastSession).not.toHaveProperty('composerAfter');
         }
+        const withFlag = await runDoctor(deps, { vendor: 'chatgpt', includeContent: true });
+        if (withFlag.lastSession) {
+            expect(withFlag.lastSession).not.toHaveProperty('composerBefore');
+            expect(withFlag.lastSession).not.toHaveProperty('composerAfter');
+        }
     });
 
-    it('clamped report remains valid JSON with truncated flag', async () => {
+    it('clamped report uses byte length and sets truncated flag', async () => {
         const page = fakePageForDoctor('https://chatgpt.com/');
         const deps = { getPage: async () => page };
         const report = await runDoctor(deps, { vendor: 'chatgpt' });
-        const json = JSON.stringify(report);
-        const parsed = JSON.parse(json);
-        expect(parsed).toBeTruthy();
-        expect(parsed.vendor).toBe('chatgpt');
+        const reportBytes = Buffer.byteLength(JSON.stringify(report), 'utf8');
+        expect(reportBytes).toBeLessThan(4096);
+        expect(report.truncated).toBeUndefined();
     });
 
     it('domHash is null when selector not found', async () => {

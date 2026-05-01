@@ -42,9 +42,9 @@ const FULL_MAX_REPORT_BYTES = 16384;
 
 export function featureDefinitionsForVendor(vendor) {
     switch (vendor) {
-        case 'chatgpt': return CHATGPT_FEATURES;
-        case 'gemini': return GEMINI_FEATURES;
-        case 'grok': return GROK_FEATURES;
+        case 'chatgpt': return CHATGPT_FEATURES.map(f => ({ ...f }));
+        case 'gemini': return GEMINI_FEATURES.map(f => ({ ...f }));
+        case 'grok': return GROK_FEATURES.map(f => ({ ...f }));
         default: return [];
     }
 }
@@ -115,22 +115,22 @@ function summarizeSessionForDoctor(session, options = {}) {
         status: session.status,
         deadlineAt: session.deadlineAt || null,
     };
-    if (options.includeContent) {
-        base.composerBefore = session.composerBefore || null;
-        base.composerAfter = session.composerAfter || null;
-    } else {
-        if (session.composerBefore) base.composerBeforeChars = session.composerBefore.length;
-        if (session.composerAfter) {
-            base.composerAfterChars = session.composerAfter.length;
-            base.composerAfterHash = `sha256:${createHash('sha256').update(session.composerAfter).digest('hex').slice(0, 16)}`;
-        }
+    if (session.composerBefore) base.composerBeforeChars = session.composerBefore.length;
+    if (session.composerAfter) {
+        base.composerAfterChars = session.composerAfter.length;
+        base.composerAfterHash = `sha256:${createHash('sha256').update(session.composerAfter).digest('hex').slice(0, 16)}`;
     }
     return base;
 }
 
+function byteLength(str) {
+    return Buffer.byteLength(str, 'utf8');
+}
+
 function clampReport(report, maxBytes) {
     const raw = JSON.stringify(report);
-    if (raw.length <= maxBytes) return report;
+    if (byteLength(raw) <= maxBytes) return report;
+    const rawBytes = byteLength(raw);
     const clamped = { ...report, truncated: true, maxBytes };
     clamped.features = clamped.features.map(f => ({
         feature: f.feature,
@@ -140,6 +140,11 @@ function clampReport(report, maxBytes) {
     }));
     if (clamped.lastSession?.composerBefore) delete clamped.lastSession.composerBefore;
     if (clamped.lastSession?.composerAfter) delete clamped.lastSession.composerAfter;
-    clamped.warnings = [...(clamped.warnings || []), `report-clamped:${raw.length}→${maxBytes}`];
+    clamped.warnings = [...(clamped.warnings || []), `report-clamped:${rawBytes}→${maxBytes}`];
+    const clampedJson = JSON.stringify(clamped);
+    if (byteLength(clampedJson) > maxBytes) {
+        clamped.features = clamped.features.map(f => ({ feature: f.feature, state: f.state }));
+        clamped.lastSession = null;
+    }
     return clamped;
 }

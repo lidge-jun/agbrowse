@@ -12,18 +12,23 @@ export async function domHashAround(page, selectors, options = {}) {
 
 export function normalizeDomForHash(html) {
     return String(html)
-        .replace(/\sdata-message-id="[^"]*"/g, '')
-        .replace(/\saria-busy="[^"]*"/g, '')
-        .replace(/\sstyle="[^"]*"/g, '')
+        .replace(/\sdata-[\w-]+="[^"]*"/g, '')
+        .replace(/\saria-[\w-]+="[^"]*"/g, '')
+        .replace(/\s(?:style|title|alt|placeholder|value)="[^"]*"/g, '')
         .replace(/>([^<]{1,})</g, '><')
         .replace(/\s+/g, ' ')
         .trim();
 }
 
 export async function selectorMatchSummary(page, selectors) {
-    return Promise.all(selectors.map(async selector => ({
-        selector,
-        matched: await page.locator(selector).count().catch(() => 0),
-        visible: await page.locator(selector).first().isVisible().catch(() => false),
-    })));
+    const MAX_VISIBILITY_SCAN = 10;
+    return Promise.all(selectors.map(async selector => {
+        const loc = page.locator(selector);
+        const matched = await loc.count().catch(() => 0);
+        let visible = false;
+        for (let i = 0; i < Math.min(matched, MAX_VISIBILITY_SCAN) && !visible; i += 1) {
+            visible = await loc.nth(i).isVisible().catch(() => false);
+        }
+        return { selector, matched, visible };
+    }));
 }

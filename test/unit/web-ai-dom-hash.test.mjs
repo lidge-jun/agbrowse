@@ -6,6 +6,14 @@ function fakePage(evalResult, locatorMap = {}) {
         evaluate: async () => evalResult,
         locator: (selector) => ({
             count: async () => locatorMap[selector]?.count ?? 0,
+            nth: (i) => ({
+                isVisible: async () => {
+                    const entry = locatorMap[selector];
+                    if (!entry) return false;
+                    if (Array.isArray(entry.visibleAt)) return entry.visibleAt.includes(i);
+                    return i === 0 ? (entry.visible ?? false) : false;
+                },
+            }),
             first: () => ({
                 isVisible: async () => locatorMap[selector]?.visible ?? false,
             }),
@@ -68,6 +76,25 @@ describe('dom-hash', () => {
         expect(result).toHaveLength(2);
         expect(result[0]).toEqual({ selector: 'button.copy', matched: 2, visible: true });
         expect(result[1]).toEqual({ selector: 'button.upload', matched: 0, visible: false });
+    });
+
+    it('selectorMatchSummary detects visibility on non-first match', async () => {
+        const page = fakePage(null, {
+            'button.copy': { count: 3, visibleAt: [2] },
+        });
+        const result = await selectorMatchSummary(page, ['button.copy']);
+        expect(result[0].matched).toBe(3);
+        expect(result[0].visible).toBe(true);
+    });
+
+    it('normalizeDomForHash strips content-bearing attributes', () => {
+        const raw = '<input value="secret" title="tooltip" placeholder="type here" alt="img">';
+        const normalized = normalizeDomForHash(raw);
+        expect(normalized).not.toContain('secret');
+        expect(normalized).not.toContain('tooltip');
+        expect(normalized).not.toContain('type here');
+        expect(normalized).not.toContain('img');
+        expect(normalized).toContain('<input');
     });
 
     it('prompt/response text changes do not alter structural hash', async () => {
