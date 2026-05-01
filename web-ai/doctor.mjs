@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { domHashAround, selectorMatchSummary } from './dom-hash.mjs';
 import { findActiveSession } from './session.mjs';
 import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } from './copy-markdown.mjs';
@@ -41,10 +40,11 @@ const DEFAULT_MAX_REPORT_BYTES = 4096;
 const FULL_MAX_REPORT_BYTES = 16384;
 
 export function featureDefinitionsForVendor(vendor) {
+    const deepCopy = f => ({ ...f, selectors: [...f.selectors] });
     switch (vendor) {
-        case 'chatgpt': return CHATGPT_FEATURES.map(f => ({ ...f }));
-        case 'gemini': return GEMINI_FEATURES.map(f => ({ ...f }));
-        case 'grok': return GROK_FEATURES.map(f => ({ ...f }));
+        case 'chatgpt': return CHATGPT_FEATURES.map(deepCopy);
+        case 'gemini': return GEMINI_FEATURES.map(deepCopy);
+        case 'grok': return GROK_FEATURES.map(deepCopy);
         default: return [];
     }
 }
@@ -109,18 +109,14 @@ function redactUrl(url) {
     }
 }
 
-function summarizeSessionForDoctor(session, options = {}) {
-    const base = {
+function summarizeSessionForDoctor(session) {
+    return {
         sessionId: session.sessionId,
         status: session.status,
         deadlineAt: session.deadlineAt || null,
+        composerBeforeChars: session.composerBefore?.length ?? null,
+        composerAfterChars: session.composerAfter?.length ?? null,
     };
-    if (session.composerBefore) base.composerBeforeChars = session.composerBefore.length;
-    if (session.composerAfter) {
-        base.composerAfterChars = session.composerAfter.length;
-        base.composerAfterHash = `sha256:${createHash('sha256').update(session.composerAfter).digest('hex').slice(0, 16)}`;
-    }
-    return base;
 }
 
 function byteLength(str) {
@@ -128,9 +124,8 @@ function byteLength(str) {
 }
 
 function clampReport(report, maxBytes) {
-    const raw = JSON.stringify(report);
-    if (byteLength(raw) <= maxBytes) return report;
-    const rawBytes = byteLength(raw);
+    if (byteLength(JSON.stringify(report)) <= maxBytes) return report;
+    const rawBytes = byteLength(JSON.stringify(report));
     const clamped = { ...report, truncated: true, maxBytes };
     clamped.features = clamped.features.map(f => ({
         feature: f.feature,
@@ -138,13 +133,14 @@ function clampReport(report, maxBytes) {
         state: f.state,
         domHash: f.domHash,
     }));
-    if (clamped.lastSession?.composerBefore) delete clamped.lastSession.composerBefore;
-    if (clamped.lastSession?.composerAfter) delete clamped.lastSession.composerAfter;
+    clamped.lastSession = null;
     clamped.warnings = [...(clamped.warnings || []), `report-clamped:${rawBytes}→${maxBytes}`];
-    const clampedJson = JSON.stringify(clamped);
-    if (byteLength(clampedJson) > maxBytes) {
+    if (byteLength(JSON.stringify(clamped)) > maxBytes) {
         clamped.features = clamped.features.map(f => ({ feature: f.feature, state: f.state }));
-        clamped.lastSession = null;
+        clamped.warnings = [`report-clamped:${rawBytes}→${maxBytes}`];
+    }
+    if (byteLength(JSON.stringify(clamped)) > maxBytes) {
+        clamped.url = clamped.url?.slice(0, 64) || null;
     }
     return clamped;
 }

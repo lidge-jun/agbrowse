@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 export async function domHashAround(page, selectors, options = {}) {
     const maxChars = options.maxChars ?? 8192;
     const html = await page.evaluate((sels) => {
-        const node = sels.map(s => document.querySelector(s)).find(Boolean);
-        return node ? node.outerHTML : null;
+        for (const s of sels) {
+            try { const n = document.querySelector(s); if (n) return n.outerHTML; } catch { /* invalid selector */ }
+        }
+        return null;
     }, selectors).catch(() => null);
     if (!html) return null;
     return `sha256:${createHash('sha256').update(normalizeDomForHash(html).slice(0, maxChars)).digest('hex').slice(0, 16)}`;

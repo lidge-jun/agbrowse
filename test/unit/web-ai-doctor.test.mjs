@@ -36,11 +36,13 @@ describe('web-ai doctor', () => {
         expect(featureDefinitionsForVendor('unknown').length).toBe(0);
     });
 
-    it('featureDefinitionsForVendor returns defensive copies', () => {
+    it('featureDefinitionsForVendor returns deep defensive copies', () => {
         const a = featureDefinitionsForVendor('chatgpt');
         const b = featureDefinitionsForVendor('chatgpt');
         a[0].feature = 'mutated';
+        a[0].selectors.push('bad-selector');
         expect(b[0].feature).toBe('composer');
+        expect(b[0].selectors).not.toContain('bad-selector');
     });
 
     it('featureDefinitionsForVendor includes all expected features', () => {
@@ -130,18 +132,15 @@ describe('web-ai doctor', () => {
         }
     });
 
-    it('session content is never included in doctor output', async () => {
+    it('session content and content-derived hashes are never in doctor output', async () => {
         const page = fakePageForDoctor('https://chatgpt.com/');
         const deps = { getPage: async () => page };
         const report = await runDoctor(deps, { vendor: 'chatgpt' });
         if (report.lastSession) {
             expect(report.lastSession).not.toHaveProperty('composerBefore');
             expect(report.lastSession).not.toHaveProperty('composerAfter');
-        }
-        const withFlag = await runDoctor(deps, { vendor: 'chatgpt', includeContent: true });
-        if (withFlag.lastSession) {
-            expect(withFlag.lastSession).not.toHaveProperty('composerBefore');
-            expect(withFlag.lastSession).not.toHaveProperty('composerAfter');
+            expect(report.lastSession).not.toHaveProperty('composerAfterHash');
+            expect(report.lastSession).not.toHaveProperty('composerBeforeHash');
         }
     });
 
