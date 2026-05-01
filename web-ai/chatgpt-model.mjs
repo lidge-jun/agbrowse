@@ -177,8 +177,14 @@ export async function chatGptModelCapabilityProbe(page, model) {
         return { state: 'fail', evidence: { requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
     }
     const option = await findModelOption(page, requested).catch(() => null);
-    await closeModelMenu(page).catch(() => undefined);
+    let menuClosed = false;
+    try {
+        await closeModelMenu(page);
+        menuClosed = !(await isModelMenuOpen(page));
+    } catch {
+        menuClosed = false;
+    }
     return option
-        ? { state: 'ok', evidence: { requested, usedFallbacks }, next: 'send' }
-        : { state: 'fail', evidence: { requested }, next: 'model-fallback' };
+        ? { state: 'ok', evidence: { requested, menuClosed, usedFallbacks }, next: 'send' }
+        : { state: 'fail', evidence: { requested, menuClosed }, next: 'model-fallback' };
 }

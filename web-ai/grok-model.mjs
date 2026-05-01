@@ -106,9 +106,28 @@ export async function grokModelCapabilityProbe(page, model) {
     if (!model) return { state: 'unknown', evidence: { requested: null }, next: 'send' };
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     const active = await readGrokModel(page).catch(() => null);
-    return active === requested
-        ? { state: 'ok', evidence: { active, requested }, next: 'send' }
-        : { state: 'warn', evidence: { active, requested }, next: 'model-fallback' };
+    if (active === requested) return { state: 'ok', evidence: { active, requested, selectable: true }, next: 'send' };
+    const usedFallbacks = [];
+    try {
+        await openGrokModelMenu(page, usedFallbacks);
+    } catch {
+        return { state: 'warn', evidence: { active, requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
+    }
+    const option = await findGrokModelOption(page, requested).catch(() => null);
+    await closeGrokModelMenu(page);
+    return option
+        ? { state: 'warn', evidence: { active, requested, selectable: true, usedFallbacks }, next: 'model-fallback' }
+        : { state: 'fail', evidence: { active, requested, selectable: false, usedFallbacks }, next: 'model-fallback' };
+}
+
+async function closeGrokModelMenu(page) {
+    for (let i = 0; i < 3; i += 1) {
+        const menuVisible = await page.locator('[role="menuitem"]')
+            .filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b/i }).first().isVisible().catch(() => false);
+        if (!menuVisible) return;
+        await page.keyboard.press('Escape').catch(() => undefined);
+        await page.waitForTimeout(250).catch(() => undefined);
+    }
 }
 
 async function readGrokModel(page) {

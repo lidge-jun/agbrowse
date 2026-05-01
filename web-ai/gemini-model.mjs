@@ -123,9 +123,28 @@ export async function geminiModelCapabilityProbe(page, model) {
     if (!model) return { state: 'unknown', evidence: { requested: null }, next: 'send' };
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     const active = await readGeminiModel(page).catch(() => null);
-    return active === requested
-        ? { state: 'ok', evidence: { active, requested }, next: 'send' }
-        : { state: 'warn', evidence: { active, requested }, next: 'model-fallback' };
+    if (active === requested) return { state: 'ok', evidence: { active, requested, selectable: true }, next: 'send' };
+    const usedFallbacks = [];
+    try {
+        await openGeminiModelMenu(page, usedFallbacks);
+    } catch {
+        return { state: 'warn', evidence: { active, requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
+    }
+    const option = await findGeminiModelOption(page, requested).catch(() => null);
+    await closeGeminiModelMenu(page);
+    return option
+        ? { state: 'warn', evidence: { active, requested, selectable: true, usedFallbacks }, next: 'model-fallback' }
+        : { state: 'fail', evidence: { active, requested, selectable: false, usedFallbacks }, next: 'model-fallback' };
+}
+
+async function closeGeminiModelMenu(page) {
+    for (let i = 0; i < 3; i += 1) {
+        const menuVisible = await page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"]')
+            .filter({ hasText: /^Fast\b|^Thinking\b|^Pro\b/i }).first().isVisible().catch(() => false);
+        if (!menuVisible) return;
+        await page.keyboard.press('Escape').catch(() => undefined);
+        await page.waitForTimeout(250).catch(() => undefined);
+    }
 }
 
 async function readGeminiModel(page) {

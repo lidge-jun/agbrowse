@@ -43,7 +43,8 @@ The JSON response contains `capabilities[]` rows with `capabilityId`,
 `state` (`ok`/`warn`/`fail`/`unknown`), `evidence`, and `next` (retry
 hint). Scope a single probe with `--probe <capabilityId>`.
 
-Capability IDs per vendor (hyphenated, matches cli-jaw registry):
+Capability IDs per vendor (hyphenated, aligned with cli-jaw registry shape
+but implementation details may differ per vendor):
 
 | Capability | ChatGPT | Gemini | Grok |
 | --- | :---: | :---: | :---: |
