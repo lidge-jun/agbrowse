@@ -1,4 +1,6 @@
 import { renderQuestionEnvelope, renderQuestionEnvelopeWithContext, normalizeEnvelope } from './question.mjs';
+import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
+import { INPUT_SELECTORS as CHATGPT_COMPOSER_SELECTORS } from './chatgpt-composer.mjs';
 import {
     createSession,
     findActiveSession,
@@ -59,9 +61,24 @@ export async function renderWebAi(input = {}) {
     };
 }
 
+export const chatGptCapabilities = [
+    defineCapability('chatgpt-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), CHATGPT_HOSTS)),
+    defineCapability('chatgpt-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), CHATGPT_COMPOSER_SELECTORS)),
+];
+
 export async function statusWebAi(deps, input = {}) {
     const page = await requireChatGptPage(deps);
-    return { ok: true, vendor: input.vendor || 'chatgpt', status: 'ready', url: page.url(), warnings: [] };
+    const capabilities = await runCapabilities(deps, chatGptCapabilities, input);
+    const worst = worstCapabilityState(capabilities);
+    return {
+        ok: worst !== 'fail',
+        vendor: input.vendor || 'chatgpt',
+        status: 'ready',
+        url: page.url(),
+        capabilities,
+        capabilityState: worst,
+        warnings: [],
+    };
 }
 
 export async function sendWebAi(deps, input = {}) {

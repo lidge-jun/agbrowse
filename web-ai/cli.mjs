@@ -173,6 +173,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'older-than': { type: 'string' },
             status: { type: 'string' },
             limit: { type: 'string' },
+            probe: { type: 'string' },
             full: { type: 'boolean', default: false },
             json: { type: 'boolean', default: false },
         },
@@ -219,6 +220,7 @@ async function runWebAiCliInner(argv = [], deps) {
         inlineOnly: values['inline-only'],
         allowCopyMarkdownFallback: values['allow-copy-markdown-fallback'] === true,
         allowGrokContextPack: values['allow-grok-context-pack'] === true,
+        probe: values.probe,
     };
 
     const result = command === 'sessions'

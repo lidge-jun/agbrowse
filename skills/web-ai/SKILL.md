@@ -38,11 +38,27 @@ node skills/browser/browser.mjs web-ai query ...
 
 ## Provider Matrix
 
+Use `agbrowse web-ai status --vendor <v> --json` to query runtime
+capabilities at the moment of mutation. The response carries a
+`capabilities[]` array with `{capabilityId, state, evidence, next}`
+rows; the static matrix below is now a quick reference, not the source
+of truth.
+
 | Provider | Inline | File upload | Context package upload | Model select | Copy fallback |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | ChatGPT | yes | yes | yes | yes | yes |
 | Gemini | yes | yes | yes | yes | yes |
 | Grok | yes | yes | avoid (see below) | yes | yes |
+
+Initial capability IDs (hyphenated to match cli-jaw's
+`capability-registry.ts`):
+
+- `chatgpt-active-tab-verification`, `chatgpt-composer-visible`
+- `gemini-active-tab-verification`, `gemini-composer-visible`
+- `grok-active-tab-verification`, `grok-composer-visible`
+
+Scope a single probe with `--probe <capabilityId>`. Phase 3 PR2 will add
+model-picker, upload, copy-fallback, and streaming probes.
 
 Unsupported vendors or unsupported model aliases must fail before browser
 mutation.

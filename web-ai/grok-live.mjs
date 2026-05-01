@@ -13,6 +13,7 @@ import {
 } from './session.mjs';
 import { hasContextPackaging, prepareContextForBrowser } from './context-pack/index.mjs';
 import { WebAiError } from './errors.mjs';
+import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
 
 export const GROK_CONTEXT_PACK_WARNING = 'grok-context-pack-not-recommended: prefer inline prompts plus optional --file uploads for Grok; ChatGPT or Gemini handle context packages more reliably.';
 import { attachLocalFileLive, fileInfoFromPath } from './chatgpt-attachments.mjs';
@@ -34,19 +35,23 @@ const ATTACHMENT_EVIDENCE_SELECTORS = [
     '[role="img"]',
 ];
 
-export async function grokStatusWebAi(deps) {
+export const grokCapabilities = [
+    defineCapability('grok-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), GROK_HOSTS)),
+    defineCapability('grok-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), COMPOSER_SELECTORS)),
+];
+
+export async function grokStatusWebAi(deps, input = {}) {
     const page = await deps.getPage();
-    if (!isGrokUrl(page.url())) {
-        return { ok: false, vendor: 'grok', status: 'blocked', url: page.url(), warnings: [`active tab is not grok.com (${page.url()})`], error: 'not grok' };
-    }
-    const composerSel = await findFirstSelector(page, COMPOSER_SELECTORS, 5_000);
+    const capabilities = await runCapabilities(deps, grokCapabilities, input);
+    const worst = worstCapabilityState(capabilities);
     return {
-        ok: Boolean(composerSel),
+        ok: worst !== 'fail',
         vendor: 'grok',
-        status: composerSel ? 'ready' : 'blocked',
+        status: worst === 'fail' ? 'blocked' : 'ready',
         url: page.url(),
-        warnings: composerSel ? ['grok composer visible'] : ['grok composer not visible'],
-        ...(composerSel ? {} : { error: 'grok composer not visible' }),
+        capabilities,
+        capabilityState: worst,
+        warnings: [],
     };
 }
 

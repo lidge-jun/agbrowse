@@ -18,6 +18,7 @@ import { captureCopiedResponseText, GEMINI_COPY_SELECTORS, preferCopiedText } fr
 import { selectGeminiModel } from './gemini-model.mjs';
 import { preflightAttachment } from './chatgpt-attachments.mjs';
 import { WebAiError } from './errors.mjs';
+import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
 
 const GEMINI_HOSTS = new Set(['gemini.google.com']);
 const INPUT_SELECTORS = [
@@ -46,19 +47,23 @@ const RESPONSE_SELECTORS = ['model-response', '[data-response-index]'];
 const RESPONSE_TEXT_SELECTORS = ['message-content', '.markdown', '[class*="response-content"]'];
 const COMPLETION_SELECTORS = ['.response-footer.complete', 'message-actions', '[aria-label*="Good response" i]'];
 
-export async function geminiStatusWebAi(deps) {
+export const geminiCapabilities = [
+    defineCapability('gemini-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), GEMINI_HOSTS)),
+    defineCapability('gemini-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), INPUT_SELECTORS)),
+];
+
+export async function geminiStatusWebAi(deps, input = {}) {
     const page = await deps.getPage();
-    if (!isGeminiUrl(page.url())) {
-        return { ok: false, vendor: 'gemini', status: 'blocked', url: page.url(), warnings: [`active tab is not gemini.google.com (${page.url()})`], error: 'not gemini' };
-    }
-    const inputSel = await findFirstSelector(page, INPUT_SELECTORS, 5_000);
+    const capabilities = await runCapabilities(deps, geminiCapabilities, input);
+    const worst = worstCapabilityState(capabilities);
     return {
-        ok: Boolean(inputSel),
+        ok: worst !== 'fail',
         vendor: 'gemini',
-        status: inputSel ? 'ready' : 'blocked',
+        status: worst === 'fail' ? 'blocked' : 'ready',
         url: page.url(),
-        warnings: inputSel ? ['gemini composer visible'] : ['gemini composer not visible'],
-        ...(inputSel ? {} : { error: 'gemini composer not visible' }),
+        capabilities,
+        capabilityState: worst,
+        warnings: [],
     };
 }
 
