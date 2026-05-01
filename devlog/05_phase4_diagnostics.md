@@ -314,6 +314,47 @@ upload never appears | provider UI changed | run `agbrowse web-ai doctor --vendo
   follow-up prompt.
 - Each provider's feature list is the source of truth `doctor` consumes.
 
+## Phase 4+ expansion (post-research, 2026-05-01)
+
+Based on GPT Pro and Grok research into Vercel Labs agent-browser,
+Stagehand, and Playwright MCP patterns. See
+`context/260501_gpt_pro_phase4plus_research.md` for full analysis.
+
+### PR1 expansion: AX hash alongside DOM hash
+
+Add `hashInteractiveSurface()` to `dom-hash.mjs` — hashes only interactive
+elements (buttons, textboxes, links, menuitems) rather than full DOM. This
+is the hash that matters for agent operations. Separate from structural
+`domHash` because cosmetic class-name changes shouldn't trigger churn
+alerts when interactive surface is unchanged.
+
+```js
+export async function hashInteractiveSurface(page, {
+    includeRoles = ['button', 'textbox', 'link', 'menuitem'],
+} = {}) {}
+```
+
+### PR2 expansion: DoctorReportV2 fields
+
+Doctor report shape upgraded with three new sections:
+
+1. **`dom.interactiveHash`** — AX hash of interactive surface only.
+2. **`dom.selectorCounts`** — per-feature count of matched selectors.
+3. **`copyFallback`** — dedicated section with `interceptedCopyStatus`,
+   `visibleCopyRefs`, selector counts.
+4. **`debug`** (opt-in) — `consoleErrors[]` and `networkFailures[]` via
+   `--include-console` and `--include-network`. Body content never stored;
+   only URL host, status, resource type, and short error text.
+
+Default off for `debug` — provider pages may contain user data in console
+logs and network payloads. Only host-level metadata is safe.
+
+### Future: snapshot section in doctor
+
+Phase 7 adds `snapshot` section to doctor report. Phase 4 prepares the
+slot by reserving the field in the report schema but leaving it `null`
+until Phase 7 lands.
+
 ## Risks
 
 - **Most likely regression:** diagnostic output leaks large prompt text or
@@ -322,6 +363,9 @@ upload never appears | provider UI changed | run `agbrowse web-ai doctor --vendo
   report is under 4 KB by default and raw snippets only appear with
   `--full`. Cover the copy-fallback feature's `interceptStatus` does not
   carry the actual copied text.
+- **New risk (post-research):** `--include-console` / `--include-network`
+  inadvertently captures PII from provider pages. Mitigate by never
+  storing response bodies, only URL host + status + resource type.
 
 ## cli-jaw mirror
 

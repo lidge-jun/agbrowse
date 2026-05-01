@@ -273,6 +273,57 @@ beside cli-jaw or other browser automation tools.
 - A churn report covering one full provider DOM change cycle is reproducible
   from local logs alone.
 
+## Phase 5 expansion (post-research, 2026-05-01)
+
+Based on GPT Pro and Grok research. See
+`context/260501_gpt_pro_phase4plus_research.md`.
+
+### Action policy / domain allowlist
+
+Vercel Labs agent-browser documents domain allowlist, action confirmation,
+and output length limits. agbrowse also controls provider UIs, so:
+
+NEW `web-ai/action-policy.mjs`:
+
+```js
+export function assertAllowedProviderHost(url, provider) {}
+export function assertAllowedAction({ provider, action, url, session }) {}
+export function clampDiagnosticOutput(text, { maxChars }) {}
+```
+
+Default policy:
+- ChatGPT actions: `chatgpt.com` / `chat.openai.com` only.
+- Gemini actions: `gemini.google.com` only.
+- Grok actions: `grok.com` / `x.ai` only.
+- Doctor output: max chars limit.
+- Network/console diagnostics: body storage forbidden.
+
+This is a safety net, not a user-facing feature. Actions on unexpected
+hosts throw immediately.
+
+### Churn-log healing fields
+
+Churn-log entries gain `healing` metadata so downstream tools can track
+self-healing effectiveness:
+
+```json
+{
+  "healing": {
+    "cacheHit": false,
+    "resolution": "snapshot-semantic"
+  }
+}
+```
+
+This prepares for Phase 8 (self-healing selectors) integration.
+
+### Profile lock heartbeat
+
+Profile lock gains a `heartbeatAt` field that the running process updates
+periodically. Stale detection uses `heartbeatAt` instead of just
+`acquiredAt`, preventing false reclaims when a long-running process is
+still alive but was started > 5 minutes ago.
+
 ## Risks
 
 - **Most likely regression:** false-positive foreign Chrome refusal blocks

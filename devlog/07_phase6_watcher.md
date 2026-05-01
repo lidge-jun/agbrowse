@@ -52,6 +52,56 @@ to land.
 - How does the watcher survive `agbrowse start --reuse-foreign-chrome`
   swapping Chrome instances?
 
+## Phase 6 concrete design (post-research, 2026-05-01)
+
+Based on GPT Pro and Grok research into Browser-Use CLI daemon pattern,
+Playwright MCP persistent sessions, and Stagehand session replay. See
+`context/260501_gpt_pro_phase4plus_research.md`.
+
+### Watcher state machine
+
+Poll loop uses snapshot hashes to detect state transitions:
+
+```json
+{
+  "sessionId": "01J...",
+  "provider": "chatgpt",
+  "lastPollAt": "2026-05-01T...",
+  "lastKnownStage": "polling",
+  "lastStreamingState": "streaming|idle|unknown",
+  "lastDomHash": "sha256:...",
+  "lastAxHash": "sha256:...",
+  "lastResponseCharCount": 1234,
+  "lastChromeEndpoint": "ws://...",
+  "deadlineAt": "..."
+}
+```
+
+Poll sequence:
+1. Read session from session-store.
+2. Check profile lock / Chrome endpoint.
+3. Run provider active-tab probe (Phase 3 capability).
+4. Compare `lastSession.before/after` snippets.
+5. Run streaming probe.
+6. Compare snapshot `axHash` / `domHash`.
+7. Check response length or copy fallback availability.
+8. Record complete/deadline/reattach event.
+
+This lets the watcher survive Chrome restart, system sleep, and provider
+tab reload by comparing hashes — "is the current tab state the same
+session I was watching?"
+
+### Session JSON preparation (do now)
+
+Even though Phase 6 is deferred, these fields should be added to session
+JSON **now** (Phase 1 or Phase 3 timeframe) so future watcher has
+historical data:
+
+- `lastDomHash` — written on every poll.
+- `lastAxHash` — written on every poll (when Phase 7 lands).
+- `lastStreamingState` — `streaming`, `idle`, or `unknown`.
+- `lastResponseCharCount` — character count of last seen response text.
+
 ## Status
 
 Deferred. Re-open after Phase 5 ships. Until then, agents needing watcher

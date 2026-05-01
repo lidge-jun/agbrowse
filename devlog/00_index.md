@@ -10,7 +10,8 @@ surface plus a 10-line skeleton.
 1. This file (`00_index.md`).
 2. `context/260501_gpt_pro_peer_review.md` — verbatim peer review with citations.
 3. `context/260501_gpt_pro_phase_critique.md` — verbatim phase critique with diff sketches.
-4. Phase files in numbered order.
+4. `context/260501_gpt_pro_phase4plus_research.md` — Phase 4+ expansion research (Vercel/Stagehand/Playwright MCP).
+5. Phase files in numbered order.
 
 ## Phases
 
@@ -23,8 +24,15 @@ surface plus a 10-line skeleton.
 | 4 | `05_phase4_diagnostics.md` | DOM diagnostics (`web-ai doctor`) | 2 | 3–4 |
 | 5 | `06_phase5_adoption.md` | Adoption hardening | 3 | 2.5–4 |
 | 6 | `07_phase6_watcher.md` | Watcher reattach (deferred) | TBD | TBD |
+| 7 | `08_phase7_snapshot_substrate.md` | Agent snapshot substrate | 2 | 3–5 |
+| 8 | `09_phase8_self_healing.md` | Self-healing selectors + action cache | 2 | 4–6 |
+| 9 | `10_phase9_visual_fallback.md` | Visual fallback / annotated screenshot | 1 | 1–2 |
+| 10 | `11_phase10_mcp_bridge.md` | MCP / AI SDK bridge | 2 | 3–5 |
+| 11 | `12_phase11_eval_harness.md` | DOM churn eval harness | 2 | 2–3 |
 
-Total core estimate: 17–25 engineer-days.
+Total core estimate (Phase 0–6): 17–25 engineer-days.
+Total extended estimate (Phase 7–11): 13–21 engineer-days.
+Grand total: 30–46 engineer-days.
 
 ## Sequencing (revised after critique)
 
@@ -65,6 +73,36 @@ Reasons:
 
 Keep: Phase 0 + minimal Phase 1 (store + resume) + Phase 2 JSON errors.
 
+## Phase 7–11 sequencing (extended roadmap)
+
+Added 2026-05-01 based on GPT Pro and Grok research into Vercel Labs
+agent-browser, Stagehand, Playwright MCP, Browser-Use, AgentQL, and
+WebVoyager. Full research at `context/260501_gpt_pro_phase4plus_research.md`.
+
+```
+Phase 5 (adoption)
+   ↓
+Phase 7 PR1 (ax-snapshot + ref-registry)
+   ↓
+Phase 7 PR2 (observe-targets + vendor-editor-contract)
+   ↓
+Phase 8 PR1 (self-heal resolver)       ← uses Phase 7 snapshot/refs
+   ↓
+Phase 8 PR2 (action-cache + trace)
+   ↓
+Phase 6 (watcher)                      ← now uses snapshot hashes
+   ↓
+Phase 9 (visual fallback)              ← parallel with Phase 6
+   ↓
+Phase 10 (MCP bridge)                  ← needs Phase 7+8 stable
+   ↓
+Phase 11 (eval harness)                ← uses all prior phases
+```
+
+Key insight from research: the progression is "DOM hash" → "agent repair
+substrate". Accessibility snapshots + @eN refs become the primary agent
+interface; raw DOM selectors become fallback.
+
 ## Out of scope (current iteration)
 
 - Watcher dashboard / web UI.
@@ -74,6 +112,8 @@ Keep: Phase 0 + minimal Phase 1 (store + resume) + Phase 2 JSON errors.
 - `agbrowse churn report` summarization command (Phase 5 leaves JSONL for
   downstream tools).
 - `bin/agbrowse-sessions.mjs` shortcut (route through `web-ai sessions`).
+- Cloud LLM-based selector re-resolution (Stagehand-style AI self-heal).
+  Local deterministic resolution only for Phase 8.
 
 ## Conventions
 
