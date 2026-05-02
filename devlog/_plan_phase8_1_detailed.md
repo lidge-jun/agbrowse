@@ -64,6 +64,10 @@ export const VALIDATION_REASONS = Object.freeze({
     FRAME_PATH_MISMATCH: 'frame-path-mismatch',
     BROWSER_CONFIG_MISMATCH: 'browser-config-mismatch',
     INSUFFICIENT_CONTRACT: 'insufficient-semantic-contract',
+    REF_STALE: 'ref-stale',
+    REF_INVALID: 'ref-invalid',
+    REF_NO_SELECTOR: 'ref-no-selector',
+    MISSING_SELECTOR: 'missing-selector',
 });
 export const RESOLUTION_SOURCES = Object.freeze({
     CACHE: 'cache',
@@ -75,14 +79,14 @@ export const RESOLUTION_SOURCES = Object.freeze({
 
 #### MODIFY `package.json`
 
-**Add to scripts:**
+**Modify existing scripts (test:integration already exists):**
 ```json
 {
-  "test:integration": "vitest run test/integration/**/*.test.mjs",
   "test:smoke": "vitest run test/integration/self-heal-smoke.test.mjs",
   "test:contract-drift": "vitest run test/unit/web-ai-contract-audit.test.mjs"
 }
 ```
+*(Note: `test:integration` already exists at `"vitest run test/integration"`; do NOT modify.)*
 
 ---
 
@@ -212,6 +216,37 @@ export function updateCacheEntry(cache, ctx, resolvedTarget, fingerprint, {
 - NEW `test/unit/web-ai-self-heal-validation.test.mjs`
 
 #### MODIFY `web-ai/self-heal.mjs`
+
+**Add imports at top of file:**
+```js
+import { CACHE_SCHEMA_VERSION, VALIDATION_REASONS, VALIDATION_THRESHOLD } from './constants.mjs';
+import { createHash } from 'node:crypto';
+
+// Preserve backward-compatible alias for existing consumers
+export { RESOLUTION_SOURCES as ResolutionSource } from './constants.mjs';
+```
+
+**Modify `resolveActionTarget` to accept selector override:**
+```js
+export async function resolveActionTarget(page, ctx) {
+    const {
+        provider,
+        intent,
+        actionKind = 'click',
+        snapshot = null,
+        registry = null,
+        cache = null,
+        fingerprint = null,
+        feature: featureOverride = null,
+        semanticTargetOverride = null,
+        selectors: selectorsOverride = null, // NEW: allow test/local override
+    } = ctx;
+
+    const feature = resolveIntentFeature(intent, featureOverride);
+    const allTargets = semanticTargetsForVendor(provider);
+    const semanticTarget = semanticTargetOverride || (feature ? allTargets[feature] : null);
+    const selectors = selectorsOverride || semanticTarget?.cssFallbacks || []; // MODIFIED
+```
 
 **Replace `validateResolvedTarget` (lines 159-222):**
 
@@ -427,7 +462,7 @@ function hashField(value) {
 
 ```js
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 import { resolveActionTarget, validateResolvedTarget } from '../../web-ai/self-heal.mjs';
 import { createActionCacheHandle } from '../../web-ai/action-cache.mjs';
 import { startSmokeServer, stopSmokeServer } from './smoke-server.mjs';
@@ -500,6 +535,7 @@ describe('self-heal browser smoke', () => {
 
     it('uses cached selector on v1, then heals on v2 after redesign', async () => {
         const cache = createActionCacheHandle();
+        const urlHost = new URL(serverUrl).hostname;
         
         const page1 = await browser.newPage();
         await page1.goto(`${serverUrl}/chatgpt-composer-v1.html`);
@@ -511,7 +547,11 @@ describe('self-heal browser smoke', () => {
             selectors: ['#prompt-textarea'],
         });
         expect(result1.ok).toBe(true);
-        cache.update({ provider: 'chatgpt', intent: 'composer.fill', actionKind: 'fill' }, result1.target);
+        cache.update(
+            { provider: 'chatgpt', intent: 'composer.fill', actionKind: 'fill', urlHost },
+            result1.target,
+            { domHashPrefix: 'mock', axHashPrefix: 'mock' }
+        );
 
         const page2 = await browser.newPage();
         await page2.goto(`${serverUrl}/chatgpt-composer-v2.html`);
@@ -521,6 +561,7 @@ describe('self-heal browser smoke', () => {
             actionKind: 'fill',
             cache,
             selectors: ['#composer-textarea'],
+            fingerprint: { domHashPrefix: 'mock', axHashPrefix: 'mock' },
         });
         expect(result2.ok).toBe(true);
         expect(result2.attempts.some(a => a.source === 'cache')).toBe(true);
@@ -578,37 +619,27 @@ export function redactSensitive(value) {
     return value;
 }
 
-export function appendTraceToSession(sessionPath, steps) {
+import { getSession, updateSession } from './session.mjs';
+
+export function appendTraceToSession(sessionId, steps) {
     if (!steps?.length) return;
     const redacted = redactSensitive(steps);
     
-    let session = { trace: [] };
-    if (existsSync(sessionPath)) {
-        try {
-            session = JSON.parse(readFileSync(sessionPath, 'utf8'));
-        } catch {
-            // Corrupted; preserve other fields if possible by starting fresh
-        }
-    }
+    const session = getSession(sessionId);
+    if (!session) return;
     
-    session.trace = session.trace || [];
-    session.trace.push(...redacted);
+    const trace = session.trace || [];
+    trace.push(...redacted);
     
     // Bounded retention: steps and bytes
-    while (session.trace.length > MAX_TRACE_STEPS) {
-        session.trace.shift();
+    while (trace.length > MAX_TRACE_STEPS) {
+        trace.shift();
     }
-    const traceJson = JSON.stringify(session.trace);
-    if (traceJson.length > MAX_TRACE_BYTES) {
-        // Drop oldest until under limit
-        while (JSON.stringify(session.trace).length > MAX_TRACE_BYTES && session.trace.length > 0) {
-            session.trace.shift();
-        }
+    while (JSON.stringify(trace).length > MAX_TRACE_BYTES && trace.length > 0) {
+        trace.shift();
     }
     
-    const tmpPath = sessionPath + `.trace.tmp.${process.pid}.${Date.now()}`;
-    writeFileSync(tmpPath, JSON.stringify(session, null, 2));
-    renameSync(tmpPath, sessionPath);
+    updateSession(sessionId, { trace });
 }
 ```
 
@@ -627,6 +658,18 @@ export function appendTraceToSession(sessionPath, steps) {
 #### NEW `web-ai/post-action-assert.mjs`
 
 ```js
+// Export scrub helper so post-action-assert can reuse it
+export function scrubTargetForTrace(target) {
+    if (!target) return null;
+    return {
+        resolution: target.resolution || null,
+        source: target.source || null,
+        ref: target.ref || null,
+        selector: target.selector || null,
+        role: target.role || null,
+    };
+}
+
 export async function assertPostAction(page, action, target, options = {}) {
     switch (action) {
         case 'fill': {
@@ -683,7 +726,67 @@ export async function clickWithPostAssert(page, locator, resolvedTarget, traceCt
     if (traceCtx) traceCtx.record({ action: 'click', target: scrubTargetForTrace(resolvedTarget), status: 'ok' });
     return { ok: true };
 }
+
+export async function fillWithPostAssert(page, locator, resolvedTarget, value, traceCtx, options = {}) {
+    try {
+        await locator.fill(value);
+    } catch (fillErr) {
+        // Try keyboard fallback for contenteditable
+        const role = resolvedTarget.role || '';
+        const isContentEditable = role === 'textbox' || resolvedTarget.contentEditable;
+        if (isContentEditable) {
+            try {
+                await locator.click();
+                const focused = await page.evaluate((sel) => {
+                    const target = sel ? document.querySelector(sel) : null;
+                    if (!target) return false;
+                    return document.activeElement === target || target.contains(document.activeElement);
+                }, resolvedTarget.selector || null).catch(() => false);
+                if (!focused) {
+                    if (traceCtx) traceCtx.record({ action: 'fill', target: scrubTargetForTrace(resolvedTarget), status: 'error', errorCode: 'focus-mismatch' });
+                    throw fillErr;
+                }
+                const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+                await page.keyboard.press(`${mod}+a`);
+                await page.keyboard.insertText(value);
+            } catch (kbErr) {
+                if (traceCtx) traceCtx.record({ action: 'fill', target: scrubTargetForTrace(resolvedTarget), status: 'error', errorCode: kbErr.name });
+                throw kbErr;
+            }
+        } else {
+            if (traceCtx) traceCtx.record({ action: 'fill', target: scrubTargetForTrace(resolvedTarget), status: 'error', errorCode: fillErr.name });
+            throw fillErr;
+        }
+    }
+    
+    const assertion = await assertPostAction(page, 'fill', resolvedTarget, { expectedValue: value });
+    if (!assertion.ok) {
+        if (traceCtx) traceCtx.record({ action: 'fill', target: scrubTargetForTrace(resolvedTarget), status: 'false-heal', error: assertion });
+        return assertion;
+    }
+    
+    if (traceCtx) traceCtx.record({ action: 'fill', target: scrubTargetForTrace(resolvedTarget), status: 'ok' });
+    return { ok: true };
+}
 ```
+
+#### MODIFY `web-ai/browser-primitives.mjs`
+
+**Replace existing `clickResolvedTarget` and `fillResolvedTarget` to delegate to post-action wrappers:**
+
+```js
+import { clickWithPostAssert, fillWithPostAssert } from './post-action-assert.mjs';
+
+export async function clickResolvedTarget(page, locator, resolvedTarget, traceCtx) {
+    return clickWithPostAssert(page, locator, resolvedTarget, traceCtx);
+}
+
+export async function fillResolvedTarget(page, locator, resolvedTarget, value, traceCtx) {
+    return fillWithPostAssert(page, locator, resolvedTarget, value, traceCtx);
+}
+```
+
+*(Remove old inline trace recording from browser-primitives.mjs; the wrappers in post-action-assert.mjs handle trace + post-action validation.)*
 
 ---
 
@@ -699,12 +802,13 @@ export async function clickWithPostAssert(page, locator, resolvedTarget, traceCt
 #### NEW `web-ai/cache-metrics.mjs`
 
 ```js
-import { writeFileSync, readFileSync, existsSync, renameSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const METRICS_FILE = 'web-ai-metrics.jsonl';
 
 export function recordCacheEvent(homeDir, event) {
+    mkdirSync(homeDir, { recursive: true });
     const path = join(homeDir, METRICS_FILE);
     const line = JSON.stringify({ ...event, ts: new Date().toISOString() }) + '\n';
     const tmpPath = path + `.tmp.${process.pid}.${Date.now()}`;
@@ -778,11 +882,15 @@ export function createMetricsCollector({ sink }) {
 
 #### MODIFY `web-ai/doctor.mjs`
 
-**Add to `runDoctor`:**
-
+**Add imports:**
 ```js
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { reportCacheMetricsFromEvents } from './cache-metrics.mjs';
+```
 
+**Add to `runDoctor`:**
+```js
 export async function runDoctor(deps, options = {}) {
     // ... existing code ...
     
@@ -793,6 +901,28 @@ export async function runDoctor(deps, options = {}) {
     }
     
     // ... rest ...
+}
+```
+
+#### MODIFY `web-ai/cli.mjs`
+
+**Add `--cache-metrics` flag to doctor command parsing:**
+```js
+// In doctor command option parsing, add:
+const cacheMetrics = argv['cache-metrics'] === true;
+// Pass to runDoctor:
+await runDoctorWithChurn(deps, { vendor, full, snapshot, cacheMetrics });
+```
+
+**Add cacheMetrics to human printer:**
+```js
+if (report.cacheMetrics) {
+    out.push('');
+    out.push('Cache Metrics (last 7 days):');
+    out.push(`  Hit rate: ${(report.cacheMetrics.cacheHitRate * 100).toFixed(1)}%`);
+    out.push(`  Self-heal rate: ${(report.cacheMetrics.selfHealRate * 100).toFixed(1)}%`);
+    out.push(`  False heals: ${report.cacheMetrics.falseHeals}`);
+    out.push(`  Avg duration: ${report.cacheMetrics.avgDurationMs.toFixed(0)}ms`);
 }
 ```
 
@@ -829,6 +959,8 @@ on:
       - 'test/unit/web-ai-contract-audit.test.mjs'
       - '.github/workflows/contract-drift.yml'
       - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.config.mjs'
   schedule:
     - cron: '0 9 * * 1'
 
