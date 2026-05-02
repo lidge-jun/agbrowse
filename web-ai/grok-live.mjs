@@ -339,7 +339,9 @@ async function clickGrokSubmit(page) {
             const aria = (await button.getAttribute('aria-label').catch(() => '') || '').trim();
             const disabled = await button.isDisabled().catch(() => false);
             if (!disabled && (/^Submit$/i.test(text) || /^Submit$/i.test(aria))) {
-                await button.click({ timeout: 3_000 });
+                // Scroll into view + force click to bypass "element is not stable"
+                await button.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+                await button.click({ timeout: 3_000, force: true });
                 return;
             }
         }
