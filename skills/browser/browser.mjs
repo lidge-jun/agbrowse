@@ -696,7 +696,8 @@ async function snapshot(port, opts = {}) {
         };
         // Phase 9.1: per-tab snapshots for isolation
         if (targetId) writePersistedSnapshot(snapshotData, targetId);
-        // Also keep global snapshot for backward compatibility during transition
+        // DEPRECATED: global snapshot is kept for backward compatibility during transition
+        // but will be removed in a future release. Use per-tab snapshots only.
         writePersistedSnapshot(snapshotData);
     }
     return nodes;
@@ -711,8 +712,13 @@ function locatorForSnapshotNode(page, node) {
 
 async function refToLocator(page, port, ref) {
     const targetId = await getPageTargetId(page).catch(() => null);
-    // Phase 9.1: prefer per-tab snapshot, fall back to global
-    const persisted = (targetId && readPersistedSnapshot(targetId)) || readPersistedSnapshot();
+    const persisted = targetId ? readPersistedSnapshot(targetId) : null;
+    if (!persisted?.nodes) {
+        throw new Error(
+            `ref ${ref}: no per-tab snapshot found\n` +
+            `  💡 Fix: Run 'snapshot' first to generate a per-tab snapshot`
+        );
+    }
     if (persisted?.url && persisted.url !== page.url()) {
         throw new Error(
             `ref ${ref} is stale because the page changed.\n` +
@@ -720,8 +726,7 @@ async function refToLocator(page, port, ref) {
         );
     }
 
-    const nodes = persisted?.nodes || await snapshot(port);
-    const node = nodes.find(n => n.ref === ref);
+    const node = persisted.nodes.find(n => n.ref === ref);
     if (!node) throw new Error(`ref ${ref} not found — re-run snapshot`);
     return locatorForSnapshotNode(page, node);
 }
@@ -840,10 +845,10 @@ async function waitFor(port, ref, opts = {}) {
     const timeout = opts.timeout || 10000;
     const page = await getReadyPage(port);
     const targetId = await getPageTargetId(page).catch(() => null);
-    const persisted = (targetId && readPersistedSnapshot(targetId)) || readPersistedSnapshot();
+    const persisted = targetId ? readPersistedSnapshot(targetId) : null;
     if (!persisted?.nodes) {
         throw new Error(
-            `wait-for: no persisted snapshot found for ref ${ref}\n` +
+            `wait-for: no per-tab snapshot found for ref ${ref}\n` +
             `  💡 Fix: Run 'snapshot' first, or use 'wait-for-selector' / 'wait-for-text'`
         );
     }

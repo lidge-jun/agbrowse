@@ -1,5 +1,5 @@
-import { createTab, isTabAlive, getPageByTargetId } from '../skills/browser/tab-manager.mjs';
-import { updateSession, getSession, incrementRecoveryCount } from './session.mjs';
+import { createTab, isTabAlive, getPageByTargetId, listManagedTabs } from '../skills/browser/tab-manager.mjs';
+import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
 
 /**
  * Recover a session's tab
@@ -70,6 +70,44 @@ export async function verifySessionTab(deps, session) {
     }
 
     return { valid: false, targetId: session.targetId, needsRecovery: true };
+}
+
+/**
+ * Detect orphaned sessions (bound tab closed/destroyed)
+ * @param {number} port - Browser CDP port
+ * @returns {Promise<{checked: number, orphaned: number}>}
+ */
+export async function reconcileSessionTabs(port) {
+    const [liveTabs, activeSessions] = await Promise.all([
+        listManagedTabs(port),
+        listSessions({ active: true })
+    ]);
+
+    const liveTargetIds = new Set(liveTabs.map(t => t.targetId));
+    let orphaned = 0;
+
+    for (const session of activeSessions) {
+        if (!session.targetId) continue;
+
+        if (!liveTargetIds.has(session.targetId)) {
+            const now = new Date().toISOString();
+            await updateSession(session.sessionId, {
+                status: 'error',
+                lastError: {
+                    errorCode: 'tab.target-lost',
+                    message: `Tab ${session.targetId} was closed or destroyed`
+                },
+                tabState: {
+                    ...session.tabState,
+                    state: 'lost',
+                    lostAt: now
+                }
+            });
+            orphaned++;
+        }
+    }
+
+    return { checked: activeSessions.length, orphaned };
 }
 
 function isPageDeathError(err) {
