@@ -52,6 +52,7 @@ import {
 import { runInstallSkillsCli, runSkillsCli } from './skill-install.mjs';
 import { acquireProfileLock, releaseProfileLock, updateLockPid } from './profile-lock.mjs';
 import { runWebAiCli } from '../../web-ai/cli.mjs';
+import { cleanupPoolTabs } from '../../web-ai/tab-pool.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
 import { cleanupIdleTabs, isPinned, parseDuration } from './tab-lifecycle.mjs';
 
@@ -1431,17 +1432,30 @@ try {
                     'idle-after': { type: 'string' },
                     'max-tabs': { type: 'string' },
                     'include-untracked': { type: 'boolean', default: false },
+                    force: { type: 'boolean', default: false },
                 },
                 strict: false,
             });
+            if (values['include-untracked'] === true && values.force !== true) {
+                console.error('error: tab-cleanup --include-untracked requires --force');
+                process.exit(1);
+            }
+            const leaseResult = await cleanupPoolTabs(getPort());
             const result = await cleanupIdleTabs(getPort(), {
                 idleTimeoutMs: values['idle-after'] ? parseDuration(values['idle-after']) : undefined,
                 maxTabs: values['max-tabs'] ? parseInt(values['max-tabs'], 10) : undefined,
                 includeUntracked: values['include-untracked'] === true,
             });
-            if (values.json) console.log(JSON.stringify(result, null, 2));
+            const combined = {
+                ...result,
+                closed: result.closed + (leaseResult.closed || 0),
+                leaseClosed: leaseResult.closed || 0,
+                leaseClosedTabs: leaseResult.closedTabs || [],
+            };
+            if (values.json) console.log(JSON.stringify(combined, null, 2));
             else {
-                console.log(`closed tabs: ${result.closed}`);
+                console.log(`closed tabs: ${combined.closed}`);
+                console.log(`  lease pool: ${combined.leaseClosed}`);
                 console.log(`  idle timeout: ${result.idleClosed}`);
                 console.log(`  max-tabs: ${result.limitClosed}`);
                 console.log(`  untracked: ${result.untrackedClosed}`);
@@ -1745,6 +1759,7 @@ try {
       --idle-after <30m>   Override idle threshold for this cleanup
       --max-tabs <N>       Override max tab limit for this cleanup
       --include-untracked  Also close tabs without activity metadata
+      --force              Required with --include-untracked
       --json               Output cleanup counts as JSON
     scroll <dir>           Scroll up|down|left|right [--amount N] [--ref eN]
 

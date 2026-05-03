@@ -148,6 +148,7 @@ export async function recordActiveLease(input = {}) {
 export async function checkoutPooledLease(port, input = {}) {
     const now = Date.now();
     const toClose = [];
+    const deadIds = new Set();
     let selected = null;
     return withLeaseLock(async () => {
         const store = readStore();
@@ -161,14 +162,17 @@ export async function checkoutPooledLease(port, input = {}) {
                 if (await isTabAlive(port, lease.targetId)) toClose.push({ ...lease, cleanupReason: 'pool-expired' });
                 continue;
             }
-            if (!(await isTabAlive(port, lease.targetId))) continue;
+            if (!(await isTabAlive(port, lease.targetId))) {
+                deadIds.add(scopedTargetKey(lease));
+                continue;
+            }
             selected = lease;
             break;
         }
         const closingIds = new Set(toClose.map(row => scopedTargetKey(row)));
         store.leases = store.leases
             .filter(row => !(selected && sameTargetScope(row, selected)))
-            .filter(row => row.state !== 'pooled' || row.leaseKey !== key || closingIds.has(scopedTargetKey(row)) || candidates.some(candidate => candidate.targetId === row.targetId))
+            .filter(row => !deadIds.has(scopedTargetKey(row)))
             .map(row => closingIds.has(scopedTargetKey(row)) ? { ...row, state: 'closing', closePreviousState: row.state, updatedAt: new Date().toISOString() } : row);
         writeStore(store);
         return selected ? { targetId: selected.targetId, url: selected.url, lease: selected } : null;
@@ -240,7 +244,7 @@ export async function cleanupLeasedTabs(port, input = {}) {
             globalMax: input.globalMax ?? DEFAULT_POOL_GLOBAL_MAX,
         }));
         if (input.completedSessions === true) {
-            toClose.push(...store.leases.filter(lease => lease.state === 'completed-session'));
+            toClose.push(...store.leases.filter(lease => lease.browserProfileKey === browserProfileKey && lease.state === 'completed-session'));
         }
         const closing = new Set(toClose.map(row => scopedTargetKey(row)));
         store.leases = store.leases.map(row => closing.has(scopedTargetKey(row)) ? { ...row, state: 'closing', closePreviousState: row.closePreviousState || row.state, updatedAt: new Date().toISOString() } : row);

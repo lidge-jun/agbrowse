@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseDuration, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
+import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
+import { checkoutPooledLease, cleanupLeasedTabs, listLeases, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 
 describe('tab lifecycle cleanup selection', () => {
     it('parses duration strings used by tab-cleanup UX', () => {
@@ -112,6 +115,9 @@ describe('tab lifecycle cleanup selection', () => {
         expect(source).toContain('function isReusableBlankTab');
         expect(source).toContain('opts.reuseBlank !== false');
         expect(source).toContain('reusedBlank: true');
+        expect(source).toContain('newBrowserCDPSession');
+        expect(source).toContain('createRawBrowserCdpSession');
+        expect(source).toContain('createTargetWithWindowFallback');
     });
 
     it('persists tab pool across CLI processes and checks out pooled tabs once', () => {
@@ -124,4 +130,131 @@ describe('tab lifecycle cleanup selection', () => {
         expect(leaseSource).toContain('leaseKey');
         expect(leaseSource).toContain('closeTab(port, lease.targetId)');
     });
+
+    it('requires force when tab-cleanup includes untracked tabs', () => {
+        const source = readFileSync(new URL('../../skills/browser/browser.mjs', import.meta.url), 'utf8');
+        expect(source).toContain("values['include-untracked'] === true && values.force !== true");
+        expect(source).toContain('tab-cleanup --include-untracked requires --force');
+    });
+
+    it('wires tab-cleanup UX through durable lease pool cleanup', () => {
+        const source = readFileSync(new URL('../../skills/browser/browser.mjs', import.meta.url), 'utf8');
+        expect(source).toContain("import { cleanupPoolTabs } from '../../web-ai/tab-pool.mjs'");
+        expect(source).toContain('const leaseResult = await cleanupPoolTabs(getPort())');
+        expect(source).toContain('leaseClosed');
+    });
+
+    it('removes dead pooled lease metadata during checkout', async () => {
+        const temp = createTempBrowserEnv('agbrowse-lease-dead-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            const port = 65_531;
+            await recordActiveLease({
+                port,
+                vendor: 'chatgpt',
+                targetId: 'dead-pooled',
+                sessionId: 'session-dead',
+                url: 'https://chatgpt.com/c/dead',
+            });
+            await releaseCompletedLease(port, {
+                port,
+                vendor: 'chatgpt',
+                targetId: 'dead-pooled',
+                sessionId: 'session-dead',
+                url: 'https://chatgpt.com/c/dead',
+            });
+
+            const checkedOut = await checkoutPooledLease(port, {
+                port,
+                vendor: 'chatgpt',
+                url: 'https://chatgpt.com/c/dead',
+            });
+
+            expect(checkedOut).toBeNull();
+            expect(await listLeases()).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('completed-session cleanup is scoped to the current browser profile', async () => {
+        const temp = createTempBrowserEnv('agbrowse-lease-profile-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [
+                    completedLease('current-profile', '111'),
+                    completedLease('other-profile', '222'),
+                ],
+            }));
+
+            const result = await cleanupLeasedTabs(111, {
+                completedSessions: true,
+                browserProfileKey: '111',
+            });
+
+            expect(result.closed).toBe(0);
+            expect((await listLeases()).map(lease => lease.targetId)).toEqual(['other-profile']);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('cleanup close counts do not count already-dead metadata as closed tabs', async () => {
+        const temp = createTempBrowserEnv('agbrowse-lease-close-count-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [
+                    {
+                        ...completedLease('expired-pooled', '333'),
+                        state: 'pooled',
+                        pooledAt: '2026-05-03T00:00:00.000Z',
+                        poolExpiresAt: '2026-05-03T00:01:00.000Z',
+                    },
+                ],
+            }));
+
+            const result = await cleanupLeasedTabs(333, {
+                now: Date.parse('2026-05-03T00:02:00.000Z'),
+            });
+
+            expect(result.closed).toBe(0);
+            expect(await listLeases()).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
 });
+
+function completedLease(targetId, browserProfileKey) {
+    return {
+        owner: 'web-ai',
+        vendor: 'chatgpt',
+        sessionType: 'send-poll',
+        origin: 'https://chatgpt.com',
+        browserProfileKey,
+        targetId,
+        sessionId: `session-${targetId}`,
+        url: `https://chatgpt.com/c/${targetId}`,
+        state: 'completed-session',
+        leasedAt: '2026-05-03T00:00:00.000Z',
+        pooledAt: null,
+        finalizedAt: '2026-05-03T00:00:00.000Z',
+        poolExpiresAt: null,
+        leaseDisposition: 'close',
+        updatedAt: '2026-05-03T00:00:00.000Z',
+        leaseKey: `web-ai:chatgpt:send-poll:https://chatgpt.com:${browserProfileKey}`,
+    };
+}

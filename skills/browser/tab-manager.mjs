@@ -89,9 +89,52 @@ async function getActivePage(port) {
 }
 
 async function getCdpSession(port) {
-    const page = await getActivePage(port);
-    if (!page) return null;
-    return page.context().newCDPSession(page);
+    try {
+        const page = await getActivePage(port);
+        if (page) return page.context().newCDPSession(page);
+        const browser = await getBrowserForPort(port);
+        if (typeof browser.newBrowserCDPSession === 'function') {
+            return browser.newBrowserCDPSession();
+        }
+    } catch (error) {
+        if (!String(error?.message || '').includes('Browser.setDownloadBehavior')) throw error;
+    }
+    return createRawBrowserCdpSession(port);
+}
+
+async function createRawBrowserCdpSession(port) {
+    const version = await fetch(`http://127.0.0.1:${port}/json/version`).then(resp => resp.json());
+    const endpoint = version?.webSocketDebuggerUrl;
+    if (!endpoint || typeof WebSocket !== 'function') return null;
+    const ws = new WebSocket(endpoint);
+    let nextId = 1;
+    const pending = new Map();
+    ws.addEventListener('message', event => {
+        let payload = null;
+        try { payload = JSON.parse(String(event.data)); } catch { return; }
+        if (!payload?.id || !pending.has(payload.id)) return;
+        const { resolve, reject } = pending.get(payload.id);
+        pending.delete(payload.id);
+        if (payload.error) reject(new Error(payload.error.message || JSON.stringify(payload.error)));
+        else resolve(payload.result || {});
+    });
+    await new Promise((resolve, reject) => {
+        ws.addEventListener('open', resolve, { once: true });
+        ws.addEventListener('error', reject, { once: true });
+    });
+    return {
+        async send(method, params = {}) {
+            const id = nextId++;
+            const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+            ws.send(JSON.stringify({ id, method, params }));
+            return promise;
+        },
+        async detach() {
+            for (const { reject } of pending.values()) reject(new Error('CDP session detached'));
+            pending.clear();
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
+        }
+    };
 }
 
 async function listTabs(port) {
@@ -142,11 +185,7 @@ export async function createTab(port, url = 'about:blank', opts = {}) {
             }
         }
 
-        const { targetId } = await cdp.send('Target.createTarget', {
-            url,
-            newWindow: false,
-            background: !opts.activate
-        });
+        const { targetId } = await createTargetWithWindowFallback(cdp, url, opts);
 
         await new Promise(r => setTimeout(r, 100));
 
@@ -163,6 +202,23 @@ export async function createTab(port, url = 'about:blank', opts = {}) {
         };
     } finally {
         await cdp.detach().catch(() => { });
+    }
+}
+
+async function createTargetWithWindowFallback(cdp, url, opts = {}) {
+    try {
+        return await cdp.send('Target.createTarget', {
+            url,
+            newWindow: false,
+            background: !opts.activate
+        });
+    } catch (error) {
+        if (!String(error?.message || '').includes('no browser is open')) throw error;
+        return cdp.send('Target.createTarget', {
+            url,
+            newWindow: true,
+            background: false
+        });
     }
 }
 
