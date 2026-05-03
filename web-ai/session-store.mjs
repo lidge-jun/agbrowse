@@ -62,6 +62,10 @@ export function readSessionStore() {
     }
 }
 
+function readSessionStoreLocked() {
+    return withStoreLock(() => readSessionStore());
+}
+
 export function writeSessionStore(store) {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true });
@@ -120,6 +124,44 @@ function sleepBlockingMs(ms) {
     Atomics.wait(view, 0, 0, Math.max(0, end - Date.now()));
 }
 
+function sessionCommandLockPath(sessionId) {
+    return `${storePath()}.cmd.${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`;
+}
+
+export async function withSessionCommandLock(sessionId, fn) {
+    const path = sessionCommandLockPath(sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    let fd = null;
+    let attempts = 0;
+    while (attempts < LOCK_RETRY_LIMIT) {
+        try {
+            fd = openSync(path, 'wx');
+            try {
+                writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), sessionId }));
+            } catch { /* best-effort metadata write */ }
+            break;
+        } catch (err) {
+            if (err?.code !== 'EEXIST') throw err;
+            attempts += 1;
+            const stale = isStaleLock(path);
+            if (stale) {
+                try { unlinkSync(path); } catch { /* races resolve naturally */ }
+                continue;
+            }
+            sleepBlockingMs(LOCK_RETRY_MS);
+        }
+    }
+    if (fd === null) {
+        throw new Error(`web-ai session command: failed to acquire lock for ${sessionId} after ${LOCK_RETRY_LIMIT} attempts`);
+    }
+    try {
+        return await fn();
+    } finally {
+        try { closeSync(fd); } catch { /* already closed */ }
+        try { unlinkSync(path); } catch { /* already gone */ }
+    }
+}
+
 export function insertSession(session) {
     return withStoreLock(() => {
         const store = readSessionStore();
@@ -141,7 +183,7 @@ export function patchSession(sessionId, patch) {
 }
 
 export function listStoredSessions(filter = {}) {
-    const store = readSessionStore();
+    const store = readSessionStoreLocked();
     const active = new Set(['sent', 'polling']);
     let rows = store.sessions;
     if (filter.sessionId) rows = rows.filter(s => s.sessionId === filter.sessionId);

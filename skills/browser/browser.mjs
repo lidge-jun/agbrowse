@@ -23,6 +23,7 @@
  *   reload                           Reload current page
  *   resize <w> <h> [--fullscreen]    Resize browser window or viewport
  *   tabs                             List open tabs
+ *   tab-cleanup                      Close idle/overflow tabs
  *   text [--format html]             Get page text
  *   get-dom [--selector CSS] [--max-chars N]  Get current DOM
  *   console [--duration ms] [--clear] [--reload]  Read buffered console logs
@@ -52,6 +53,7 @@ import { runInstallSkillsCli, runSkillsCli } from './skill-install.mjs';
 import { acquireProfileLock, releaseProfileLock, updateLockPid } from './profile-lock.mjs';
 import { runWebAiCli } from '../../web-ai/cli.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
+import { cleanupIdleTabs, isPinned, parseDuration } from './tab-lifecycle.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +67,31 @@ const SNAPSHOT_FILE = join(DATA_DIR, 'last-snapshot.json');
 const SNAPSHOTS_DIR = join(DATA_DIR, 'snapshots');
 const DEFAULT_CDP_PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const CUSTOM_CHROME_PATH = process.env.CHROME_BINARY_PATH || null;
+
+function formatRelativeAge(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return 'untracked';
+    if (ms < 1000) return 'now';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hours = Math.floor(min / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+}
+
+function tabDisplayState(tab, now = Date.now()) {
+    const idleForMs = Number.isFinite(tab.lastActiveAt) && tab.lastActiveAt > 0
+        ? now - tab.lastActiveAt
+        : null;
+    return {
+        ...tab,
+        pinned: isPinned(tab.targetId),
+        idleForMs,
+        idleFor: idleForMs === null ? 'untracked' : formatRelativeAge(idleForMs),
+        lastActiveAtIso: tab.lastActiveAt ? new Date(tab.lastActiveAt).toISOString() : null,
+    };
+}
 
 // ─── State ───────────────────────────────────────
 let cached = null;   // { browser, cdpUrl }
@@ -1361,8 +1388,19 @@ try {
             break;
         }
         case 'tabs': {
-            const tabs = await listTabs(getPort());
-            tabs.forEach((t, i) => console.log(`${i + 1}. ${t.title}\n   ${t.url}`));
+            const json = process.argv.includes('--json');
+            const tabs = (await listManagedTabs(getPort())).map(tabDisplayState);
+            if (json) {
+                console.log(JSON.stringify(tabs.map((t, i) => ({ index: i + 1, ...t })), null, 2));
+            } else {
+                tabs.forEach((t, i) => {
+                    const state = `${t.pinned ? 'pinned, ' : ''}idle ${t.idleFor}`;
+                    console.log(`${i + 1}. ${t.title || '(untitled)'} [${state}]`);
+                    console.log(`   ${t.url}`);
+                    console.log(`   targetId: ${t.targetId}`);
+                });
+                console.log(`\nTip: run "agbrowse tab-cleanup" to close idle/overflow tabs.`);
+            }
             break;
         }
         case 'tab-switch': {
@@ -1383,6 +1421,31 @@ try {
             if (!target) { console.error('Usage: browser.mjs tab-close <targetId>'); process.exit(1); }
             const result = await closeTab(getPort(), target);
             console.log(`closed tab: ${result.targetId}`);
+            break;
+        }
+        case 'tab-cleanup': {
+            const { values } = parseArgs({
+                args: process.argv.slice(3),
+                options: {
+                    json: { type: 'boolean', default: false },
+                    'idle-after': { type: 'string' },
+                    'max-tabs': { type: 'string' },
+                    'include-untracked': { type: 'boolean', default: false },
+                },
+                strict: false,
+            });
+            const result = await cleanupIdleTabs(getPort(), {
+                idleTimeoutMs: values['idle-after'] ? parseDuration(values['idle-after']) : undefined,
+                maxTabs: values['max-tabs'] ? parseInt(values['max-tabs'], 10) : undefined,
+                includeUntracked: values['include-untracked'] === true,
+            });
+            if (values.json) console.log(JSON.stringify(result, null, 2));
+            else {
+                console.log(`closed tabs: ${result.closed}`);
+                console.log(`  idle timeout: ${result.idleClosed}`);
+                console.log(`  max-tabs: ${result.limitClosed}`);
+                console.log(`  untracked: ${result.untrackedClosed}`);
+            }
             break;
         }
         case 'text': {
@@ -1678,6 +1741,11 @@ try {
     resize <w> <h>         Resize browser window / viewport [--fullscreen]
     tabs                   List tabs
     tab-switch <target>    Switch to tab index or CDP target id
+    tab-cleanup            Close idle/overflow tabs
+      --idle-after <30m>   Override idle threshold for this cleanup
+      --max-tabs <N>       Override max tab limit for this cleanup
+      --include-untracked  Also close tabs without activity metadata
+      --json               Output cleanup counts as JSON
     scroll <dir>           Scroll up|down|left|right [--amount N] [--ref eN]
 
   Wait:
@@ -1719,6 +1787,8 @@ try {
                                        shell exit + OS sleep
         --deadline <iso>               Override session deadline
         --navigate                     Allow resume to switch tabs if needed
+        --new-tab                      Create a new tab (default for send/query)
+        --reuse-tab                    Reuse active tab (legacy behavior)
         --json                         JSON output (or AGBROWSE_JSON_ERRORS=1)
 
       Failure envelope when --json or AGBROWSE_JSON_ERRORS=1:
@@ -1747,6 +1817,9 @@ try {
                            Holds web-ai-sessions.json (Phase 1 store) +
                            web-ai-baselines.json (legacy) + browser profile.
     CDP_PORT               Default CDP port (default: 9222)
+    AGBROWSE_MAX_TABS      Max open tabs before cleanup closes oldest (default: 10)
+    AGBROWSE_TAB_IDLE      Idle threshold for cleanup (default: 30m)
+    AGBROWSE_REUSE_TAB=1   Legacy web-ai behavior: reuse active tab
     AGBROWSE_JSON_ERRORS=1 Force JSON failure envelopes regardless of --json
     CHROME_HEADLESS=1      Force headless mode
     CHROME_NO_SANDBOX=1    Disable sandbox (Docker/CI)

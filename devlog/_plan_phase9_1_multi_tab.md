@@ -2,8 +2,8 @@
 
 ## Version: 9.1.0
 ## Date: 2026-05-02
-## Status: Planning
-## GPT Pro Validation: Pending
+## Status: Implemented
+## GPT Pro Validation: Passed (two GA blockers fixed 2026-05-03)
 
 ---
 

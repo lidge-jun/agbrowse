@@ -1,8 +1,56 @@
 /**
  * Tab Manager — self-contained (no import from browser.mjs to avoid circular deps)
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const cdpConnections = new Map(); // port -> { browser, connectedAt }
+const tabActivity = new Map(); // targetId -> lastActiveAt timestamp
+let tabActivityLoaded = false;
+
+const DATA_DIR = process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
+const TAB_ACTIVITY_FILE = join(DATA_DIR, 'tab-activity.json');
+
+function loadTabActivity() {
+    if (tabActivityLoaded) return;
+    tabActivityLoaded = true;
+    if (!existsSync(TAB_ACTIVITY_FILE)) return;
+    try {
+        const parsed = JSON.parse(readFileSync(TAB_ACTIVITY_FILE, 'utf8'));
+        for (const [targetId, lastActiveAt] of Object.entries(parsed.tabs || {})) {
+            if (targetId && Number.isFinite(lastActiveAt)) tabActivity.set(targetId, lastActiveAt);
+        }
+    } catch {
+        tabActivity.clear();
+    }
+}
+
+function saveTabActivity() {
+    mkdirSync(dirname(TAB_ACTIVITY_FILE), { recursive: true });
+    const tabs = Object.fromEntries(tabActivity.entries());
+    writeFileSync(TAB_ACTIVITY_FILE, `${JSON.stringify({ tabs }, null, 2)}\n`);
+}
+
+export function markTabActive(targetId, at = Date.now()) {
+    if (!targetId) return null;
+    loadTabActivity();
+    tabActivity.set(targetId, at);
+    saveTabActivity();
+    return at;
+}
+
+export function forgetTabActivity(targetId) {
+    if (!targetId) return;
+    loadTabActivity();
+    tabActivity.delete(targetId);
+    saveTabActivity();
+}
+
+export function getTabActivity(targetId) {
+    loadTabActivity();
+    return tabActivity.get(targetId) || null;
+}
 
 async function loadPlaywright() {
     try {
@@ -76,12 +124,14 @@ export async function createTab(port, url = 'about:blank', opts = {}) {
 
         const tabs = await listTabs(port);
         const tab = tabs.find(t => t.id === targetId);
+        const now = markTabActive(targetId);
 
         return {
             targetId,
             url: tab?.url || url,
             title: tab?.title || 'New Tab',
-            activated: opts.activate !== false
+            activated: opts.activate !== false,
+            lastActiveAt: now
         };
     } finally {
         await cdp.detach().catch(() => { });
@@ -100,9 +150,11 @@ export async function closeTab(port, targetId) {
 
     try {
         await cdp.send('Target.closeTarget', { targetId });
+        forgetTabActivity(targetId);
         return { closed: true, targetId };
     } catch (error) {
         if (error.message?.includes('No target')) {
+            forgetTabActivity(targetId);
             return { closed: true, targetId, alreadyClosed: true };
         }
         throw error;
@@ -126,11 +178,13 @@ export async function switchToTab(port, targetId) {
         const previousTargetId = targetInfo?.targetId;
 
         await cdp.send('Target.activateTarget', { targetId });
+        const now = markTabActive(targetId);
 
         return {
             active: true,
             previousTargetId,
-            currentTargetId: targetId
+            currentTargetId: targetId,
+            lastActiveAt: now
         };
     } finally {
         await cdp.detach().catch(() => { });
@@ -149,7 +203,8 @@ export async function listManagedTabs(port) {
         url: t.url,
         title: t.title,
         type: t.type,
-        attached: t.attached
+        attached: t.attached,
+        lastActiveAt: getTabActivity(t.id)
     }));
 }
 
@@ -219,6 +274,7 @@ export async function getPageByTargetId(port, targetId) {
             try {
                 const { targetInfo } = await session.send('Target.getTargetInfo');
                 if (targetInfo.targetId === targetId) {
+                    markTabActive(targetId);
                     return page;
                 }
             } finally {

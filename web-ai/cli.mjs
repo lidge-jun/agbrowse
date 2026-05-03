@@ -10,7 +10,10 @@ import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
 import { createTab, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
+import { cleanupIdleTabs } from '../skills/browser/tab-lifecycle.mjs';
 import { withSessionPage } from './tab-recovery.mjs';
+import { withSessionCommandLock } from './session-store.mjs';
+import { getPooledTab } from './tab-pool.mjs';
 export { parseDurationToMs };
 
 const VENDOR_DEFAULT_URLS = {
@@ -342,6 +345,27 @@ async function ensureProviderTab(deps, input) {
     if (!input.newTab || input.reuseTab) return deps;
     const vendorUrl = input.url || VENDOR_DEFAULT_URLS[input.vendor || 'chatgpt'];
     const port = deps.getPort?.() || 9222;
+
+    await cleanupIdleTabs(port);
+
+    // Phase 9.2: try tab pool first
+    const pooled = await getPooledTab(port, input.vendor || 'chatgpt');
+    if (pooled) {
+        const page = await waitForPageByTargetId(port, pooled.targetId);
+        if (page.url() !== vendorUrl) {
+            await page.goto(vendorUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        }
+        return {
+            ...deps,
+            getPage: async () => {
+                if (page.isClosed?.()) throw new Error(`bound tab closed: ${pooled.targetId}`);
+                return page;
+            },
+            getTargetId: async () => pooled.targetId,
+            getCdpSession: async () => page.context().newCDPSession(page),
+        };
+    }
+
     // Phase 9.1 fix: create tab WITHOUT activate (avoids focus race)
     const tab = await createTab(port, vendorUrl, { activate: false });
     const page = await waitForPageByTargetId(port, tab.targetId);
@@ -358,15 +382,17 @@ async function ensureProviderTab(deps, input) {
 
 async function runBoundCommand(command, deps, input, pollFn, stopFn) {
     if (['poll', 'stop'].includes(command) && input.session) {
-        return withSessionPage(deps, input.session, async ({ page, targetId, session }) => {
-            const sessionDeps = {
-                ...deps,
-                getPage: async () => page,
-                getTargetId: async () => targetId,
-                getCdpSession: async () => page.context().newCDPSession(page),
-            };
-            if (command === 'poll') return pollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
-            if (command === 'stop') return stopFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+        return withSessionCommandLock(input.session, async () => {
+            return withSessionPage(deps, input.session, async ({ page, targetId, session }) => {
+                const sessionDeps = {
+                    ...deps,
+                    getPage: async () => page,
+                    getTargetId: async () => targetId,
+                    getCdpSession: async () => page.context().newCDPSession(page),
+                };
+                if (command === 'poll') return pollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+                if (command === 'stop') return stopFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+            });
         });
     }
     if (command === 'poll') return pollFn(deps, input);

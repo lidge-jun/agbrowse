@@ -23,6 +23,9 @@ describe.sequential('CLI help', () => {
         expect(result.stdout).toContain('Common flags:');
         expect(result.stdout).toContain('Configuration model:');
         expect(result.stdout).toContain('install-skills --target <dir>');
+        expect(result.stdout).toContain('tab-cleanup');
+        expect(result.stdout).toContain('AGBROWSE_MAX_TABS');
+        expect(result.stdout).toContain('--reuse-tab');
     });
 
     it('shows browser help for unknown commands', async () => {

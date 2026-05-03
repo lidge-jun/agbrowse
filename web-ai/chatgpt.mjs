@@ -14,6 +14,7 @@ import {
     summarizeEnvelope,
     updateSession,
 } from './session.mjs';
+import { poolTab } from './tab-pool.mjs';
 import { WebAiError } from './errors.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import {
@@ -270,7 +271,10 @@ export async function pollWebAi(deps, input = {}) {
                             warnings.push(`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`);
                         }
                     }
-                    if (session) updateSession(session.sessionId, { status: 'complete', conversationUrl: page.url(), answer: answerText });
+                    if (session) {
+                        updateSession(session.sessionId, { status: 'complete', conversationUrl: page.url(), answer: answerText });
+                        poolTab(vendor, session.targetId, page.url());
+                    }
                     return {
                         ok: true,
                         vendor,

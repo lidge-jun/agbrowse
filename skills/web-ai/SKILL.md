@@ -94,6 +94,56 @@ Pass `--timeout 1800` (30 min) or higher for unusually long Pro/Deep Think
 runs. The provider tab and the agbrowse Chrome process stay open across a
 poll timeout — only the polling loop gives up.
 
+## Multi-Tab Behavior (Phase 9.1+)
+
+By default, `send` and `query` create a **new browser tab** for each session.
+This isolates conversations and prevents context contamination.
+
+### Tab Reuse
+
+Reuse the existing active tab (legacy single-tab behavior):
+
+```bash
+agbrowse web-ai send --vendor chatgpt --reuse-tab --inline-only --prompt "hello"
+# or globally:
+export AGBROWSE_REUSE_TAB=1
+```
+
+### Session-to-Tab Binding
+
+Each session record stores `targetId`, `tabId`, and `tabState`. When `poll` or
+`stop` is invoked with `--session <id>`, the runtime switches to that session's
+bound tab automatically. If the tab was closed, it auto-recovers by creating a
+new tab and navigating to the saved `conversationUrl`.
+
+### Tab Pooling (Phase 9.2)
+
+Completed session tabs are kept in a vendor-specific pool for reuse. The next
+`send` for the same vendor will reuse a pooled tab instead of creating a new one,
+reducing tab creation overhead in batch scenarios.
+
+### Tab Lifecycle
+
+| Setting | Default | Env Var |
+| --- | --- | --- |
+| Max tabs | 10 | `AGBROWSE_MAX_TABS` |
+| Idle timeout | 30 min | `AGBROWSE_TAB_IDLE` |
+
+Idle tabs (inactive longer than the timeout) are auto-closed unless pinned or
+bound to an active session.
+
+Before creating a new web-ai tab, agbrowse runs lifecycle cleanup so long-lived
+agent sessions do not keep growing Chrome tab count. For explicit cleanup:
+
+```bash
+agbrowse tabs --json
+agbrowse tab-cleanup --json
+agbrowse tab-cleanup --include-untracked --idle-after 10m
+```
+
+Use `--include-untracked` only when you intentionally want to close older tabs
+that predate the activity metadata file.
+
 ## Render First
 
 Use render to inspect the exact structured prompt shape:

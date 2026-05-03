@@ -233,11 +233,50 @@ agbrowse press Enter
 agbrowse hover e7
 agbrowse mouse-click 400 300
 agbrowse resize 1440 900
-agbrowse tabs
-agbrowse tab-switch 2
-agbrowse tab-switch <targetId>
 agbrowse evaluate "document.title"
 ```
+
+### Tab Management (Phase 9.1)
+
+Multi-tab support isolates each web-ai session in its own browser tab.
+
+```bash
+agbrowse tabs                          # list all tabs
+agbrowse tab-switch 2                  # switch by index
+agbrowse tab-switch <targetId>         # switch by CDP target id
+agbrowse new-tab <url>                 # create a new tab
+agbrowse tab-close <targetId>          # close a tab
+agbrowse tab-cleanup                   # close idle tabs and enforce max-tabs
+agbrowse tab-cleanup --include-untracked --idle-after 10m
+```
+
+Web-ai tab behavior:
+
+```bash
+# Default: new tab per send/query (Phase 9.1)
+agbrowse web-ai send --vendor chatgpt --inline-only --prompt "hello"
+
+# Legacy: reuse the existing active tab
+agbrowse web-ai send --vendor chatgpt --reuse-tab --inline-only --prompt "hello"
+export AGBROWSE_REUSE_TAB=1            # global legacy mode
+```
+
+Session-to-tab binding is strong: `poll` and `stop` with `--session` resolve
+the session's bound tab, not the globally active tab. If the tab was closed,
+the runtime auto-recovers by creating a new tab and navigating to the saved
+`conversationUrl`.
+
+Tab limits:
+
+| Setting | Default | Env var |
+| --- | --- | --- |
+| Max tabs | 10 | `AGBROWSE_MAX_TABS` |
+| Idle timeout | 30 min | `AGBROWSE_TAB_IDLE` |
+
+`send` and `query` run tab cleanup before opening another tab. Cleanup never
+closes tabs pinned in the current process or tabs bound to active web-ai
+sessions. Use `agbrowse tabs --json` to inspect `lastActiveAt`, `idleForMs`,
+and `pinned` state before manual cleanup.
 
 Recommended loop:
 
@@ -328,6 +367,12 @@ agbrowse web-ai poll --vendor chatgpt --session "$SID" --timeout 1800
 `poll` resolves the session in priority order: `--session <id>` > active
 target id > vendor latest > legacy baseline. Each completion / timeout
 updates the session record with `status`, `conversationUrl`, and `answer`.
+
+**Session-to-tab binding** (Phase 9.1): every session owns its own tab.
+The record stores `targetId`, `tabId`, and `tabState` (`createdAt`,
+`lastActiveAt`, `recoveryCount`, `closeCount`). If the bound tab is closed
+mid-operation, the runtime auto-recovers once by creating a new tab and
+navigating to the saved `conversationUrl`.
 
 Add `--deadline <iso>` to override the default deadline (now + `--timeout`)
 and `--navigate` to allow `sessions resume` to switch tabs when the saved
