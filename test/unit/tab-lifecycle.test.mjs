@@ -65,6 +65,21 @@ describe('tab lifecycle cleanup selection', () => {
         ]);
     });
 
+    it('does not close untracked tabs for max-tabs unless includeUntracked is explicit', () => {
+        const base = {
+            now: 10_000,
+            idleTimeoutMs: 1000,
+            maxTabs: 1,
+            tabs: [
+                { targetId: 'untracked', lastActiveAt: null },
+                { targetId: 'tracked', lastActiveAt: 9000 },
+            ],
+        };
+
+        expect(selectTabsForCleanup(base).map(tab => tab.targetId)).toEqual(['tracked']);
+        expect(selectTabsForCleanup({ ...base, includeUntracked: true }).map(tab => tab.targetId)).toEqual(['untracked']);
+    });
+
     it('does not pass Array.map index as tab display timestamp', () => {
         const source = readFileSync(new URL('../../skills/browser/browser.mjs', import.meta.url), 'utf8');
         expect(source).toContain('.map(tab => tabDisplayState(tab))');

@@ -346,7 +346,7 @@ async function ensureProviderTab(deps, input) {
     const vendorUrl = input.url || VENDOR_DEFAULT_URLS[input.vendor || 'chatgpt'];
     const port = deps.getPort?.() || 9222;
 
-    await cleanupIdleTabs(port);
+    await cleanupIdleTabs(port, { maxTabs: Number.POSITIVE_INFINITY });
 
     // Phase 9.2: try tab pool first
     const pooled = await getPooledTab(port, input.vendor || 'chatgpt');

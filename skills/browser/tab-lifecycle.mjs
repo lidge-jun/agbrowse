@@ -55,10 +55,13 @@ export function selectTabsForCleanup({
     }
 
     const remaining = (tabs || []).filter(tab => tab?.targetId && !selected.has(tab.targetId));
-    const remainingUnpinned = remaining.filter(tab =>
-        !pinnedTargetIds.has(tab.targetId) &&
-        !activeSessionTargetIds.has(tab.targetId)
-    );
+    const remainingUnpinned = remaining.filter(tab => {
+        const lastActiveAt = Number(tab.lastActiveAt);
+        const tracked = Number.isFinite(lastActiveAt) && lastActiveAt > 0;
+        return !pinnedTargetIds.has(tab.targetId) &&
+            !activeSessionTargetIds.has(tab.targetId) &&
+            (tracked || includeUntracked);
+    });
 
     if (remaining.length > maxTabs) {
         const limitCloseCount = remaining.length - maxTabs;
@@ -95,7 +98,7 @@ export async function cleanupIdleTabs(port, opts = {}) {
         pinnedTargetIds: pinnedTabs,
         now,
         idleTimeoutMs: opts.idleTimeoutMs || IDLE_TIMEOUT_MS,
-        maxTabs: opts.maxTabs || MAX_TABS,
+        maxTabs: opts.maxTabs ?? MAX_TABS,
         includeUntracked: opts.includeUntracked === true,
     });
 
