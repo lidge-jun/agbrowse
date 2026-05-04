@@ -14,7 +14,16 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
 ];
 
 const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-"]';
-const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b/i;
+const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b)/i;
+const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
+    '[data-testid*="thinking-effort"]',
+    '[data-testid*="reasoning-effort"]',
+    '[data-testid*="effort"]',
+    '[aria-label*="Effort" i]',
+    '[aria-label*="Reasoning" i]',
+    '[role="menuitem"][aria-label*="Effort" i]',
+    '[role="menuitem"][aria-label*="Reasoning" i]',
+];
 
 export const CHATGPT_MODEL_OPTIONS = {
     instant: { testIds: ['model-switcher-gpt-5-3'], labels: ['Instant'] },
@@ -198,7 +207,7 @@ async function findModelOption(page, choice) {
         if (await loc.isVisible().catch(() => false)) return loc;
     }
     for (const label of option.labels) {
-        const loc = page.locator('[role="menuitemradio"], [role="menuitem"]').filter({ hasText: new RegExp(`^${label}\\b`, 'i') }).first();
+        const loc = page.locator('[role="menuitemradio"], [role="menuitem"]').filter({ hasText: modelLabelPattern(choice, label) }).first();
         if (await loc.isVisible().catch(() => false)) return loc;
     }
     return null;
@@ -230,7 +239,10 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
 async function findEffortOption(page, model, effort) {
     const label = CHATGPT_MODEL_EFFORT_OPTIONS[model]?.efforts?.[effort];
     if (!label) return null;
-    const option = page.locator('[role="menuitemradio"]').filter({ hasText: new RegExp(`^${label}\\b`, 'i') }).last();
+    const candidates = page.locator('[role="menuitemradio"]').filter({ hasText: effortLabelPattern(label) });
+    const modelSpecific = candidates.filter({ hasText: modelLabelPattern(model, CHATGPT_MODEL_OPTIONS[model]?.labels?.[0] || '') }).last();
+    if (await modelSpecific.isVisible().catch(() => false)) return modelSpecific;
+    const option = candidates.last();
     return (await option.isVisible().catch(() => false)) ? option : null;
 }
 
@@ -260,6 +272,25 @@ async function openEffortMenu(page, model, usedFallbacks) {
         await page.waitForTimeout(300).catch(() => undefined);
         if (await isEffortMenuOpen(page, model)) return;
     }
+    for (const selector of CHATGPT_EFFORT_TRIGGER_SELECTORS) {
+        const trigger = page.locator(selector).last();
+        if (!(await trigger.isVisible().catch(() => false))) continue;
+        await trigger.click({ timeout: 2_000 }).catch(() => undefined);
+        await page.waitForTimeout(300).catch(() => undefined);
+        if (await isEffortMenuOpen(page, model)) {
+            usedFallbacks.push(`${model}-effort-generic-trigger`);
+            return;
+        }
+    }
+    if (row) {
+        await row.focus({ timeout: 1_000 }).catch(() => undefined);
+        await page.keyboard.press('ArrowRight').catch(() => undefined);
+        await page.waitForTimeout(300).catch(() => undefined);
+        if (await isEffortMenuOpen(page, model)) {
+            usedFallbacks.push(`${model}-effort-keyboard-open`);
+            return;
+        }
+    }
     const fallbackBox = await findEffortTriggerBoxNearModelRow(page, model);
     if (fallbackBox) {
         await page.mouse.move(fallbackBox.x + fallbackBox.width / 2, fallbackBox.y + fallbackBox.height / 2).catch(() => undefined);
@@ -277,15 +308,15 @@ async function openEffortMenu(page, model, usedFallbacks) {
 
 async function findEffortTriggerBoxNearModelRow(page, model) {
     const labels = CHATGPT_MODEL_OPTIONS[model]?.labels || [];
-    return page.evaluate((expectedLabels) => {
+    return page.evaluate(({ expectedLabels, modelChoice, triggerSelectors }) => {
         const rows = Array.from(document.querySelectorAll('[role="menuitemradio"][data-testid^="model-switcher-"], [role="menuitemradio"]'));
         const row = rows.find((candidate) => {
             const text = (candidate.innerText || candidate.textContent || '').trim();
-            return expectedLabels.some(label => new RegExp(`^${label}\\b`, 'i').test(text));
+            return matchesModelText(text, modelChoice, expectedLabels);
         });
         if (!row) return null;
         const rowRect = row.getBoundingClientRect();
-        const effortButtons = Array.from(document.querySelectorAll('[aria-label="Effort"], [role="menuitem"][aria-label="Effort"]'));
+        const effortButtons = Array.from(document.querySelectorAll(triggerSelectors.join(',')));
         const button = effortButtons.find((candidate) => {
             const rect = candidate.getBoundingClientRect();
             const rowCenterY = rowRect.y + rowRect.height / 2;
@@ -294,7 +325,13 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
         if (!button) return null;
         const rect = button.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    }, labels).catch(() => null);
+        function matchesModelText(text, choice, labelsForChoice) {
+            if (choice === 'instant') return /\b(Instant|Fast)\b/i.test(text);
+            if (choice === 'thinking') return /\b(Thinking|Think)\b/i.test(text);
+            if (choice === 'pro') return /\b(Pro|Heavy)\b/i.test(text);
+            return labelsForChoice.some(label => new RegExp(`(^|\\s)${label}\\b`, 'i').test(text));
+        }
+    }, { expectedLabels: labels, modelChoice: model, triggerSelectors: CHATGPT_EFFORT_TRIGGER_SELECTORS }).catch(() => null);
 }
 
 async function elementRectByTestId(page, testId) {
@@ -311,11 +348,15 @@ async function readCheckedEffort(page, model) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     for (const [effort, label] of Object.entries(config?.efforts || {})) {
         const checked = await page.locator(`[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]`)
-            .filter({ hasText: new RegExp(`^${label}\\b`, 'i') })
+            .filter({ hasText: effortLabelPattern(label) })
             .last()
             .isVisible()
             .catch(() => false);
         if (checked) return effort;
+    }
+    const active = await readActiveModelPill(page);
+    for (const [effort, label] of Object.entries(config?.efforts || {})) {
+        if (effortLabelPattern(label).test(active)) return effort;
     }
     return null;
 }
@@ -324,13 +365,23 @@ async function isEffortMenuOpen(page, model) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     if (!config) return false;
     const labels = Object.values(config.efforts);
-    return page.locator('[role="menu"]').evaluateAll((menus, expectedLabels) => {
+    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, modelChoice }) => {
         return menus.some(menu => {
             const text = menu.innerText || menu.textContent || '';
+            if (!menuTextMatchesModel(text, modelChoice)) return false;
             const matches = expectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
-            return matches.length >= Math.min(2, expectedLabels.length);
+            const requiredMatches = expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length);
+            return matches.length >= requiredMatches;
         });
-    }, labels).catch(() => false);
+        function menuTextMatchesModel(text, choice) {
+            const hasThinking = /\b(Thinking|Think)\b/i.test(text);
+            const hasPro = /\bPro\b/i.test(text);
+            if (!hasThinking && !hasPro) return true;
+            if (choice === 'thinking') return hasThinking && !hasPro;
+            if (choice === 'pro') return hasPro && !hasThinking;
+            return true;
+        }
+    }, { expectedLabels: labels, modelChoice: model }).catch(() => false);
 }
 
 async function readCheckedModel(page) {
@@ -340,11 +391,14 @@ async function readCheckedModel(page) {
             if (checked) return choice;
         }
     }
+    const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]').all().catch(() => []);
+    for (const row of checkedRows) {
+        const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        const choice = modelChoiceFromText(text);
+        if (choice) return choice;
+    }
     const active = await readActiveModelPill(page);
-    if (/^(Instant|Fast)\b/i.test(active)) return 'instant';
-    if (/\bThinking\b/i.test(active)) return 'thinking';
-    if (/\bPro\b/i.test(active) || /^Heavy\b/i.test(active)) return 'pro';
-    return null;
+    return modelChoiceFromText(active);
 }
 
 async function readActiveModelPill(page) {
@@ -360,6 +414,28 @@ async function readActiveModelPill(page) {
 
 async function isModelMenuOpen(page) {
     return page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR).first().isVisible().catch(() => false);
+}
+
+function modelLabelPattern(choice, label) {
+    if (choice === 'instant') return /\b(Instant|Fast)\b/i;
+    if (choice === 'thinking') return /\b(Thinking|Think)\b/i;
+    if (choice === 'pro') return /\b(Pro|Heavy)\b/i;
+    return new RegExp(`(^|\\s)${escapeRegExp(label)}\\b`, 'i');
+}
+
+function effortLabelPattern(label) {
+    return new RegExp(`(^|\\s)${escapeRegExp(label)}\\b`, 'i');
+}
+
+function modelChoiceFromText(text) {
+    if (/\b(Instant|Fast)\b/i.test(text)) return 'instant';
+    if (/\b(Thinking|Think)\b/i.test(text)) return 'thinking';
+    if (/\b(Pro|Heavy)\b/i.test(text)) return 'pro';
+    return null;
+}
+
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export async function chatGptModelCapabilityProbe(page, model, options = {}) {
