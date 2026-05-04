@@ -14,6 +14,7 @@
     "bin/",
     "skills/",
     "web-ai/",
+    "structure/",
     "devlog/",
     "vitest.config.mjs"
   ],
@@ -41,6 +42,8 @@
     "test:contract-drift": "vitest run test/unit/web-ai-contract-audit.test.mjs",
     "test:eval": "vitest run test/unit/web-ai-eval*.test.mjs test/unit/web-ai-dom-scrubber.test.mjs",
     "test:eval-fixtures": "node scripts/run-web-ai-eval.mjs --vendor chatgpt --fixtures test/fixtures/provider-dom --json",
+    "docs:drift": "bash structure/check-doc-drift.sh",
+    "docs:counts": "bash structure/verify-counts.sh",
     "eval:web-ai:fixtures": "node scripts/run-web-ai-eval.mjs --config test/fixtures/provider-dom/parallel-eval.json --concurrency 4 --json",
     "test:trace-policy": "vitest run test/unit/web-ai-trace*.test.mjs test/unit/web-ai-policy.test.mjs test/unit/content-boundary.test.mjs test/integration/web-ai-policy-cli.test.mjs test/integration/web-ai-policy-mcp.test.mjs test/integration/web-ai-trace-fixture.test.mjs",
     "release": "bash scripts/release.sh",

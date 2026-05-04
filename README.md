@@ -58,6 +58,10 @@ Agent rule: observe before acting. Use `status`, `tabs`, `snapshot
 
 This repository is packaged as a standalone skill/runtime.
 
+Architecture and release-claim source of truth live in
+[`structure/INDEX.md`](structure/INDEX.md). Update that folder when CLI,
+web-ai, MCP, eval, or release-gate behavior changes.
+
 What is considered ready:
 
 - `agbrowse` CLI bin
