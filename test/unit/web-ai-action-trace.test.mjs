@@ -4,6 +4,7 @@ import {
     recordTraceStep,
     getSessionTrace,
     summarizeTrace,
+    summarizeTraceSteps,
 } from '../../web-ai/action-trace.mjs';
 
 describe('web-ai action-trace', () => {
@@ -92,6 +93,21 @@ describe('web-ai action-trace', () => {
             const ctx = createTraceContext('sess-123');
             expect(summarizeTrace(ctx)).toBeNull();
             expect(summarizeTrace(null)).toBeNull();
+        });
+
+        it('summarizes persisted trace arrays', () => {
+            const trace = [
+                { ts: '2026-05-05T00:00:00.000Z', status: 'ok', target: { resolution: 'semantic' } },
+                { ts: '2026-05-05T00:00:01.000Z', status: 'error', target: { source: 'css-fallback' } },
+            ];
+            expect(summarizeTraceSteps('sess-456', trace)).toMatchObject({
+                sessionId: 'sess-456',
+                totalSteps: 2,
+                resolutionSources: ['semantic', 'css-fallback'],
+                errorCount: 1,
+                firstTs: '2026-05-05T00:00:00.000Z',
+                lastTs: '2026-05-05T00:00:01.000Z',
+            });
         });
     });
 });

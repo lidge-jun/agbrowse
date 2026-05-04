@@ -28,7 +28,7 @@ import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, CHATGPT_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
 import { withAnswerArtifact } from './answer-artifact.mjs';
 import { resolveTargetForIntent } from './target-resolver.mjs';
-import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTrace } from './action-trace.mjs';
+import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTraceSteps } from './action-trace.mjs';
 import { appendTraceToSession } from './trace-persistence.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
@@ -282,6 +282,9 @@ export async function pollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send or query first.',
     });
+    const copyTraceCtx = session && input.allowCopyMarkdownFallback === true
+        ? createTraceContext(session.sessionId)
+        : null;
 
     const deadline = Date.now() + timeout * 1000;
     let stableText = '';
@@ -297,11 +300,13 @@ export async function pollWebAi(deps, input = {}) {
                     const usedFallbacks = [];
                     const warnings = [];
                     let answerText = latest;
+                    let traceSummary = null;
                     if (input.allowCopyMarkdownFallback === true) {
-                        const copyResolution = await resolveOptionalChatGptCopyTarget(page);
+                        const copyResolution = await resolveOptionalChatGptCopyTarget(page, copyTraceCtx);
                         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
                             copyTarget: copyResolution?.target || null,
                         });
+                        traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
                         const copiedText = preferCopiedText(latest, copied);
                         if (copiedText) {
                             answerText = cleanAssistantText(copiedText);
@@ -323,6 +328,7 @@ export async function pollWebAi(deps, input = {}) {
                         baseline,
                         usedFallbacks,
                         warnings,
+                        ...(traceSummary ? { traceSummary } : {}),
                         responseStableMs: Date.now() - stableSince,
                     });
                 }
@@ -338,10 +344,11 @@ export async function pollWebAi(deps, input = {}) {
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
-        const copyResolution = await resolveOptionalChatGptCopyTarget(page);
+        const copyResolution = await resolveOptionalChatGptCopyTarget(page, copyTraceCtx);
         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
             copyTarget: copyResolution?.target || null,
         });
+        const traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
@@ -358,6 +365,7 @@ export async function pollWebAi(deps, input = {}) {
                 baseline,
                 usedFallbacks: ['copy-markdown'],
                 warnings: [],
+                ...(traceSummary ? { traceSummary } : {}),
             });
         }
         if (session) updateSession(session.sessionId, { status: 'timeout' });
@@ -368,6 +376,7 @@ export async function pollWebAi(deps, input = {}) {
             url: page.url(),
             ...(session ? { sessionId: session.sessionId } : {}),
             baseline,
+            ...(traceSummary ? { traceSummary } : {}),
             warnings: [`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`],
             usedFallbacks: [],
             error: 'timed out waiting for answer',
@@ -479,13 +488,14 @@ async function resolveOptionalChatGptUploadTarget(page, traceCtx = null) {
     return result;
 }
 
-async function resolveOptionalChatGptCopyTarget(page) {
+async function resolveOptionalChatGptCopyTarget(page, traceCtx = null) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'copy.lastResponse',
     });
+    recordResolverTrace(traceCtx, result, 'copy.lastResponse');
     if (result.ok && result.target?.selector) return result;
-    return null;
+    return result;
 }
 
 function summarizeResolverAttempts(attempts = []) {
@@ -533,7 +543,13 @@ function persistResolverTrace(sessionId, traceCtx) {
     const steps = getSessionTrace(traceCtx);
     if (!steps.length) return null;
     appendTraceToSession(sessionId, steps);
-    return summarizeTrace(traceCtx);
+    const session = getSession(sessionId);
+    return summarizeTraceSteps(sessionId, session?.trace?.length ? session.trace : steps);
+}
+
+function persistResolverTraceForSession(session, traceCtx) {
+    if (!session?.sessionId || !traceCtx) return null;
+    return persistResolverTrace(session.sessionId, traceCtx);
 }
 
 async function countAssistantMessages(page) {

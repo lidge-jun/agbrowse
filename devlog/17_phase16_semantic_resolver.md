@@ -80,6 +80,8 @@ repair is considered.
 - 2026-05-05: ChatGPT send path now persists `composer.fill`, `send.click`,
   and optional `upload.attach` resolver metadata in the session trace without
   prompt or answer text.
+- 2026-05-05: ChatGPT copy fallback now persists `copy.lastResponse` resolver
+  metadata and returns a trace summary covering the full persisted session trace.
 
 ## Not now
 

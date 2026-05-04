@@ -24,6 +24,7 @@ describe('web-ai fake ChatGPT fixture', () => {
             output: 'one line',
             constraints: 'inline only',
             timeout: 2,
+            allowCopyMarkdownFallback: true,
         });
 
         expect(result.ok).toBe(true);
@@ -32,27 +33,30 @@ describe('web-ai fake ChatGPT fixture', () => {
         expect(result.answerArtifact).toMatchObject({
             provider: 'chatgpt',
             conversationUrl: 'https://chatgpt.com/c/fake',
-            capturedBy: 'dom-fallback',
+            capturedBy: 'copy-button',
             text: 'OK',
             markdown: 'OK',
-            exactnessScore: 0.75,
+            exactnessScore: 1,
         });
         expect(result.answerArtifact.responseStableMs).toBeGreaterThanOrEqual(1500);
         expect(result.baseline.assistantCount).toBe(1);
+        expect(result.usedFallbacks).toContain('copy-markdown');
         expect(result.baseline.promptHash).toMatch(/^[a-f0-9]{64}$/);
         expect(page.insertedText).toContain('## Question\nReply exactly: OK');
         expect(page.composerResolverValidated).toBe(true);
         expect(page.sendResolverValidated).toBe(true);
+        expect(page.copyResolverValidated).toBe(true);
+        expect(page.copyMarkdownSelectors[0]).toBe('button[data-testid="copy-turn-action-button"]');
         expect(page.clickedSend).toBe(true);
         expect(page.keys).not.toContain('Enter');
         const session = getSession(result.sessionId);
         const resolverSteps = session.trace.filter(step => step.action === 'target-resolve');
-        expect(resolverSteps.map(step => step.intentId)).toEqual(expect.arrayContaining(['composer.fill', 'send.click']));
+        expect(resolverSteps.map(step => step.intentId)).toEqual(expect.arrayContaining(['composer.fill', 'send.click', 'copy.lastResponse']));
         expect(resolverSteps.every(step => step.status === 'ok')).toBe(true);
         expect(JSON.stringify(resolverSteps)).not.toContain('Reply exactly: OK');
         expect(result.traceSummary).toMatchObject({
             sessionId: result.sessionId,
-            totalSteps: 2,
+            totalSteps: 3,
         });
     });
 });
@@ -67,6 +71,8 @@ function createFakeChatGptPage() {
         clickedSend: false,
         composerResolverValidated: false,
         sendResolverValidated: false,
+        copyResolverValidated: false,
+        copyMarkdownSelectors: [],
         url: () => 'https://chatgpt.com/c/fake',
         keyboard: {
             insertText: async text => {
@@ -85,6 +91,10 @@ function createFakeChatGptPage() {
             }
         },
         evaluate: async (_fn, arg, legacySendSelectors) => {
+            if (arg?.selectorSet?.copyButtonSelectors) {
+                page.copyMarkdownSelectors = arg.selectorSet.copyButtonSelectors;
+                return { ok: true, text: 'OK' };
+            }
             const sendSelectors = Array.isArray(legacySendSelectors) ? legacySendSelectors : arg?.sendSelectors;
             if (!Array.isArray(sendSelectors)) return null;
             commitPrompt(page);
@@ -98,18 +108,20 @@ function createFakeChatGptPage() {
 function createFakeLocator(page, selector) {
     const isComposer = selector.includes('prompt-textarea') || selector.includes('composer-textarea') || selector.includes('ProseMirror') || selector.includes('contenteditable');
     const isSendButton = selector.includes('send-button') || selector.includes('composer-send') || selector.includes('button[type="submit"]') || selector.includes('aria-label*="Send"');
+    const isCopyButton = selector.includes('copy-turn-action-button') || selector.includes('aria-label*="Copy"');
     const isTurn = selector.includes('conversation-turn') || selector.includes('data-message-author-role') || selector.includes('data-turn');
     const isAssistant = selector.includes('assistant');
     return {
         first: () => createFakeLocator(page, selector),
         count: async () => {
             if (isComposer || isSendButton) return 1;
+            if (isCopyButton) return 1;
             if (isAssistant) return page.assistantTexts.length;
             if (isTurn) return page.turnTexts.length;
             return 0;
         },
         waitFor: async () => undefined,
-        isVisible: async () => isComposer || isSendButton,
+        isVisible: async () => isComposer || isSendButton || isCopyButton,
         isEnabled: async () => true,
         isEditable: async () => isComposer,
         fill: async value => { page.composerValue = value; },
@@ -124,6 +136,10 @@ function createFakeLocator(page, selector) {
             if (isSendButton && typeof fn === 'function') {
                 page.sendResolverValidated = true;
                 return { role: 'button', label: 'Send message', tagName: 'button', isEditable: false };
+            }
+            if (isCopyButton && typeof fn === 'function') {
+                page.copyResolverValidated = true;
+                return { role: 'button', label: 'Copy', tagName: 'button', isEditable: false };
             }
             if (isSendButton) return false;
             if (isComposer && page.composerValue) return undefined;
