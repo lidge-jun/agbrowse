@@ -101,6 +101,159 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('falls through when exact reasoning effort triggers are hidden for every supported effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const cases = [
+            { model: 'thinking', efforts: ['light', 'standard', 'extended', 'heavy'], effortTexts: thinkingEffortTexts() },
+            { model: 'pro', efforts: ['standard', 'extended'], effortTexts: proEffortTexts() },
+        ];
+
+        for (const { model, efforts, effortTexts } of cases) {
+            for (const effort of efforts) {
+                const page = createFakeModelPage({
+                    model,
+                    exactEffortTrigger: true,
+                    exactEffortTriggerVisible: false,
+                    genericEffortTrigger: true,
+                    effortTexts,
+                });
+                const result = await selectChatGptModel(page, model, { effort });
+
+                expect(result).toMatchObject({ selected: model, effort });
+                expect(result.usedFallbacks).toContain(`${model}-effort-generic-trigger`);
+            }
+        }
+    });
+
+    it('does not treat a closed hero effort pill as an open model menu', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            initialModelMenuOpen: false,
+            closedHeroEffortPill: true,
+            checkedModelRows: false,
+            effortTexts: proEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, 'pro', { effort: 'standard' })).resolves.toMatchObject({
+            selected: 'pro',
+            effort: 'standard',
+        });
+    });
+
+    it('does not treat a visible effort trigger as the model row when model row test ids disappear', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            exactEffortTrigger: true,
+            exactEffortTriggerModel: 'pro',
+            missingModelTestIds: ['model-switcher-gpt-5-5-pro'],
+            effortTexts: thinkingEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+            selected: 'pro',
+            alreadySelected: false,
+        });
+    });
+
+    it('does not select a standalone Heavy exact effort trigger as the Pro model', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            exactEffortTrigger: true,
+            exactEffortTriggerModel: 'pro',
+            exactEffortTriggerText: 'Heavy',
+            missingModelTestIds: ['model-switcher-gpt-5-5-pro'],
+            effortTexts: thinkingEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+            selected: 'pro',
+            alreadySelected: false,
+        });
+    });
+
+    it('skips effort-only Pro labels when looking for a model row by text', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+
+        for (const strayModelMenuText of ['Heavy', 'Standard Pro', 'Extended Pro']) {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                missingModelTestIds: ['model-switcher-gpt-5-5-pro'],
+                strayModelMenuTexts: [strayModelMenuText],
+                effortTexts: thinkingEffortTexts(),
+            });
+
+            await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+                selected: 'pro',
+                alreadySelected: false,
+            });
+        }
+    });
+
+    it('selects menuitem-only effort options for every supported effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const cases = [
+            { model: 'thinking', efforts: ['light', 'standard', 'extended', 'heavy'], effortTexts: thinkingEffortTexts() },
+            { model: 'pro', efforts: ['standard', 'extended'], effortTexts: proEffortTexts() },
+        ];
+
+        for (const { model, efforts, effortTexts } of cases) {
+            for (const effort of efforts) {
+                const page = createFakeModelPage({
+                    model,
+                    exactEffortTrigger: false,
+                    effortOptionRole: 'menuitem',
+                    checkedEffortRows: false,
+                    effortTexts,
+                });
+                const result = await selectChatGptModel(page, model, { effort });
+
+                expect(result).toMatchObject({ selected: model, effort });
+            }
+        }
+    });
+
+    it('dismisses a wrong exact-trigger effort menu before trying generic effort controls', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            exactEffortTrigger: true,
+            genericEffortTrigger: true,
+            effortTexts: thinkingEffortTexts(),
+            genericEffortTexts: proEffortTexts(),
+        });
+
+        const result = await selectChatGptModel(page, 'pro', { effort: 'extended' });
+
+        expect(result).toMatchObject({ selected: 'pro', effort: 'extended' });
+        expect(result.usedFallbacks).toContain('pro-effort-generic-trigger');
+    });
+
+    it('reopens the model menu after effort selection closes it for every supported effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const cases = [
+            { model: 'thinking', efforts: ['light', 'standard', 'extended', 'heavy'], effortTexts: thinkingEffortTexts() },
+            { model: 'pro', efforts: ['standard', 'extended'], effortTexts: proEffortTexts() },
+        ];
+
+        for (const { model, efforts, effortTexts } of cases) {
+            for (const effort of efforts) {
+                const page = createFakeModelPage({
+                    model,
+                    exactEffortTrigger: false,
+                    genericEffortTrigger: true,
+                    closeModelMenuOnEffortSelect: true,
+                    effortTexts,
+                });
+                const result = await selectChatGptModel(page, model, { effort });
+
+                expect(result).toMatchObject({ selected: model, effort });
+            }
+        }
+    });
+
     it('ignores a reasoning menu for the wrong ChatGPT model before selecting an effort', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const cases = [
@@ -294,6 +447,42 @@ describe('web-ai ChatGPT model selector policy', () => {
         });
     });
 
+    it('does not read a standalone Heavy effort pill as the Pro model on split-pill hero UI', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            effortTexts: thinkingEffortTexts(),
+            activePillTexts: { heavy: 'Heavy' },
+            splitModelPillText: 'GPT-5.5 Thinking',
+            checkedModelRows: false,
+            checkedEffortRows: false,
+            roleButtonPill: true,
+        });
+
+        await expect(selectChatGptModel(page, 'thinking', { effort: 'heavy' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'heavy',
+        });
+    });
+
+    it('does not treat Thinking Heavy split-pill state as already selected Pro', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            initialSelectedEffort: 'heavy',
+            effortTexts: thinkingEffortTexts(),
+            activePillTexts: { heavy: 'Heavy' },
+            splitModelPillText: state => state.currentModel === 'pro' ? 'GPT-5.5 Pro' : 'GPT-5.5 Thinking',
+            checkedModelRows: false,
+            roleButtonPill: true,
+        });
+
+        await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+            selected: 'pro',
+            alreadySelected: false,
+        });
+    });
+
     it('wires ChatGPT effort options through the CLI surface', () => {
         const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
@@ -342,50 +531,67 @@ function createFakeModelPage({
     effortTexts = {},
     activePillTexts = null,
     genericEffortTexts = null,
+    initialSelectedEffort = null,
     checkedEffortRows = true,
     checkedModelRows = true,
     roleButtonPill = false,
     keyboardOpensEffort = true,
+    closeModelMenuOnEffortSelect = false,
     initialModelMenuOpen = true,
     closedDropdownButton = false,
     exactEffortTrigger = false,
+    exactEffortTriggerVisible = true,
     genericEffortTrigger = true,
     genericTriggerMode = 'css',
+    splitModelPillText = null,
+    closedHeroEffortPill = false,
+    missingModelTestIds = [],
+    exactEffortTriggerModel = model,
+    exactEffortTriggerText = 'Effort',
+    strayModelMenuTexts = [],
+    effortOptionRole = 'menuitemradio',
 } = {}) {
+    const missingModelTestIdSet = new Set(missingModelTestIds);
     const state = {
         modelMenuOpen: initialModelMenuOpen,
         effortMenuOpen: false,
         currentModel: model,
-        selectedEffort: null,
+        selectedEffort: initialSelectedEffort,
         effortMenuSource: null,
         exactEffortTrigger,
+        exactEffortTriggerVisible,
         genericEffortTrigger,
     };
     const modelRows = [
         createElement({
             text: 'GPT-5.3 Instant',
-            testId: 'model-switcher-gpt-5-3',
+            testId: modelRowTestId('model-switcher-gpt-5-3'),
             get checked() { return checkedModelRows && state.currentModel === 'instant'; },
-            onClick: () => { state.currentModel = 'instant'; },
+            onClick: () => setModel('instant'),
         }),
         createElement({
             text: 'GPT-5.5 Thinking',
-            testId: 'model-switcher-gpt-5-5-thinking',
+            testId: modelRowTestId('model-switcher-gpt-5-5-thinking'),
             get checked() { return checkedModelRows && state.currentModel === 'thinking'; },
-            onClick: () => { state.currentModel = 'thinking'; },
+            onClick: () => setModel('thinking'),
         }),
         createElement({
             text: 'GPT-5.5 Pro',
-            testId: 'model-switcher-gpt-5-5-pro',
+            testId: modelRowTestId('model-switcher-gpt-5-5-pro'),
             get checked() { return checkedModelRows && state.currentModel === 'pro'; },
-            onClick: () => { state.currentModel = 'pro'; },
+            onClick: () => setModel('pro'),
         }),
     ];
     const exactTrigger = createElement({
-        text: 'Effort',
-        testId: `model-switcher-gpt-5-5-${model}-thinking-effort`,
+        text: exactEffortTriggerText,
+        testId: `model-switcher-gpt-5-5-${exactEffortTriggerModel}-thinking-effort`,
         onClick: () => openEffortRows('target'),
+        visible: state.exactEffortTriggerVisible,
     });
+    const strayModelMenuItems = strayModelMenuTexts.map(text => createElement({
+        text,
+        onClick: () => openEffortRows('target'),
+    }));
     const genericTrigger = createElement({
         text: 'Reasoning effort',
         onClick: () => openEffortRows('generic'),
@@ -400,6 +606,15 @@ function createFakeModelPage({
         text: () => state.selectedEffort
             ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel,
+        onClick: () => { state.modelMenuOpen = true; },
+    });
+    const splitModelPill = createElement({
+        text: () => typeof splitModelPillText === 'function' ? splitModelPillText(state) : splitModelPillText || state.currentModel,
+        onClick: () => { state.modelMenuOpen = true; },
+    });
+    const closedHeroPill = createElement({
+        text: 'Standard Pro',
+        testId: 'model-switcher-gpt-5-5-pro-thinking-effort',
         onClick: () => { state.modelMenuOpen = true; },
     });
 
@@ -422,13 +637,25 @@ function createFakeModelPage({
             click: async () => openEffortRows('target'),
         },
         waitForTimeout: async () => undefined,
-        evaluate: async () => null,
+        evaluate: async (_fn, arg) => {
+            if (arg === exactTrigger.testId && state.exactEffortTrigger) return exactTrigger.rect;
+            return null;
+        },
         locator: selector => makeLocator(selectElements(selector), selector),
     };
 
     function openEffortRows(source) {
         state.effortMenuOpen = true;
         state.effortMenuSource = source;
+    }
+
+    function modelRowTestId(testId) {
+        return missingModelTestIdSet.has(testId) ? null : testId;
+    }
+
+    function setModel(nextModel) {
+        if (state.currentModel !== nextModel) state.selectedEffort = null;
+        state.currentModel = nextModel;
     }
 
     function currentEffortTexts() {
@@ -444,21 +671,27 @@ function createFakeModelPage({
                 state.selectedEffort = effort;
                 state.effortMenuOpen = false;
                 state.effortMenuSource = null;
+                if (closeModelMenuOnEffortSelect) state.modelMenuOpen = false;
             },
         }));
     }
 
+    function composerPills() {
+        return splitModelPillText ? [splitModelPill, modelPill] : [modelPill];
+    }
+
     function selectElements(selector) {
-        if (selector === 'button, [role="button"], [role="menuitem"]') return state.genericEffortTrigger && genericTriggerMode === 'text' ? [modelPill, genericTrigger] : [modelPill];
-        if (selector.includes('__composer-pill')) return roleButtonPill ? [modelPill] : [];
-        if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, modelPill].filter(element => element.visible);
+        if (selector === 'button, [role="button"], [role="menuitem"]') return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'text' ? [...composerPills(), genericTrigger] : composerPills();
+        if (selector.includes('__composer-pill')) return roleButtonPill ? composerPills() : [];
+        if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));
         if (selector === '[role="menu"]') {
             return state.effortMenuOpen ? [createElement({ text: Object.values(currentEffortTexts()).join('\n') })] : [];
         }
-        if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows : [];
-        if (selector === '[data-testid^="model-switcher-gpt-"]') return state.modelMenuOpen ? modelRows : [];
-        if (selector === '[role="menuitemradio"], [role="menuitem"]') return state.effortMenuOpen ? currentEffortRows() : modelRows;
-        if (selector === '[role="menuitemradio"]') return state.effortMenuOpen ? currentEffortRows() : [];
+        if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
+        if (selector === '[data-testid^="model-switcher-gpt-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
+        if (selector === '[role="menuitemradio"], [role="menuitem"]') return state.effortMenuOpen ? currentEffortRows() : [...strayModelMenuItems, ...modelRows];
+        if (selector === '[role="menuitemradio"]') return state.effortMenuOpen && effortOptionRole === 'menuitemradio' ? currentEffortRows() : [];
+        if (selector === '[role="menuitem"]') return state.effortMenuOpen && effortOptionRole === 'menuitem' ? currentEffortRows() : [];
         if (selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')) {
             const checkedTestId = selector.match(/data-testid="([^"]+)"/)?.[1];
             return [...modelRows, ...currentEffortRows()]
@@ -468,10 +701,10 @@ function createFakeModelPage({
         const testId = selector.match(/data-testid="([^"]+)"/)?.[1];
         if (testId) {
             if (testId === 'model-switcher-dropdown-button') return closedDropdownButton ? [dropdownButton] : [];
-            if (testId.includes('thinking-effort')) return state.exactEffortTrigger ? [exactTrigger] : [];
+            if (testId.includes('thinking-effort')) return state.modelMenuOpen && state.exactEffortTrigger && testId === exactTrigger.testId ? [exactTrigger] : [];
             return state.modelMenuOpen ? modelRows.filter(element => element.testId === testId) : [];
         }
-        if (/Effort|Reasoning|effort/i.test(selector)) return state.genericEffortTrigger && genericTriggerMode === 'css' ? [genericTrigger] : [];
+        if (/Effort|Reasoning|effort/i.test(selector)) return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'css' ? [genericTrigger] : [];
         return [];
     }
 }
@@ -500,7 +733,10 @@ function makeLocator(elements, selector = '') {
         count: async () => elements.length,
         all: async () => elements.map(element => makeLocator([element], selector)),
         isVisible: async () => Boolean(elements[0]?.visible),
-        click: async () => elements[0]?.onClick(),
+        click: async () => {
+            if (elements[0]?.visible === false) throw new Error('element not visible');
+            return elements[0]?.onClick();
+        },
         hover: async () => undefined,
         focus: async () => undefined,
         boundingBox: async () => elements[0]?.rect || null,
@@ -508,6 +744,7 @@ function makeLocator(elements, selector = '') {
         evaluateAll: async (fn, arg) => fn(elements.map(element => ({
             innerText: element.text,
             textContent: element.text,
+            getAttribute: name => name === 'data-testid' ? element.testId : null,
         })), arg),
     };
     return loc;
