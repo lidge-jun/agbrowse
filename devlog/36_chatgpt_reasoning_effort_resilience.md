@@ -28,6 +28,10 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
 - Rejected generic/text effort menus are dismissed before the row-bound
   fallbacks run, so a stale labels-only menu cannot be accepted later with the
   row-bound verification policy.
+- Thinking effort menus are verified by the requested effort and plan-visible
+  base labels. `Standard` / `Extended` menus no longer require Pro-only
+  `Light` / `Heavy` labels, while `Light` / `Heavy` still must be visible when
+  requested.
 - Visible-text-only `Effort` / `Reasoning effort` controls are covered through
   a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text

@@ -218,7 +218,7 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
     if (!config?.efforts?.[effort]) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort ${effort} is not available for ${model}`, evidence: { model, effort, supported: Object.keys(config?.efforts || {}) } });
     }
-    await openEffortMenu(page, model, usedFallbacks);
+    await openEffortMenu(page, model, effort, usedFallbacks);
     const before = await readCheckedEffort(page, model);
     if (before === effort) return { requested: effort, selected: before, changed: false };
     const option = await findEffortOption(page, model, effort);
@@ -228,7 +228,7 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
     }
     await option.click({ timeout: 5_000 });
     await page.waitForTimeout(500).catch(() => undefined);
-    await openEffortMenu(page, model, usedFallbacks);
+    await openEffortMenu(page, model, effort, usedFallbacks);
     const after = await readCheckedEffort(page, model);
     if (after !== effort) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort verification failed: expected ${effort}, got ${after || 'none'}`, evidence: { model, effort, got: after || null } });
@@ -246,8 +246,8 @@ async function findEffortOption(page, model, effort) {
     return (await option.isVisible().catch(() => false)) ? option : null;
 }
 
-async function openEffortMenu(page, model, usedFallbacks) {
-    if (await isEffortMenuOpen(page, model)) return;
+async function openEffortMenu(page, model, effort, usedFallbacks) {
+    if (await isEffortMenuOpen(page, model, { effort })) return;
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     const row = await findModelOption(page, model);
     const rowBox = row ? await row.boundingBox().catch(() => null) : null;
@@ -266,18 +266,18 @@ async function openEffortMenu(page, model, usedFallbacks) {
             await page.waitForTimeout(100).catch(() => undefined);
             await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => undefined);
             await page.waitForTimeout(300).catch(() => undefined);
-            if (await isEffortMenuOpen(page, model)) return;
+            if (await isEffortMenuOpen(page, model, { effort })) return;
         }
         await trigger.click({ timeout: 5_000 });
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model)) return;
+        if (await isEffortMenuOpen(page, model, { effort })) return;
     }
     for (const selector of CHATGPT_EFFORT_TRIGGER_SELECTORS) {
         const trigger = page.locator(selector).last();
         if (!(await trigger.isVisible().catch(() => false))) continue;
         await trigger.click({ timeout: 2_000 }).catch(() => undefined);
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model, { allowUnlabeled: false })) {
+        if (await isEffortMenuOpen(page, model, { effort, allowUnlabeled: false })) {
             usedFallbacks.push(`${model}-effort-generic-trigger`);
             return;
         }
@@ -287,7 +287,7 @@ async function openEffortMenu(page, model, usedFallbacks) {
     if (await textTrigger.isVisible().catch(() => false)) {
         await textTrigger.click({ timeout: 2_000 }).catch(() => undefined);
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model, { allowUnlabeled: false })) {
+        if (await isEffortMenuOpen(page, model, { effort, allowUnlabeled: false })) {
             usedFallbacks.push(`${model}-effort-text-trigger`);
             return;
         }
@@ -297,7 +297,7 @@ async function openEffortMenu(page, model, usedFallbacks) {
         await row.focus({ timeout: 1_000 }).catch(() => undefined);
         await page.keyboard.press('ArrowRight').catch(() => undefined);
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model)) {
+        if (await isEffortMenuOpen(page, model, { effort })) {
             usedFallbacks.push(`${model}-effort-keyboard-open`);
             return;
         }
@@ -308,7 +308,7 @@ async function openEffortMenu(page, model, usedFallbacks) {
         await page.waitForTimeout(100).catch(() => undefined);
         await page.mouse.click(fallbackBox.x + fallbackBox.width / 2, fallbackBox.y + fallbackBox.height / 2).catch(() => undefined);
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model)) {
+        if (await isEffortMenuOpen(page, model, { effort })) {
             usedFallbacks.push(`${model}-effort-row-button`);
             return;
         }
@@ -383,22 +383,26 @@ async function readCheckedEffort(page, model) {
 
 async function isEffortMenuOpen(page, model, options = {}) {
     const allowUnlabeled = options.allowUnlabeled !== false;
+    const requestedEffort = options.effort || null;
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     if (!config) return false;
     const labels = Object.values(config.efforts);
+    const requiredLabels = requiredEffortMenuLabels(model, requestedEffort);
     const unexpectedLabels = Object.entries(CHATGPT_MODEL_EFFORT_OPTIONS)
         .filter(([choice]) => choice !== model)
         .flatMap(([, option]) => Object.values(option.efforts))
         .filter(label => !labels.includes(label));
-    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, unexpectedLabels, modelChoice, allowUnlabeled }) => {
+    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, requiredLabels, unexpectedLabels, modelChoice, allowUnlabeled }) => {
         return menus.some(menu => {
             const text = menu.innerText || menu.textContent || '';
             if (!menuTextMatchesModel(text, modelChoice, allowUnlabeled)) return false;
             const unexpectedMatches = unexpectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
             if (unexpectedMatches.length > 0) return false;
+            const requiredMatches = requiredLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
+            if (requiredMatches.length < requiredLabels.length) return false;
             const matches = expectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
-            const requiredMatches = expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length);
-            return matches.length >= requiredMatches;
+            const minimumMatches = requiredLabels.length || (expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length));
+            return matches.length >= minimumMatches;
         });
         function menuTextMatchesModel(text, choice, permitUnlabeled) {
             const hasThinking = /\b(Thinking|Think)\b/i.test(text);
@@ -408,7 +412,21 @@ async function isEffortMenuOpen(page, model, options = {}) {
             if (choice === 'pro') return hasPro && !hasThinking;
             return true;
         }
-    }, { expectedLabels: labels, unexpectedLabels, modelChoice: model, allowUnlabeled }).catch(() => false);
+    }, { expectedLabels: labels, requiredLabels, unexpectedLabels, modelChoice: model, allowUnlabeled }).catch(() => false);
+}
+
+function requiredEffortMenuLabels(model, effort) {
+    const efforts = CHATGPT_MODEL_EFFORT_OPTIONS[model]?.efforts || {};
+    if (model === 'thinking') {
+        const base = [efforts.standard, efforts.extended].filter(Boolean);
+        if (effort === 'light' || effort === 'heavy') {
+            return [...new Set([...base, efforts[effort]].filter(Boolean))];
+        }
+        if (effort === 'standard' || effort === 'extended') return base;
+    }
+    if (model === 'pro') return Object.values(efforts);
+    if (effort && efforts[effort]) return [efforts[effort]];
+    return Object.values(efforts);
 }
 
 async function readCheckedModel(page) {

@@ -138,6 +138,37 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(result.usedFallbacks).not.toContain('pro-effort-generic-trigger');
     });
 
+    it('accepts plan-base Thinking standard and extended menus without requiring Pro-only light or heavy labels', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        for (const effort of ['standard', 'extended']) {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                exactEffortTrigger: false,
+                genericEffortTrigger: true,
+                effortTexts: labelsOnlyProEffortTexts(),
+                genericEffortTexts: labelsOnlyProEffortTexts(),
+            });
+
+            const result = await selectChatGptModel(page, 'thinking', { effort });
+
+            expect(result).toMatchObject({ selected: 'thinking', effort });
+            expect(result.usedFallbacks).toContain('thinking-effort-keyboard-open');
+            expect(result.usedFallbacks).not.toContain('thinking-effort-generic-trigger');
+        }
+
+        for (const effort of ['light', 'heavy']) {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                exactEffortTrigger: false,
+                genericEffortTrigger: true,
+                effortTexts: labelsOnlyProEffortTexts(),
+                genericEffortTexts: labelsOnlyProEffortTexts(),
+            });
+
+            await expect(selectChatGptModel(page, 'thinking', { effort })).rejects.toThrow(/reasoning effort selector not found/);
+        }
+    });
+
     it('does not trust overlapping labels-only menus from broad generic effort triggers', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const page = createFakeModelPage({
