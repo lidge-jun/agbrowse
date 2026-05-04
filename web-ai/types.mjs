@@ -53,12 +53,24 @@ export const ATTACHMENT_POLICY = Object.freeze({
  * @property {string=} textHash
  * @property {string} capturedAt
  *
+ * @typedef {Object} AnswerArtifact
+ * @property {WebAiVendor|string} provider
+ * @property {string|null} sessionId
+ * @property {string|null} conversationUrl
+ * @property {'copy-button'|'dom-fallback'|'clipboard'|'manual'|'unknown'} capturedBy
+ * @property {string} markdown
+ * @property {string} text
+ * @property {number} exactnessScore
+ * @property {number|null} responseStableMs
+ * @property {string[]} warnings
+ *
  * @typedef {Object} WebAiOutput
  * @property {boolean} ok
  * @property {WebAiVendor} vendor
  * @property {WebAiStatus} status
  * @property {string=} url
  * @property {string=} answerText
+ * @property {AnswerArtifact=} answerArtifact
  * @property {RenderedQuestionBundle=} rendered
  * @property {CommittedTurnBaseline=} baseline
  * @property {string[]} warnings

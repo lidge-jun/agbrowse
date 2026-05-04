@@ -16,6 +16,7 @@ import {
 } from './session.mjs';
 import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, GEMINI_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
+import { withAnswerArtifact } from './answer-artifact.mjs';
 import { selectGeminiModel, geminiModelCapabilityProbe } from './gemini-model.mjs';
 import { preflightAttachment } from './chatgpt-attachments.mjs';
 import { WebAiError } from './errors.mjs';
@@ -395,7 +396,17 @@ export async function geminiPollWebAi(deps, input = {}) {
             if (session) {
                 await finalizeProviderTab(deps, { vendor: 'gemini', session, page, answerText, warnings });
             }
-            return { ok: true, vendor: 'gemini', status: 'complete', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), answerText, baseline, usedFallbacks, warnings };
+            return withAnswerArtifact({
+                ok: true,
+                vendor: 'gemini',
+                status: 'complete',
+                url: page.url(),
+                ...(session ? { sessionId: session.sessionId } : {}),
+                answerText,
+                baseline,
+                usedFallbacks,
+                warnings,
+            });
         }
         await page.waitForTimeout(2_000).catch(() => undefined);
     }

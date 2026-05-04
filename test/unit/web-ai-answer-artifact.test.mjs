@@ -3,6 +3,7 @@ import {
     artifactFromPollResult,
     createAnswerArtifact,
     summarizeAnswerArtifact,
+    withAnswerArtifact,
 } from '../../web-ai/answer-artifact.mjs';
 
 describe('answer artifact', () => {
@@ -39,6 +40,27 @@ describe('answer artifact', () => {
         expect(artifact.warnings).toEqual(['copy button missing']);
     });
 
+    it('attaches artifacts to provider results without dropping legacy fields', () => {
+        const result = withAnswerArtifact({
+            ok: true,
+            vendor: 'chatgpt',
+            status: 'complete',
+            url: 'https://chatgpt.com/c/fake',
+            answerText: 'OK',
+            usedFallbacks: [],
+            warnings: [],
+        });
+
+        expect(result.answerText).toBe('OK');
+        expect(result.answerArtifact).toMatchObject({
+            provider: 'chatgpt',
+            conversationUrl: 'https://chatgpt.com/c/fake',
+            capturedBy: 'dom-fallback',
+            markdown: 'OK',
+            text: 'OK',
+        });
+    });
+
     it('summarizes artifacts without leaking answer text', () => {
         const summary = summarizeAnswerArtifact({
             provider: 'gemini',
@@ -59,4 +81,3 @@ describe('answer artifact', () => {
         });
     });
 });
-

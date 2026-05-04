@@ -28,6 +28,15 @@ describe('web-ai fake ChatGPT fixture', () => {
         expect(result.ok).toBe(true);
         expect(result.status).toBe('complete');
         expect(result.answerText).toBe('OK');
+        expect(result.answerArtifact).toMatchObject({
+            provider: 'chatgpt',
+            conversationUrl: 'https://chatgpt.com/c/fake',
+            capturedBy: 'dom-fallback',
+            text: 'OK',
+            markdown: 'OK',
+            exactnessScore: 0.75,
+        });
+        expect(result.answerArtifact.responseStableMs).toBeGreaterThanOrEqual(1500);
         expect(result.baseline.assistantCount).toBe(1);
         expect(result.baseline.promptHash).toMatch(/^[a-f0-9]{64}$/);
         expect(page.insertedText).toContain('## Question\nReply exactly: OK');

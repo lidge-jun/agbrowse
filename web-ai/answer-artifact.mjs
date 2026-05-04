@@ -31,13 +31,22 @@ export function artifactFromPollResult(result = {}, context = {}) {
     return createAnswerArtifact({
         provider: result.vendor || context.provider,
         sessionId: result.sessionId || context.sessionId,
-        conversationUrl: result.conversationUrl || context.conversationUrl,
+        conversationUrl: result.conversationUrl || result.url || context.conversationUrl,
         capturedBy,
         markdown: result.markdown || result.answerMarkdown || result.answerText || '',
         text: result.text || result.answerText || result.markdown || result.answerMarkdown || '',
         responseStableMs: result.responseStableMs,
         warnings: [...(context.warnings || []), ...(result.warnings || [])],
     });
+}
+
+export function withAnswerArtifact(result = {}, context = {}) {
+    if (result.answerArtifact) return result;
+    if (!result.answerText && !result.markdown && !result.answerMarkdown && !result.text) return result;
+    return {
+        ...result,
+        answerArtifact: artifactFromPollResult(result, context),
+    };
 }
 
 export function summarizeAnswerArtifact(artifact = {}) {
@@ -74,4 +83,3 @@ function clampScore(value) {
     if (!Number.isFinite(value)) return 0;
     return Math.max(0, Math.min(1, value));
 }
-

@@ -26,6 +26,7 @@ import {
 import { selectChatGptModel, chatGptModelCapabilityProbe } from './chatgpt-model.mjs';
 import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, CHATGPT_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
+import { withAnswerArtifact } from './answer-artifact.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 const ASSISTANT_SELECTORS = [
@@ -285,7 +286,7 @@ export async function pollWebAi(deps, input = {}) {
                     if (session) {
                         await finalizeProviderTab(deps, { vendor, session, page, answerText, warnings });
                     }
-                    return {
+                    return withAnswerArtifact({
                         ok: true,
                         vendor,
                         status: 'complete',
@@ -295,7 +296,8 @@ export async function pollWebAi(deps, input = {}) {
                         baseline,
                         usedFallbacks,
                         warnings,
-                    };
+                        responseStableMs: Date.now() - stableSince,
+                    });
                 }
             } else {
                 stableText = latest;
@@ -316,7 +318,7 @@ export async function pollWebAi(deps, input = {}) {
             if (session) {
                 await finalizeProviderTab(deps, { vendor, session, page, answerText });
             }
-            return {
+            return withAnswerArtifact({
                 ok: true,
                 vendor,
                 status: 'complete',
@@ -326,7 +328,7 @@ export async function pollWebAi(deps, input = {}) {
                 baseline,
                 usedFallbacks: ['copy-markdown'],
                 warnings: [],
-            };
+            });
         }
         if (session) updateSession(session.sessionId, { status: 'timeout' });
         return {

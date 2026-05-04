@@ -21,6 +21,7 @@ import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapab
 export const GROK_CONTEXT_PACK_WARNING = 'grok-context-pack-not-recommended: prefer inline prompts plus optional --file uploads for Grok; ChatGPT or Gemini handle context packages more reliably.';
 import { attachLocalFileLive, fileInfoFromPath } from './chatgpt-attachments.mjs';
 import { captureCopiedResponseText, GROK_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
+import { withAnswerArtifact } from './answer-artifact.mjs';
 import { selectGrokModel, grokModelCapabilityProbe } from './grok-model.mjs';
 
 const GROK_HOSTS = new Set(['grok.com']);
@@ -269,7 +270,18 @@ export async function grokPollWebAi(deps, input = {}) {
                     if (session) {
                         await finalizeProviderTab(deps, { vendor: 'grok', session, page, answerText, warnings });
                     }
-                    return { ok: true, vendor: 'grok', status: 'complete', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), answerText, baseline, usedFallbacks, warnings };
+                    return withAnswerArtifact({
+                        ok: true,
+                        vendor: 'grok',
+                        status: 'complete',
+                        url: page.url(),
+                        ...(session ? { sessionId: session.sessionId } : {}),
+                        answerText,
+                        baseline,
+                        usedFallbacks,
+                        warnings,
+                        responseStableMs: Date.now() - stableSince,
+                    });
                 }
             } else {
                 stableText = latest;
