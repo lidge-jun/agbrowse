@@ -27,6 +27,7 @@ import { selectChatGptModel, chatGptModelCapabilityProbe } from './chatgpt-model
 import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, CHATGPT_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
 import { withAnswerArtifact } from './answer-artifact.mjs';
+import { resolveTargetForIntent } from './target-resolver.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 const ASSISTANT_SELECTORS = [
@@ -158,7 +159,7 @@ export async function sendWebAi(deps, input = {}) {
         port: deps.getPort?.() || 9222,
     });
 
-    const adapter = createChatGptEditorAdapter(page, {
+    const editorOptions = {
         insertText: async (text) => {
             const cdp = await deps.getCdpSession?.();
             if (!cdp) throw new Error('CDP session unavailable for Input.insertText');
@@ -168,8 +169,14 @@ export async function sendWebAi(deps, input = {}) {
                 await cdp.detach?.().catch(() => undefined);
             }
         },
+    };
+    const readinessAdapter = createChatGptEditorAdapter(page, editorOptions);
+    await readinessAdapter.waitForReady();
+    const composerResolution = await resolveChatGptComposerTarget(page);
+    const adapter = createChatGptEditorAdapter(page, {
+        ...editorOptions,
+        composerTarget: composerResolution.target,
     });
-    await adapter.waitForReady();
     const commitBaseline = await adapter.getCommitBaseline();
     await adapter.insertPrompt(rendered.composerText);
     let attachmentWarnings = [];
@@ -404,6 +411,41 @@ async function requireChatGptPage(deps) {
         });
     }
     return page;
+}
+
+async function resolveChatGptComposerTarget(page) {
+    const result = await resolveTargetForIntent(page, {
+        provider: 'chatgpt',
+        intentId: 'composer.fill',
+    });
+    if (result.ok && result.target?.selector) return result;
+    throw new WebAiError({
+        errorCode: 'provider.composer-not-visible',
+        stage: 'composer-prereq',
+        vendor: 'chatgpt',
+        retryHint: 're-snapshot',
+        message: 'ChatGPT composer target resolver did not find a verified composer',
+        selectorsTried: result.intent?.cssFallbacks || [...CHATGPT_COMPOSER_SELECTORS],
+        evidence: {
+            intentId: result.intent?.intentId || 'composer.fill',
+            errorCode: result.errorCode || null,
+            attempts: summarizeResolverAttempts(result.attempts),
+        },
+    });
+}
+
+function summarizeResolverAttempts(attempts = []) {
+    return attempts.map(attempt => ({
+        source: attempt.source || null,
+        selector: attempt.selector || null,
+        ref: attempt.ref || null,
+        validation: attempt.validation ? {
+            ok: attempt.validation.ok === true,
+            reason: attempt.validation.reason || null,
+            confidence: attempt.validation.confidence ?? null,
+            count: attempt.validation.count ?? null,
+        } : null,
+    }));
 }
 
 async function countAssistantMessages(page) {

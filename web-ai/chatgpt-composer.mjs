@@ -38,7 +38,13 @@ export const CONVERSATION_TURN_SELECTOR = [
 const INSERT_SETTLE_MS = 500;
 const DEFAULT_COMMIT_TIMEOUT_MS = 60_000;
 
-export async function findComposerCandidate(page) {
+export async function findComposerCandidate(page, options = {}) {
+    if (options.composerTarget?.selector) {
+        return {
+            selector: options.composerTarget.selector,
+            locator: page.locator(options.composerTarget.selector).first(),
+        };
+    }
     const candidate = await findVisibleCandidate(page, INPUT_SELECTORS, { allowFirstCandidateFallback: true });
     if (candidate) return { selector: candidate.selector, locator: candidate.locator };
     throw new WebAiError({
@@ -52,7 +58,7 @@ export async function findComposerCandidate(page) {
 }
 
 export async function insertPromptIntoComposer(page, text, options = {}) {
-    const candidate = await findComposerCandidate(page);
+    const candidate = await findComposerCandidate(page, options);
     await focusComposerLikeUser(candidate.locator);
     try {
         await insertTextLikeProvider(page, text, options);

@@ -1,4 +1,5 @@
 import {
+    INPUT_SELECTORS as CHATGPT_INPUT_SELECTORS,
     countConversationTurns,
     insertPromptIntoComposer,
     submitPromptFromComposer,
@@ -11,7 +12,8 @@ export function createChatGptEditorAdapter(page, options = {}) {
     return {
         vendor: 'chatgpt',
         async waitForReady() {
-            await page.locator('#prompt-textarea, .ProseMirror, [contenteditable="true"]').first().waitFor({ state: 'visible', timeout: 10_000 });
+            const selector = options.composerTarget?.selector || '#prompt-textarea, .ProseMirror, [contenteditable="true"]';
+            await page.locator(selector).first().waitFor({ state: 'visible', timeout: 10_000 });
         },
         async getCommitBaseline() {
             return { turnsCount: await countConversationTurns(page) };
@@ -42,7 +44,7 @@ export const GEMINI_DEEP_THINK_CONSTRAINTS = {
 
 // --- Phase 7: Semantic target contracts per vendor ---
 
-export const CHATGPT_COMPOSER_SELECTORS = ['#prompt-textarea', '[data-testid="composer-textarea"]', 'div[contenteditable="true"]'];
+export const CHATGPT_COMPOSER_SELECTORS = CHATGPT_INPUT_SELECTORS;
 export const CHATGPT_UPLOAD_SELECTORS = ['button[aria-label*="Upload" i]', 'button[aria-label*="Attach" i]', 'button[data-testid*="plus" i]'];
 export const CHATGPT_RESPONSE_SELECTORS = ['[data-message-author-role="assistant"]', '[data-turn="assistant"]', 'article[data-testid^="conversation-turn"]'];
 export const CHATGPT_STREAMING_SELECTORS = ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]'];

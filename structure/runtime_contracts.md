@@ -40,7 +40,7 @@ aliases: [agbrowse runtime contracts, agbrowse 런타임 계약, provider contra
 
 | Provider | Ready surface | Beta surface | Fail-closed 조건 |
 | --- | --- | --- | --- |
-| ChatGPT | render, session store, fixture eval, model alias contract | live send/poll/query/upload/copy | composer, send button, model, upload evidence 미확인 |
+| ChatGPT | render, session store, fixture eval, model alias contract | live send/poll/query/upload/copy | composer resolver validation, send button, model, upload evidence 미확인 |
 | Gemini | render, model alias contract, Deep Think gate, fixture eval | live send/poll/query/upload | mode picker, upload evidence, completion signal 미확인 |
 | Grok | render, source-discipline prompt, fixture eval | live send/poll/query/source-audit | context pack hard gate, source quality 미달, copy evidence 미확인 |
 
@@ -98,6 +98,7 @@ Provider UI는 공식 API가 아니다. 따라서 live provider flow는 구현�
 | Browser primitive parity | `devlog/16_phase15_browser_primitives.md` |
 | Semantic resolver | `devlog/17_phase16_semantic_resolver.md` |
 | ActionIntent target resolver | `devlog/29_action_intent_target_resolver.md` |
+| ChatGPT composer resolver integration | `devlog/30_chatgpt_composer_resolver.md` |
 | Provider contracts and source audit | `devlog/18_phase17_provider_contracts_source_audit.md` |
 | Answer artifact and source audit foundation | `devlog/25_answer_artifact_source_audit.md` |
 | Provider answer artifacts | `devlog/26_provider_answer_artifacts.md` |

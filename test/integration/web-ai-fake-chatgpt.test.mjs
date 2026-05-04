@@ -40,6 +40,7 @@ describe('web-ai fake ChatGPT fixture', () => {
         expect(result.baseline.assistantCount).toBe(1);
         expect(result.baseline.promptHash).toMatch(/^[a-f0-9]{64}$/);
         expect(page.insertedText).toContain('## Question\nReply exactly: OK');
+        expect(page.resolverValidated).toBe(true);
         expect(page.clickedSend).toBe(true);
         expect(page.keys).not.toContain('Enter');
     });
@@ -53,6 +54,7 @@ function createFakeChatGptPage() {
         assistantTexts: ['old answer'],
         turnTexts: ['old answer'],
         clickedSend: false,
+        resolverValidated: false,
         url: () => 'https://chatgpt.com/c/fake',
         keyboard: {
             insertText: async text => {
@@ -82,7 +84,7 @@ function createFakeChatGptPage() {
 }
 
 function createFakeLocator(page, selector) {
-    const isComposer = selector.includes('prompt-textarea') || selector.includes('ProseMirror') || selector.includes('contenteditable');
+    const isComposer = selector.includes('prompt-textarea') || selector.includes('composer-textarea') || selector.includes('ProseMirror') || selector.includes('contenteditable');
     const isSendButton = selector.includes('send-button') || selector.includes('composer-send') || selector.includes('button[type="submit"]') || selector.includes('aria-label*="Send"');
     const isTurn = selector.includes('conversation-turn') || selector.includes('data-message-author-role') || selector.includes('data-turn');
     const isAssistant = selector.includes('assistant');
@@ -95,11 +97,18 @@ function createFakeLocator(page, selector) {
             return 0;
         },
         waitFor: async () => undefined,
+        isVisible: async () => isComposer || isSendButton,
+        isEnabled: async () => true,
+        isEditable: async () => isComposer,
         fill: async value => { page.composerValue = value; },
         click: async () => {
             if (isSendButton) commitPrompt(page);
         },
         evaluate: async fn => {
+            if (isComposer && typeof fn === 'function') {
+                page.resolverValidated = true;
+                return { role: 'textbox', label: 'Message ChatGPT', tagName: 'textarea', isEditable: true };
+            }
             if (isSendButton) return false;
             if (isComposer && page.composerValue) return undefined;
             if (typeof fn === 'function') return undefined;

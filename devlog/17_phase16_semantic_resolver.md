@@ -67,6 +67,11 @@ repair is considered.
 - Provider actions expose `intentId`, selected candidate, confidence, and
   fallback path in diagnostics.
 
+### Progress
+
+- 2026-05-05: ChatGPT `composer.fill` now resolves through the ActionIntent
+  target resolver before prompt insertion.
+
 ## Not now
 
 - No embedding service.
