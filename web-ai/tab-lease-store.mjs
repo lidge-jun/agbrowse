@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, u
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { closeTab, isTabAlive } from '../skills/browser/tab-manager.mjs';
+import { activeCommandTargetIds } from './active-command-store.mjs';
 
 const STORE_VERSION = 1;
 const LOCK_RETRY_MS = 25;
@@ -230,6 +231,7 @@ export async function cleanupLeasedTabs(port, input = {}) {
     const nowMs = input.now || Date.now();
     const toClose = [];
     const browserProfileKey = String(input.browserProfileKey || port || process.env.CDP_PORT || '9222');
+    const activeTargets = await activeCommandTargetIds({ browserProfileKey });
     await withLeaseLock(async () => {
         const store = readStore();
         const dead = [];
@@ -238,13 +240,14 @@ export async function cleanupLeasedTabs(port, input = {}) {
             if (!(await isTabAlive(port, lease.targetId))) dead.push(lease.targetId);
         }
         store.leases = store.leases.filter(lease => lease.browserProfileKey !== browserProfileKey || !dead.includes(lease.targetId));
-        toClose.push(...selectOverflowAndExpired(store.leases.filter(lease => lease.browserProfileKey === browserProfileKey), {
+        const closeableLeases = store.leases.filter(lease => lease.browserProfileKey === browserProfileKey && !activeTargets.has(lease.targetId));
+        toClose.push(...selectOverflowAndExpired(closeableLeases, {
             nowMs,
             maxPerKey: input.maxPerKey ?? DEFAULT_POOL_MAX_PER_KEY,
             globalMax: input.globalMax ?? DEFAULT_POOL_GLOBAL_MAX,
         }));
         if (input.completedSessions === true) {
-            toClose.push(...store.leases.filter(lease => lease.browserProfileKey === browserProfileKey && lease.state === 'completed-session'));
+            toClose.push(...closeableLeases.filter(lease => lease.state === 'completed-session'));
         }
         const closing = new Set(toClose.map(row => scopedTargetKey(row)));
         store.leases = store.leases.map(row => closing.has(scopedTargetKey(row)) ? { ...row, state: 'closing', closePreviousState: row.closePreviousState || row.state, updatedAt: new Date().toISOString() } : row);

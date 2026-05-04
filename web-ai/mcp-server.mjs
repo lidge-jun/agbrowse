@@ -13,6 +13,7 @@ import {
 } from './copy-markdown.mjs';
 import { allToolSchemas, isKnownWebAiTool } from './tool-schema.mjs';
 import { enforcePolicy } from './policy/enforce.mjs';
+import { withActiveCommand } from './active-command-store.mjs';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
 const JSON_RPC = '2.0';
@@ -98,7 +99,9 @@ async function callWebAiTool(name, args, deps, state) {
         const target = Number.isInteger(ref.occurrenceIndex) && ref.occurrenceIndex >= 0
             ? locator.nth(ref.occurrenceIndex)
             : locator.first();
-        await target.click({ timeout: 5_000 });
+        await withMcpActiveCommand(name, provider, deps, args, async () => {
+            await target.click({ timeout: 5_000 });
+        });
         return { ok: true, snapshotId: snapshot.snapshotId, ref: args.ref };
     }
     if (name === 'web_ai_submit_prompt') {
@@ -110,13 +113,13 @@ async function callWebAiTool(name, args, deps, state) {
             fileAccess: Boolean(args.filePath),
             unsafeAllow: args.unsafeAllow || [],
         });
-        return sendByProvider(provider, deps, {
+        return withMcpActiveCommand(name, provider, deps, args, () => sendByProvider(provider, deps, {
             ...args,
             vendor: provider,
             inlineOnly: args.inlineOnly !== false,
             attachmentPolicy: 'inline-only',
             reasoningEffort: args.effort || args.reasoningEffort,
-        });
+        }));
     }
     if (name === 'web_ai_wait_response' || name === 'web_ai_session_resume') {
         const session = getSession(args.sessionId);
@@ -135,7 +138,7 @@ async function callWebAiTool(name, args, deps, state) {
         enforcePolicy(policy, action);
         const page = await deps.getPage();
         enforcePolicy(policy, { ...action, url: page.url?.() || fallbackUrl });
-        const copied = await captureCopiedResponseText(page, copySelectorsForProvider(provider));
+        const copied = await withMcpActiveCommand(name, provider, deps, args, () => captureCopiedResponseText(page, copySelectorsForProvider(provider)));
         return { ok: copied.ok, vendor: provider, text: copied.text || '', status: copied.status || 'copied' };
     }
     if (name === 'web_ai_doctor') {
@@ -146,6 +149,19 @@ async function callWebAiTool(name, args, deps, state) {
         });
     }
     throw new Error(`unhandled tool: ${name}`);
+}
+
+async function withMcpActiveCommand(name, provider, deps, args, fn) {
+    const targetId = await deps.getTargetId?.().catch(() => null);
+    if (!targetId) return fn();
+    return withActiveCommand({
+        command: `mcp ${name}`,
+        provider,
+        sessionId: args.sessionId || null,
+        targetId,
+        owner: 'mcp',
+        port: deps.getPort?.() || 9222,
+    }, fn);
 }
 
 function normalizeMcpPolicy(policy) {

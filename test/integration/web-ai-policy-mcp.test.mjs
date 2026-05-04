@@ -1,5 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handleMcpMessage } from '../../web-ai/mcp-server.mjs';
+import { registerActiveCommand } from '../../web-ai/active-command-store.mjs';
+import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
+
+async function withTempHome(fn) {
+    const temp = createTempBrowserEnv('agbrowse-mcp-active-command-');
+    const previousHome = process.env.BROWSER_AGENT_HOME;
+    process.env.BROWSER_AGENT_HOME = temp.homeDir;
+    try {
+        return await fn(temp);
+    } finally {
+        if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+        else process.env.BROWSER_AGENT_HOME = previousHome;
+        temp.cleanup();
+    }
+}
 
 describe('web-ai policy MCP', () => {
     it('denies copy markdown clipboard read before touching page', async () => {
@@ -179,4 +194,39 @@ describe('web-ai policy MCP', () => {
         expect(response.result.content[0].text).toContain('origin denied');
         expect(deps.getPage).toHaveBeenCalledOnce();
     });
+
+    it('blocks MCP mutation when the current target is owned by another active command', async () => withTempHome(async () => {
+        await registerActiveCommand({
+            commandId: 'cmd-owner',
+            targetId: 'target-owned',
+            browserProfileKey: '9222',
+        });
+        const page = {
+            url: () => 'https://chatgpt.com/c/owned',
+            locator: vi.fn(() => {
+                throw new Error('copy capture should not run after ownership conflict');
+            }),
+        };
+        const deps = {
+            getPage: vi.fn(async () => page),
+            getTargetId: vi.fn(async () => 'target-owned'),
+            getPort: () => 9222,
+        };
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+                name: 'web_ai_copy_markdown',
+                arguments: {
+                    provider: 'chatgpt',
+                    unsafeAllow: ['clipboard-read'],
+                },
+            },
+        }, deps, {});
+
+        expect(response.result.isError).toBe(true);
+        expect(response.result.content[0].text).toContain('target already owned by active command');
+        expect(page.locator).not.toHaveBeenCalled();
+    }));
 });

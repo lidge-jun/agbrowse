@@ -129,6 +129,25 @@ describe('web-ai cli session flags', () => {
         expect(cliSrc).toMatch(/const boundSendOrQuery = await runBoundSendOrQuery\(command, deps, input\)/);
     });
 
+    it('wraps session-bound and provider web-ai mutations in active command ownership', () => {
+        expect(cliSrc).toContain("withActiveCommand } from './active-command-store.mjs'");
+        expect(cliSrc).toMatch(/async function withWebAiActiveCommand\(command, deps, input, fn\)/);
+        expect(cliSrc).toMatch(/command: `web-ai \$\{command\}`/);
+        expect(cliSrc).toMatch(/owner: 'cli'/);
+        expect(cliSrc).toMatch(/return withWebAiActiveCommand\(command, sessionDeps, sessionInput/);
+        expect(cliSrc).toMatch(/case 'send': return withWebAiActiveCommand/);
+        expect(cliSrc).toMatch(/case 'query': return withWebAiActiveCommand/);
+    });
+
+    it('reuses inactive provider tabs before creating another ChatGPT tab', () => {
+        expect(cliSrc).toContain("import { createTab, listManagedTabs, waitForPageByTargetId }");
+        expect(cliSrc).toMatch(/async function findReusableProviderTab\(port, vendor, targetUrl\)/);
+        expect(cliSrc).toMatch(/activeCommandTargetIds\(\{ browserProfileKey: String\(port\) \}\)/);
+        expect(cliSrc).toMatch(/input\.forceNewTab !== true/);
+        expect(cliSrc).toMatch(/const reusable = await findReusableProviderTab/);
+        expect(cliSrc).toMatch(/page\.goto\(vendorUrl/);
+    });
+
     it('repairs bound session pages that are alive but navigated to another conversation', () => {
         const recoverySrc = readFileSync(join(process.cwd(), 'web-ai/tab-recovery.mjs'), 'utf8');
         expect(recoverySrc).toMatch(/current\.conversationUrl && page\.url\(\) !== current\.conversationUrl/);

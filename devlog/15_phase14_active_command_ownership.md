@@ -6,14 +6,22 @@ contract.
 
 ## PR 14.1 — Active command store
 
+### Implementation status
+
+Implemented as the Phase 14 completion slice. The durable store now records
+running CLI/MCP commands, refreshes heartbeats, marks expired records stale, and
+rejects same-target ownership conflicts before mutation.
+
 ### Diff
 
 - NEW `web-ai/active-command-store.mjs`
-- MODIFY `web-ai/tab-pool.mjs`
-- MODIFY `web-ai/session-store.mjs`
+- MODIFY `skills/browser/tab-lifecycle.mjs`
+- MODIFY `web-ai/tab-lease-store.mjs`
 - MODIFY `web-ai/mcp-server.mjs`
 - MODIFY `web-ai/cli.mjs`
 - NEW `test/unit/active-command-store.test.mjs`
+- MODIFY `test/unit/tab-lifecycle.test.mjs`
+- MODIFY `test/integration/web-ai-policy-mcp.test.mjs`
 
 ### Store record
 
@@ -48,10 +56,17 @@ contract.
 
 ## PR 14.2 — Cross-process race tests
 
+### Implementation status
+
+Implemented at the durable-store and mutation-boundary level for this phase.
+Full live multi-process provider contention remains a later smoke/benchmark
+task because provider tabs are shared external resources.
+
 ### Diff
 
-- NEW `test/integration/web-ai-concurrency.test.mjs`
-- NEW `test/fixtures/concurrency/*.json`
+- NEW `test/unit/active-command-store.test.mjs`
+- MODIFY `test/unit/web-ai-provider-session.test.mjs`
+- MODIFY `test/integration/web-ai-policy-mcp.test.mjs`
 
 ### Tests
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseDuration, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
+import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
 import { checkoutPooledLease, cleanupLeasedTabs, listLeases, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 
@@ -32,6 +32,23 @@ describe('tab lifecycle cleanup selection', () => {
 
         expect(selected.map(tab => tab.targetId)).toEqual(['idle']);
         expect(selected[0].cleanupReason).toBe('idle-timeout');
+    });
+
+    it('preserves active-command tabs during cleanup selection', () => {
+        const now = 1_000_000;
+        const selected = selectTabsForCleanup({
+            now,
+            idleTimeoutMs: 10_000,
+            maxTabs: 2,
+            tabs: [
+                { targetId: 'idle', lastActiveAt: now - 20_000 },
+                { targetId: 'active-command', lastActiveAt: now - 20_000 },
+                { targetId: 'newer', lastActiveAt: now - 1000 },
+            ],
+            activeCommandTargetIds: new Set(['active-command']),
+        });
+
+        expect(selected.map(tab => tab.targetId)).toEqual(['idle']);
     });
 
     it('enforces max-tabs by closing the oldest closeable tabs', () => {
@@ -83,6 +100,25 @@ describe('tab lifecycle cleanup selection', () => {
         expect(selectTabsForCleanup({ ...base, includeUntracked: true }).map(tab => tab.targetId)).toEqual(['untracked']);
     });
 
+    it('selects extra inactive provider tabs while protecting active commands and sessions', () => {
+        const selected = selectProviderTabsForCleanup({
+            vendor: 'chatgpt',
+            keep: 1,
+            tabs: [
+                { targetId: 'newest', url: 'https://chatgpt.com/c/new', lastActiveAt: 400 },
+                { targetId: 'old', url: 'https://chatgpt.com/c/old', lastActiveAt: 100 },
+                { targetId: 'active-command', url: 'https://chatgpt.com/c/run', lastActiveAt: 50 },
+                { targetId: 'active-session', url: 'https://chatgpt.com/c/session', lastActiveAt: 25 },
+                { targetId: 'other', url: 'https://example.com', lastActiveAt: 1 },
+            ],
+            activeCommandTargetIds: new Set(['active-command']),
+            activeSessionTargetIds: new Set(['active-session']),
+        });
+
+        expect(selected.map(tab => tab.targetId)).toEqual(['old']);
+        expect(selected[0].cleanupReason).toBe('provider-overflow');
+    });
+
     it('counts only owned closeable leases toward managed max-tabs when lease metadata is present', () => {
         const leaseByTargetId = new Map([
             ['pooled-old', { targetId: 'pooled-old', owner: 'web-ai', state: 'pooled' }],
@@ -106,7 +142,7 @@ describe('tab lifecycle cleanup selection', () => {
 
     it('does not pass Array.map index as tab display timestamp', () => {
         const source = readFileSync(new URL('../../skills/browser/browser.mjs', import.meta.url), 'utf8');
-        expect(source).toContain('.map(tab => tabDisplayState(tab))');
+        expect(source).toContain('const displayed = tabDisplayState(tab)');
         expect(source).not.toContain('.map(tabDisplayState)');
     });
 
@@ -142,6 +178,19 @@ describe('tab lifecycle cleanup selection', () => {
         expect(source).toContain("import { cleanupPoolTabs } from '../../web-ai/tab-pool.mjs'");
         expect(source).toContain('const leaseResult = await cleanupPoolTabs(getPort())');
         expect(source).toContain('leaseClosed');
+    });
+
+    it('wires active command ownership into tab and lease cleanup', () => {
+        const lifecycleSource = readFileSync(new URL('../../skills/browser/tab-lifecycle.mjs', import.meta.url), 'utf8');
+        const leaseSource = readFileSync(new URL('../../web-ai/tab-lease-store.mjs', import.meta.url), 'utf8');
+        expect(lifecycleSource).toContain('activeCommandTargetIds');
+        expect(lifecycleSource).toContain('!activeCommandTargets.has(tab.targetId)');
+        expect(leaseSource).toContain('activeCommandTargetIds');
+        expect(leaseSource).toContain('!activeTargets.has(lease.targetId)');
+        expect(lifecycleSource).not.toContain('activeCommandTargetIds({ browserProfileKey: String(port) }).catch');
+        expect(leaseSource).not.toContain('activeCommandTargetIds({ browserProfileKey }).catch');
+        expect(lifecycleSource).toContain('selectProviderTabsForCleanup');
+        expect(lifecycleSource).toContain('providerClosed');
     });
 
     it('removes dead pooled lease metadata during checkout', async () => {

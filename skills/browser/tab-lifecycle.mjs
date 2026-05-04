@@ -4,9 +4,15 @@
 import { closeTab, listManagedTabs } from './tab-manager.mjs';
 import { listSessions } from '../../web-ai/session.mjs';
 import { listLeases } from '../../web-ai/tab-lease-store.mjs';
+import { activeCommandTargetIds } from '../../web-ai/active-command-store.mjs';
 
 const MAX_TABS = parseInt(process.env.AGBROWSE_MAX_TABS || '10', 10);
 const IDLE_TIMEOUT_MS = parseDuration(process.env.AGBROWSE_TAB_IDLE || '30m');
+const PROVIDER_ORIGINS = {
+    chatgpt: 'https://chatgpt.com',
+    gemini: 'https://gemini.google.com',
+    grok: 'https://grok.com',
+};
 
 const pinnedTabs = new Set(); // targetIds that should never auto-close
 
@@ -34,6 +40,7 @@ export function parseDuration(value) {
 export function selectTabsForCleanup({
     tabs,
     activeSessionTargetIds = new Set(),
+    activeCommandTargetIds: activeCommandTargets = new Set(),
     pinnedTargetIds = new Set(),
     now = Date.now(),
     idleTimeoutMs = IDLE_TIMEOUT_MS,
@@ -46,6 +53,7 @@ export function selectTabsForCleanup({
         tab?.targetId &&
         !pinnedTargetIds.has(tab.targetId) &&
         !activeSessionTargetIds.has(tab.targetId) &&
+        !activeCommandTargets.has(tab.targetId) &&
         isCloseableByOwnership(tab, leaseByTargetId, includeUntracked)
     );
 
@@ -63,6 +71,7 @@ export function selectTabsForCleanup({
         const tracked = Number.isFinite(lastActiveAt) && lastActiveAt > 0;
         return !pinnedTargetIds.has(tab.targetId) &&
             !activeSessionTargetIds.has(tab.targetId) &&
+            !activeCommandTargets.has(tab.targetId) &&
             (tracked || includeUntracked) &&
             isCloseableByOwnership(tab, leaseByTargetId, includeUntracked);
     });
@@ -80,6 +89,29 @@ export function selectTabsForCleanup({
     }
 
     return Array.from(selected.values());
+}
+
+export function selectProviderTabsForCleanup({
+    tabs,
+    vendor,
+    keep = 1,
+    activeSessionTargetIds = new Set(),
+    activeCommandTargetIds: activeCommandTargets = new Set(),
+    pinnedTargetIds = new Set(),
+} = {}) {
+    const origin = PROVIDER_ORIGINS[vendor];
+    if (!origin) return [];
+    const keepCount = Math.max(0, Number.isFinite(Number(keep)) ? Number(keep) : 1);
+    return (tabs || [])
+        .filter(tab => tab?.targetId && providerOriginFromUrl(tab.url) === origin)
+        .filter(tab =>
+            !pinnedTargetIds.has(tab.targetId) &&
+            !activeSessionTargetIds.has(tab.targetId) &&
+            !activeCommandTargets.has(tab.targetId)
+        )
+        .sort((a, b) => (Number(b.lastActiveAt) || 0) - (Number(a.lastActiveAt) || 0))
+        .slice(keepCount)
+        .map(tab => ({ ...tab, cleanupReason: 'provider-overflow', vendor }));
 }
 
 function isCloseableByOwnership(tab, leaseByTargetId, includeUntracked) {
@@ -106,10 +138,12 @@ export async function cleanupIdleTabs(port, opts = {}) {
     for (const session of listSessions({ active: true })) {
         if (session.targetId) activeSessionTargetIds.add(session.targetId);
     }
+    const activeCommandTargets = await activeCommandTargetIds({ browserProfileKey: String(port) });
 
     const toClose = selectTabsForCleanup({
         tabs,
         activeSessionTargetIds,
+        activeCommandTargetIds: activeCommandTargets,
         pinnedTargetIds: pinnedTabs,
         now,
         idleTimeoutMs: opts.idleTimeoutMs || IDLE_TIMEOUT_MS,
@@ -117,8 +151,20 @@ export async function cleanupIdleTabs(port, opts = {}) {
         includeUntracked: opts.includeUntracked === true,
         leaseByTargetId,
     });
+    if (opts.provider) {
+        for (const tab of selectProviderTabsForCleanup({
+            tabs,
+            vendor: opts.provider,
+            keep: opts.keepProviderTabs ?? 1,
+            activeSessionTargetIds,
+            activeCommandTargetIds: activeCommandTargets,
+            pinnedTargetIds: pinnedTabs,
+        })) {
+            if (!toClose.some(row => row.targetId === tab.targetId)) toClose.push(tab);
+        }
+    }
 
-    const summary = { closed: 0, idleClosed: 0, limitClosed: 0, untrackedClosed: 0 };
+    const summary = { closed: 0, idleClosed: 0, limitClosed: 0, untrackedClosed: 0, providerClosed: 0 };
     for (const tab of toClose) {
         try {
             await closeTab(port, tab.targetId);
@@ -126,10 +172,19 @@ export async function cleanupIdleTabs(port, opts = {}) {
             if (tab.cleanupReason === 'idle-timeout') summary.idleClosed += 1;
             else if (tab.cleanupReason === 'max-tabs') summary.limitClosed += 1;
             else if (tab.cleanupReason === 'untracked') summary.untrackedClosed += 1;
+            else if (tab.cleanupReason === 'provider-overflow') summary.providerClosed += 1;
         } catch {
             // Tab may already be closed
         }
     }
 
     return summary;
+}
+
+function providerOriginFromUrl(url = '') {
+    try {
+        return new URL(url).origin;
+    } catch {
+        return null;
+    }
 }

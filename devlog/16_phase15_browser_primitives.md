@@ -7,12 +7,17 @@ CLI parity.
 
 ## PR 15.1 — Low-risk primitives
 
+### Implementation status
+
+Implemented as the Phase 15 completion slice. Existing low-risk primitives now
+have JSON-friendly output, `check`/`uncheck` were added, `select-tab` aliases
+`tab-switch`, and tab selection refuses targets owned by an active command unless
+`--force` is explicit.
+
 ### Diff
 
 - MODIFY `skills/browser/browser.mjs`
-- MODIFY `bin/agbrowse.mjs`
-- MODIFY `README.md`
-- NEW `test/integration/browser-primitives-low-risk.test.mjs`
+- MODIFY `test/unit/browser-active-tab.test.mjs`
 
 ### Commands
 
@@ -37,6 +42,14 @@ CLI parity.
 - No command writes cookies/storage/downloads/uploads.
 
 ## PR 15.2 — State-changing primitives
+
+### Implementation status
+
+Partially implemented only for the existing `evaluate` primitive: it is now
+default-denied by Phase 13 policy and requires `--unsafe-allow evaluate`.
+New state-changing primitives stay out of this completion slice to avoid
+over-engineering and should be reconsidered only after trace/report UX proves
+useful on live workflows.
 
 Requires Phase 12 trace coverage and Phase 13 policy enforcement.
 
@@ -70,6 +83,12 @@ Requires Phase 12 trace coverage and Phase 13 policy enforcement.
 - Trace records every state-changing action.
 
 ## PR 15.3 — Compact refs and ARIA snapshot parity
+
+### Implementation status
+
+Deferred. The current completion keeps existing snapshot ref semantics and adds
+ownership protection around tab selection instead of introducing a second ref
+format in the same phase.
 
 ### Diff
 

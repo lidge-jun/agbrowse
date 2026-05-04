@@ -22,13 +22,22 @@
  *   navigate <url>                   Go to URL
  *   reload                           Reload current page
  *   resize <w> <h> [--fullscreen]    Resize browser window or viewport
- *   tabs                             List open tabs
- *   tab-cleanup                      Close idle/overflow tabs
+ *   tabs [--json]                    List open tabs
+ *   tab-switch <index-or-targetId> [--json] [--force]  Activate a tab
+ *   select-tab <index-or-targetId> [--json] [--force]  Alias for tab-switch
+ *   tab-cleanup [--provider chatgpt --keep-provider-tabs 1]  Close idle/overflow tabs
  *   text [--format html]             Get page text
  *   get-dom [--selector CSS] [--max-chars N]  Get current DOM
  *   console [--duration ms] [--clear] [--reload]  Read buffered console logs
  *   network [--duration ms] [--filter text] [--reload]  Inspect network requests
- *   evaluate <js>                    Execute JavaScript
+ *   evaluate <js> --unsafe-allow evaluate  Execute JavaScript
+ *   scroll <dir> [--amount N] [--json]  Scroll page
+ *   wait <ms> [--json]               Wait fixed duration
+ *   wait-for-selector <css> [--timeout ms] [--json]  Wait for selector
+ *   wait-for-text <text> [--timeout ms] [--json]  Wait for text
+ *   select <ref> <value> [--json]    Select option by ref
+ *   check <ref> [--json]             Check checkbox/radio by ref
+ *   uncheck <ref> [--json]           Uncheck checkbox by ref
  *   reset [--force]                  Clear profile + screenshots
  *   skills get core --full           Print agent operating guide + bundled skills
  *   skills install --target <dir>    Install bundled SKILL.md directories
@@ -53,6 +62,8 @@ import { runInstallSkillsCli, runSkillsCli } from './skill-install.mjs';
 import { acquireProfileLock, releaseProfileLock, updateLockPid } from './profile-lock.mjs';
 import { runWebAiCli } from '../../web-ai/cli.mjs';
 import { cleanupPoolTabs } from '../../web-ai/tab-pool.mjs';
+import { listActiveCommands } from '../../web-ai/active-command-store.mjs';
+import { enforcePolicy } from '../../web-ai/policy/enforce.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
 import { cleanupIdleTabs, isPinned, parseDuration } from './tab-lifecycle.mjs';
 
@@ -91,6 +102,18 @@ function tabDisplayState(tab, now = Date.now()) {
         idleForMs,
         idleFor: idleForMs === null ? 'untracked' : formatRelativeAge(idleForMs),
         lastActiveAtIso: tab.lastActiveAt ? new Date(tab.lastActiveAt).toISOString() : null,
+    };
+}
+
+function activeCommandSummary(command) {
+    if (!command) return null;
+    return {
+        commandId: command.commandId,
+        command: command.command,
+        provider: command.provider,
+        owner: command.owner,
+        sessionId: command.sessionId,
+        expiresAt: command.expiresAt,
     };
 }
 
@@ -891,8 +914,17 @@ async function navigate(port, url) {
     return { ok: true, url: page.url() };
 }
 
-async function evaluate(port, expression) {
+async function evaluate(port, expression, opts = {}) {
+    enforcePolicy(opts.policy || {}, {
+        evaluate: true,
+        unsafeAllow: opts.unsafeAllow || [],
+    });
     const page = await getReadyPage(port);
+    enforcePolicy(opts.policy || {}, {
+        url: page.url?.(),
+        evaluate: true,
+        unsafeAllow: opts.unsafeAllow || [],
+    });
     const result = await page.evaluate(expression);
     return { ok: true, result };
 }
@@ -985,7 +1017,7 @@ async function waitForText(port, text, opts = {}) {
     return { ok: true, text, state: opts.state || 'visible' };
 }
 
-async function tabSwitch(port, target) {
+async function tabSwitch(port, target, opts = {}) {
     const tabs = await listTabs(port);
     const wantedIndex = Number(target);
     const wanted = Number.isInteger(wantedIndex)
@@ -996,6 +1028,35 @@ async function tabSwitch(port, target) {
             `Tab ${target} not found\n` +
             `  💡 Fix: Run 'tabs' and use a valid index or target id`
         );
+    }
+    let activeCommands;
+    try {
+        activeCommands = await listActiveCommands({
+            browserProfileKey: String(port),
+            targetId: wanted.id,
+            active: true,
+        });
+    } catch (cause) {
+        if (opts.force === true) activeCommands = [];
+        else {
+            const error = new Error(
+                `cannot verify active-command ownership for tab ${wanted.id}\n` +
+                `  💡 Fix: retry, inspect ${cause?.message || 'active-command store'}, or pass --force if you are sure`
+            );
+            error.code = 'active-command.store-unavailable';
+            error.cause = cause;
+            throw error;
+        }
+    }
+    if (activeCommands.length > 0 && opts.force !== true) {
+        const owner = activeCommands[0];
+        const error = new Error(
+            `tab ${wanted.id} is owned by active command ${owner.commandId}\n` +
+            `  💡 Fix: wait for the command to finish, or pass --force if you are sure`
+        );
+        error.code = 'active-command.target-owned';
+        error.command = owner;
+        throw error;
     }
     const { browser } = await connectCdp(port);
     if (!wanted.id) throw new Error(`Could not switch to tab ${target}: target id missing`);
@@ -1018,6 +1079,14 @@ async function selectOption(port, ref, value) {
     const locator = await refToLocator(page, port, ref);
     await locator.selectOption(value);
     return { ok: true, ref, value };
+}
+
+async function setChecked(port, ref, checked) {
+    const page = await getReadyPage(port);
+    const locator = await refToLocator(page, port, ref);
+    if (checked) await locator.check();
+    else await locator.uncheck();
+    return { ok: true, ref, checked };
 }
 
 async function drag(port, fromRef, toRef) {
@@ -1460,12 +1529,21 @@ try {
         }
         case 'tabs': {
             const json = process.argv.includes('--json');
-            const tabs = (await listManagedTabs(getPort())).map(tab => tabDisplayState(tab));
+            const activeCommands = await listActiveCommands({
+                browserProfileKey: String(getPort()),
+                active: true,
+            }).catch(() => []);
+            const activeByTargetId = new Map(activeCommands.map(command => [command.targetId, command]));
+            const tabs = (await listManagedTabs(getPort())).map(tab => {
+                const displayed = tabDisplayState(tab);
+                const activeCommand = activeCommandSummary(activeByTargetId.get(displayed.targetId));
+                return activeCommand ? { ...displayed, activeCommand } : displayed;
+            });
             if (json) {
                 console.log(JSON.stringify(tabs.map((t, i) => ({ index: i + 1, ...t })), null, 2));
             } else {
                 tabs.forEach((t, i) => {
-                    const state = `${t.pinned ? 'pinned, ' : ''}idle ${t.idleFor}`;
+                    const state = `${t.pinned ? 'pinned, ' : ''}${t.activeCommand ? 'active-command, ' : ''}idle ${t.idleFor}`;
                     console.log(`${i + 1}. ${t.title || '(untitled)'} [${state}]`);
                     console.log(`   ${t.url}`);
                     console.log(`   targetId: ${t.targetId}`);
@@ -1475,10 +1553,23 @@ try {
             break;
         }
         case 'tab-switch': {
+            const json = process.argv.includes('--json');
+            const force = process.argv.includes('--force');
             const target = process.argv[3];
-            if (!target) { console.error('Usage: browser.mjs tab-switch <index-or-targetId>'); process.exit(1); }
-            const ts = await tabSwitch(getPort(), target);
-            console.log(`switched to ${ts.tab ? `tab ${ts.tab}` : ts.targetId}: ${ts.title}`);
+            if (!target) { console.error('Usage: browser.mjs tab-switch <index-or-targetId> [--json] [--force]'); process.exit(1); }
+            const ts = await tabSwitch(getPort(), target, { force });
+            if (json) console.log(JSON.stringify(ts, null, 2));
+            else console.log(`switched to ${ts.tab ? `tab ${ts.tab}` : ts.targetId}: ${ts.title}`);
+            break;
+        }
+        case 'select-tab': {
+            const json = process.argv.includes('--json');
+            const force = process.argv.includes('--force');
+            const target = process.argv[3];
+            if (!target) { console.error('Usage: browser.mjs select-tab <index-or-targetId> [--json] [--force]'); process.exit(1); }
+            const ts = await tabSwitch(getPort(), target, { force });
+            if (json) console.log(JSON.stringify({ ...ts, alias: 'select-tab' }, null, 2));
+            else console.log(`switched to ${ts.tab ? `tab ${ts.tab}` : ts.targetId}: ${ts.title}`);
             break;
         }
         case 'new-tab': {
@@ -1502,6 +1593,8 @@ try {
                     'idle-after': { type: 'string' },
                     'max-tabs': { type: 'string' },
                     'include-untracked': { type: 'boolean', default: false },
+                    provider: { type: 'string' },
+                    'keep-provider-tabs': { type: 'string' },
                     force: { type: 'boolean', default: false },
                 },
                 strict: false,
@@ -1515,6 +1608,8 @@ try {
                 idleTimeoutMs: values['idle-after'] ? parseDuration(values['idle-after']) : undefined,
                 maxTabs: values['max-tabs'] ? parseInt(values['max-tabs'], 10) : undefined,
                 includeUntracked: values['include-untracked'] === true,
+                provider: values.provider,
+                keepProviderTabs: values['keep-provider-tabs'] ? parseInt(values['keep-provider-tabs'], 10) : undefined,
             });
             const combined = {
                 ...result,
@@ -1529,6 +1624,7 @@ try {
                 console.log(`  idle timeout: ${result.idleClosed}`);
                 console.log(`  max-tabs: ${result.limitClosed}`);
                 console.log(`  untracked: ${result.untrackedClosed}`);
+                console.log(`  provider: ${result.providerClosed}`);
             }
             break;
         }
@@ -1609,45 +1705,58 @@ try {
             break;
         }
         case 'evaluate': {
-            const r = await evaluate(getPort(), process.argv.slice(3).join(' '));
+            const unsafeIndex = process.argv.indexOf('--unsafe-allow');
+            const unsafeAllow = unsafeIndex === -1 ? [] : [process.argv[unsafeIndex + 1]].filter(Boolean);
+            const expression = process.argv.slice(3)
+                .filter((arg, index, args) => arg !== '--unsafe-allow' && args[index - 1] !== '--unsafe-allow')
+                .join(' ');
+            const r = await evaluate(getPort(), expression, { unsafeAllow });
             console.log(JSON.stringify(r.result, null, 2));
             break;
         }
         case 'scroll': {
+            const json = process.argv.includes('--json');
             const dir = process.argv[3];
             const scrollRef = process.argv.includes('--ref') ? process.argv[process.argv.indexOf('--ref') + 1] : null;
             const scrollAmount = process.argv.includes('--amount') ? parseInt(process.argv[process.argv.indexOf('--amount') + 1]) : undefined;
             if (scrollRef) {
                 const sr = await scroll(getPort(), 'down', { ref: scrollRef });
-                console.log(`scrolled to ${sr.scrolledTo}`);
+                if (json) console.log(JSON.stringify(sr, null, 2));
+                else console.log(`scrolled to ${sr.scrolledTo}`);
             } else {
                 if (!dir || !['up', 'down', 'left', 'right'].includes(dir)) {
-                    console.error('Usage: browser.mjs scroll <up|down|left|right> [--amount N] [--ref eN]');
+                    console.error('Usage: browser.mjs scroll <up|down|left|right> [--amount N] [--ref eN] [--json]');
                     process.exit(1);
                 }
                 const sr = await scroll(getPort(), dir, { amount: scrollAmount });
-                console.log(`scrolled ${sr.direction} ${sr.pixels}px`);
+                if (json) console.log(JSON.stringify(sr, null, 2));
+                else console.log(`scrolled ${sr.direction} ${sr.pixels}px`);
             }
             break;
         }
         case 'wait-for': {
+            const json = process.argv.includes('--json');
             const wRef = process.argv[3];
-            if (!wRef) { console.error('Usage: browser.mjs wait-for <ref> [--timeout ms]'); process.exit(1); }
+            if (!wRef) { console.error('Usage: browser.mjs wait-for <ref> [--timeout ms] [--json]'); process.exit(1); }
             const wTimeout = process.argv.includes('--timeout') ? parseInt(process.argv[process.argv.indexOf('--timeout') + 1]) : undefined;
             const wr = await waitFor(getPort(), wRef, { timeout: wTimeout });
             console.warn('[browser] wait-for <ref> is deprecated. Prefer wait-for-selector or wait-for-text.');
-            console.log(`found ${wr.ref}`);
+            if (json) console.log(JSON.stringify(wr, null, 2));
+            else console.log(`found ${wr.ref}`);
             break;
         }
         case 'wait-for-selector': {
+            const json = process.argv.includes('--json');
             const selector = process.argv[3];
-            if (!selector) { console.error('Usage: browser.mjs wait-for-selector <selector> [--timeout ms]'); process.exit(1); }
+            if (!selector) { console.error('Usage: browser.mjs wait-for-selector <selector> [--timeout ms] [--json]'); process.exit(1); }
             const timeout = process.argv.includes('--timeout') ? parseInt(process.argv[process.argv.indexOf('--timeout') + 1]) : undefined;
             const wr = await waitForSelector(getPort(), selector, { timeout });
-            console.log(`found selector ${wr.selector}`);
+            if (json) console.log(JSON.stringify(wr, null, 2));
+            else console.log(`found selector ${wr.selector}`);
             break;
         }
         case 'wait-for-text': {
+            const json = process.argv.includes('--json');
             const timeoutIndex = process.argv.indexOf('--timeout');
             const textArgs = [];
             for (let i = 3; i < process.argv.length; i++) {
@@ -1659,25 +1768,49 @@ try {
                 textArgs.push(process.argv[i]);
             }
             const text = textArgs.join(' ');
-            if (!text) { console.error('Usage: browser.mjs wait-for-text <text> [--timeout ms]'); process.exit(1); }
+            if (!text) { console.error('Usage: browser.mjs wait-for-text <text> [--timeout ms] [--json]'); process.exit(1); }
             const timeout = timeoutIndex !== -1 ? parseInt(process.argv[timeoutIndex + 1]) : undefined;
             const wr = await waitForText(getPort(), text, { timeout });
-            console.log(`found text ${wr.text}`);
+            if (json) console.log(JSON.stringify(wr, null, 2));
+            else console.log(`found text ${wr.text}`);
             break;
         }
         case 'wait': {
+            const json = process.argv.includes('--json');
             const wMs = parseInt(process.argv[3]);
-            if (isNaN(wMs)) { console.error('Usage: browser.mjs wait <milliseconds>'); process.exit(1); }
+            if (isNaN(wMs)) { console.error('Usage: browser.mjs wait <milliseconds> [--json]'); process.exit(1); }
             await waitMs(wMs);
-            console.log(`waited ${wMs}ms`);
+            const result = { ok: true, waitedMs: wMs };
+            if (json) console.log(JSON.stringify(result, null, 2));
+            else console.log(`waited ${wMs}ms`);
             break;
         }
         case 'select': {
+            const json = process.argv.includes('--json');
             const sRef = process.argv[3];
             const sVal = process.argv[4];
-            if (!sRef || !sVal) { console.error('Usage: browser.mjs select <ref> <value>'); process.exit(1); }
-            await selectOption(getPort(), sRef, sVal);
-            console.log(`selected "${sVal}" in ${sRef}`);
+            if (!sRef || !sVal) { console.error('Usage: browser.mjs select <ref> <value> [--json]'); process.exit(1); }
+            const result = await selectOption(getPort(), sRef, sVal);
+            if (json) console.log(JSON.stringify(result, null, 2));
+            else console.log(`selected "${sVal}" in ${sRef}`);
+            break;
+        }
+        case 'check': {
+            const json = process.argv.includes('--json');
+            const ref = process.argv[3];
+            if (!ref) { console.error('Usage: browser.mjs check <ref> [--json]'); process.exit(1); }
+            const result = await setChecked(getPort(), ref, true);
+            if (json) console.log(JSON.stringify(result, null, 2));
+            else console.log(`checked ${ref}`);
+            break;
+        }
+        case 'uncheck': {
+            const json = process.argv.includes('--json');
+            const ref = process.argv[3];
+            if (!ref) { console.error('Usage: browser.mjs uncheck <ref> [--json]'); process.exit(1); }
+            const result = await setChecked(getPort(), ref, false);
+            if (json) console.log(JSON.stringify(result, null, 2));
+            else console.log(`unchecked ${ref}`);
             break;
         }
         case 'drag': {
@@ -1812,8 +1945,10 @@ try {
     type <ref> <text>      Type text [--submit]
     press <key>            Press key (Enter, Tab, Escape…)
     hover <ref>            Hover element
-    select <ref> <value>   Select dropdown option
-    drag <from> <to>       Drag element to another
+     select <ref> <value>   Select dropdown option [--json]
+     check <ref>            Check checkbox/radio [--json]
+     uncheck <ref>          Uncheck checkbox [--json]
+     drag <from> <to>       Drag element to another
     mouse-click <x> <y>    Click at pixel coordinates [--double]
     move-mouse <x> <y>     Move mouse without clicking
     mouse-down             Hold mouse button [--right]
@@ -1823,21 +1958,25 @@ try {
     navigate <url>         Go to URL
     reload                 Reload current page
     resize <w> <h>         Resize browser window / viewport [--fullscreen]
-    tabs                   List tabs
-    tab-switch <target>    Switch to tab index or CDP target id
-    tab-cleanup            Close idle/overflow tabs
-      --idle-after <30m>   Override idle threshold for this cleanup
-      --max-tabs <N>       Override max tab limit for this cleanup
-      --include-untracked  Also close tabs without activity metadata
-      --force              Required with --include-untracked
-      --json               Output cleanup counts, leaseClosed, and leaseClosedTabs as JSON
-    scroll <dir>           Scroll up|down|left|right [--amount N] [--ref eN]
+     tabs                   List tabs [--json]
+     tab-switch <target>    Switch to tab index or CDP target id [--json] [--force]
+     select-tab <target>    Alias for tab-switch [--json] [--force]
+     tab-cleanup            Close idle/overflow tabs
+       --idle-after <30m>   Override idle threshold for this cleanup
+       --max-tabs <N>       Override max tab limit for this cleanup
+       --provider <vendor>  Close extra inactive provider tabs by origin
+       --keep-provider-tabs <N>
+                            Keep newest N inactive provider tabs (default 1)
+       --include-untracked  Also close tabs without activity metadata
+       --force              Required with --include-untracked
+      --json               Output cleanup counts, providerClosed, leaseClosed, and leaseClosedTabs as JSON
+     scroll <dir>           Scroll up|down|left|right [--amount N] [--ref eN] [--json]
 
-  Wait:
-    wait <ms>              Wait milliseconds
-    wait-for-selector <s>  Wait for CSS selector [--timeout ms]
-    wait-for-text <text>   Wait for visible text [--timeout ms]
-    wait-for <ref>         Deprecated: wait for last-snapshot ref [--timeout ms]
+   Wait:
+     wait <ms>              Wait milliseconds [--json]
+     wait-for-selector <s>  Wait for CSS selector [--timeout ms] [--json]
+     wait-for-text <text>   Wait for visible text [--timeout ms] [--json]
+     wait-for <ref>         Deprecated: wait for last-snapshot ref [--timeout ms] [--json]
 
   Diagnostics:
     console                Read buffered console logs [--clear] [--reload]
@@ -1845,7 +1984,7 @@ try {
                            [--expression "console.log('hi')"]
     network                Inspect requests [--duration ms] [--filter text]
                            [--clear] [--reload] [--live-only]
-    evaluate <js>          Execute JavaScript
+     evaluate <js>          Execute JavaScript only with --unsafe-allow evaluate
 
   Web AI:
     web-ai render          Render the provider prompt without a browser
@@ -1876,7 +2015,8 @@ try {
                                        shell exit + OS sleep
         --deadline <iso>               Override session deadline
         --navigate                     Allow resume to switch tabs if needed
-        --new-tab                      Create a new tab (default for send/query)
+         --new-tab                      Force a fresh provider tab for send/query
+                                        (default reuses pooled/inactive provider tabs first)
         --reuse-tab                    Reuse active tab (legacy behavior)
         --json                         JSON output (or AGBROWSE_JSON_ERRORS=1)
 

@@ -39,6 +39,34 @@ describe('active tab persistence contract', () => {
         expect(browserSrc).toMatch(/updatePersistedState\(/);
     });
 
+    it('protects active-command tabs from accidental tab-switch and exposes select-tab alias', () => {
+        expect(browserSrc).toContain("import { listActiveCommands } from '../../web-ai/active-command-store.mjs'");
+        expect(browserSrc).toContain('active-command.target-owned');
+        expect(browserSrc).toContain('active-command.store-unavailable');
+        expect(browserSrc).toContain("case 'select-tab'");
+        expect(browserSrc).toContain('Usage: browser.mjs select-tab <index-or-targetId> [--json] [--force]');
+        expect(browserSrc).toContain('const activeCommand = activeCommandSummary');
+    });
+
+    it('documents low-risk Phase 15 browser primitives in help', () => {
+        expect(browserSrc).toContain('scroll <dir> [--amount N] [--json]');
+        expect(browserSrc).toContain('wait <ms> [--json]');
+        expect(browserSrc).toContain('wait-for-selector <css> [--timeout ms] [--json]');
+        expect(browserSrc).toContain('select <ref> <value> [--json]');
+        expect(browserSrc).toContain('check <ref> [--json]');
+        expect(browserSrc).toContain('uncheck <ref> [--json]');
+        expect(browserSrc).toContain("case 'check'");
+        expect(browserSrc).toContain("case 'uncheck'");
+    });
+
+    it('keeps existing evaluate primitive policy-gated by default', () => {
+        expect(browserSrc).toContain("import { enforcePolicy } from '../../web-ai/policy/enforce.mjs'");
+        expect(browserSrc).toMatch(/async function evaluate\(port, expression, opts = \{\}\)/);
+        expect(browserSrc).toMatch(/evaluate: true/);
+        expect(browserSrc).toMatch(/unsafeAllow: opts\.unsafeAllow/);
+        expect(browserSrc).toContain('--unsafe-allow evaluate');
+    });
+
     it('getActivePage resolves the persisted target before array-order fallback', () => {
         const start = browserSrc.indexOf('async function getActivePage');
         const end = browserSrc.indexOf('async function listTabs', start);
