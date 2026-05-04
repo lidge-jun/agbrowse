@@ -1,3 +1,5 @@
+import { BROWSER_TOOLS, isKnownBrowserTool } from './browser-tool-schema.mjs';
+
 const providerEnum = ['chatgpt', 'gemini', 'grok'];
 
 const objectSchema = (properties, required = []) => ({
@@ -70,8 +72,13 @@ export const WEB_AI_TOOLS = {
     },
 };
 
+export const MCP_TOOLS = {
+    ...WEB_AI_TOOLS,
+    ...BROWSER_TOOLS,
+};
+
 export function toolSchemaForMcp(toolName) {
-    const tool = WEB_AI_TOOLS[toolName];
+    const tool = MCP_TOOLS[toolName];
     if (!tool) return null;
     return {
         name: toolName,
@@ -81,7 +88,7 @@ export function toolSchemaForMcp(toolName) {
 }
 
 export function toolSchemaForAiSdk(toolName) {
-    const tool = WEB_AI_TOOLS[toolName];
+    const tool = MCP_TOOLS[toolName];
     if (!tool) return null;
     return {
         name: toolName,
@@ -92,9 +99,15 @@ export function toolSchemaForAiSdk(toolName) {
 
 export function allToolSchemas(format = 'mcp') {
     const mapper = format === 'ai-sdk' ? toolSchemaForAiSdk : toolSchemaForMcp;
-    return Object.keys(WEB_AI_TOOLS).map(mapper);
+    return Object.keys(MCP_TOOLS).map(mapper);
+}
+
+export function isKnownMcpTool(toolName) {
+    return Boolean(MCP_TOOLS[toolName]);
 }
 
 export function isKnownWebAiTool(toolName) {
     return Boolean(WEB_AI_TOOLS[toolName]);
 }
+
+export { BROWSER_TOOLS, isKnownBrowserTool };

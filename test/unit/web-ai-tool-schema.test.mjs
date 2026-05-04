@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+    BROWSER_TOOLS,
+    MCP_TOOLS,
     WEB_AI_TOOLS,
     allToolSchemas,
+    isKnownBrowserTool,
+    isKnownMcpTool,
     isKnownWebAiTool,
     toolSchemaForAiSdk,
     toolSchemaForMcp,
@@ -19,13 +23,24 @@ describe('web-ai MCP tool schema', () => {
             'web_ai_session_resume',
         ]);
         const schemas = allToolSchemas('mcp');
-        expect(schemas).toHaveLength(7);
+        expect(schemas).toHaveLength(Object.keys(MCP_TOOLS).length);
         for (const schema of schemas) {
-            expect(schema.name).toMatch(/^web_ai_/);
             expect(schema.description).toBeTruthy();
             expect(schema.inputSchema.type).toBe('object');
             expect(schema.inputSchema.additionalProperties).toBe(false);
         }
+    });
+
+    it('exposes Phase 18 browser tools from the shared schema source', () => {
+        expect(Object.keys(BROWSER_TOOLS)).toEqual([
+            'browser_snapshot',
+            'browser_click_ref',
+        ]);
+        expect(allToolSchemas('mcp').map(tool => tool.name)).toEqual(Object.keys(MCP_TOOLS));
+        expect(toolSchemaForMcp('browser_snapshot')).toHaveProperty('inputSchema');
+        expect(toolSchemaForAiSdk('browser_click_ref')).toHaveProperty('parameters');
+        expect(isKnownBrowserTool('browser_snapshot')).toBe(true);
+        expect(isKnownMcpTool('browser_click_ref')).toBe(true);
     });
 
     it('renders AI SDK parameters without mutating the MCP schema', () => {
@@ -33,5 +48,6 @@ describe('web-ai MCP tool schema', () => {
         expect(toolSchemaForAiSdk('web_ai_snapshot')).toHaveProperty('parameters');
         expect(isKnownWebAiTool('web_ai_snapshot')).toBe(true);
         expect(isKnownWebAiTool('invalid_tool')).toBe(false);
+        expect(isKnownMcpTool('invalid_tool')).toBe(false);
     });
 });

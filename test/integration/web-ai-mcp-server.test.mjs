@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { handleMcpMessage } from '../../web-ai/mcp-server.mjs';
 
-function fakePage({ duplicateButtons = false, clicked = [] } = {}) {
+function fakePage({ duplicateButtons = false, clicked = [], url = 'https://chatgpt.com/' } = {}) {
     return {
-        url: () => 'https://chatgpt.com/',
+        url: () => url,
         accessibility: {
             snapshot: async () => ({
                 role: 'document',
@@ -36,6 +36,8 @@ describe('web-ai MCP server', () => {
         const listed = await handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, {});
         expect(listed.result.tools.map(tool => tool.name)).toContain('web_ai_snapshot');
         expect(listed.result.tools.map(tool => tool.name)).toContain('web_ai_submit_prompt');
+        expect(listed.result.tools.map(tool => tool.name)).toContain('browser_snapshot');
+        expect(listed.result.tools.map(tool => tool.name)).toContain('browser_click_ref');
     });
 
     it('runs web_ai_snapshot and rejects stale refs', async () => {
@@ -98,5 +100,85 @@ describe('web-ai MCP server', () => {
 
         expect(click.result.structuredContent.ok).toBe(true);
         expect(clicked).toEqual([{ role: 'button', name: 'Send', index: 1, via: 'nth' }]);
+    });
+
+    it('keeps generic browser snapshot refs isolated from web-ai refs', async () => {
+        const state = {};
+        const clicked = [];
+        const deps = { getPage: async () => fakePage({ clicked }) };
+        const browserSnapshot = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'tools/call',
+            params: {
+                name: 'browser_snapshot',
+                arguments: { compact: true },
+            },
+        }, deps, state);
+
+        const snapshot = browserSnapshot.result.structuredContent;
+        expect(snapshot.provider).toBe(null);
+        expect(snapshot.refs['@e1'].name).toBe('Send');
+
+        const wrongScopeClick = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 8,
+            method: 'tools/call',
+            params: {
+                name: 'web_ai_click_ref',
+                arguments: { snapshotId: snapshot.snapshotId, ref: '@e1' },
+            },
+        }, deps, state);
+        expect(wrongScopeClick.result.isError).toBe(true);
+        expect(wrongScopeClick.result.content[0].text).toContain('stale snapshotId');
+
+        const browserClick = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 9,
+            method: 'tools/call',
+            params: {
+                name: 'browser_click_ref',
+                arguments: { snapshotId: snapshot.snapshotId, ref: '@e1' },
+            },
+        }, deps, state);
+
+        expect(browserClick.result.structuredContent).toEqual({
+            ok: true,
+            snapshotId: snapshot.snapshotId,
+            ref: '@e1',
+        });
+        expect(clicked).toEqual([{ role: 'button', name: 'Send', index: 0, via: 'nth' }]);
+    });
+
+    it('rejects browser refs when the active page moved after snapshot', async () => {
+        const state = {};
+        const clicked = [];
+        let pageUrl = 'https://example.test/a';
+        const deps = { getPage: async () => fakePage({ clicked, url: pageUrl }) };
+        const browserSnapshot = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 10,
+            method: 'tools/call',
+            params: {
+                name: 'browser_snapshot',
+                arguments: { compact: true },
+            },
+        }, deps, state);
+
+        const snapshot = browserSnapshot.result.structuredContent;
+        pageUrl = 'https://example.test/b';
+        const browserClick = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 11,
+            method: 'tools/call',
+            params: {
+                name: 'browser_click_ref',
+                arguments: { snapshotId: snapshot.snapshotId, ref: '@e1' },
+            },
+        }, deps, state);
+
+        expect(browserClick.result.isError).toBe(true);
+        expect(browserClick.result.content[0].text).toContain('snapshot URL mismatch');
+        expect(clicked).toEqual([]);
     });
 });

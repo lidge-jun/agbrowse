@@ -94,6 +94,8 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 
 | Tool | 역할 |
 | --- | --- |
+| `browser_snapshot` | active tab의 compact accessibility snapshot과 `@eN` refs 반환 |
+| `browser_click_ref` | latest generic browser snapshot ref 클릭 |
 | `web_ai_snapshot` | compact accessibility snapshot과 `@eN` refs 반환 |
 | `web_ai_click_ref` | latest snapshot ref 클릭 |
 | `web_ai_submit_prompt` | provider web UI에 prompt 제출 |

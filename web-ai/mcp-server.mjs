@@ -11,12 +11,15 @@ import {
     GEMINI_COPY_SELECTORS,
     GROK_COPY_SELECTORS,
 } from './copy-markdown.mjs';
-import { allToolSchemas, isKnownWebAiTool } from './tool-schema.mjs';
+import { allToolSchemas, isKnownMcpTool } from './tool-schema.mjs';
 import { enforcePolicy } from './policy/enforce.mjs';
 import { withActiveCommand } from './active-command-store.mjs';
+import { requireLatestSnapshot, setLatestSnapshot } from './mcp-state.mjs';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
 const JSON_RPC = '2.0';
+const WEB_AI_SCOPE = 'web_ai';
+const BROWSER_SCOPE = 'browser';
 const PROVIDERS = new Set(['chatgpt', 'gemini', 'grok']);
 const VENDOR_DEFAULT_URLS = {
     chatgpt: 'https://chatgpt.com',
@@ -71,9 +74,29 @@ function copySelectorsForProvider(provider) {
     return CHATGPT_COPY_SELECTORS;
 }
 
-async function callWebAiTool(name, args, deps, state) {
-    if (!isKnownWebAiTool(name)) throw new Error(`unknown tool: ${name}`);
+async function callMcpTool(name, args, deps, state) {
+    if (!isKnownMcpTool(name)) throw new Error(`unknown tool: ${name}`);
     const policy = normalizeMcpPolicy(args.policy === undefined ? {} : args.policy);
+    if (name === 'browser_snapshot') {
+        const page = await deps.getPage();
+        const snapshot = await buildWebAiSnapshot(page, {
+            provider: null,
+            compact: args.compact !== false,
+            interactiveOnly: args.interactive !== false,
+            maxDepth: args.maxDepth ? Number(args.maxDepth) : 6,
+            rootSelector: args.rootSelector || null,
+        });
+        setLatestSnapshot(state, BROWSER_SCOPE, snapshot);
+        return snapshot;
+    }
+    if (name === 'browser_click_ref') {
+        const snapshot = requireLatestSnapshot(state, BROWSER_SCOPE, args.snapshotId);
+        enforcePolicy(policy, { url: snapshot.url || args.url || 'about:blank' });
+        return clickSnapshotRef(name, 'browser', deps, args, snapshot, {
+            enforceCurrentUrl: true,
+            policy,
+        });
+    }
     if (name === 'web_ai_snapshot') {
         const page = await deps.getPage();
         const snapshot = await buildWebAiSnapshot(page, {
@@ -83,26 +106,14 @@ async function callWebAiTool(name, args, deps, state) {
             maxDepth: args.maxDepth ? Number(args.maxDepth) : 6,
             rootSelector: args.rootSelector || null,
         });
-        state.latestSnapshot = snapshot;
+        setLatestSnapshot(state, WEB_AI_SCOPE, snapshot);
         return snapshot;
     }
     if (name === 'web_ai_click_ref') {
         const provider = providerFromArgs(args);
-        enforcePolicy(policy, { url: state.latestSnapshot?.url || args.url || VENDOR_DEFAULT_URLS[provider] });
-        const snapshot = state.latestSnapshot;
-        if (!snapshot || snapshot.snapshotId !== args.snapshotId) throw new Error('stale snapshotId');
-        const ref = snapshot.refs?.[args.ref];
-        if (!ref) throw new Error(`unknown ref for latest snapshot: ${args.ref}`);
-        const page = await deps.getPage();
-        if (!ref.name) throw new Error(`ref is not actionable without an accessible name: ${args.ref}`);
-        const locator = page.getByRole(ref.role, { name: ref.name });
-        const target = Number.isInteger(ref.occurrenceIndex) && ref.occurrenceIndex >= 0
-            ? locator.nth(ref.occurrenceIndex)
-            : locator.first();
-        await withMcpActiveCommand(name, provider, deps, args, async () => {
-            await target.click({ timeout: 5_000 });
-        });
-        return { ok: true, snapshotId: snapshot.snapshotId, ref: args.ref };
+        const snapshot = requireLatestSnapshot(state, WEB_AI_SCOPE, args.snapshotId);
+        enforcePolicy(policy, { url: snapshot.url || args.url || VENDOR_DEFAULT_URLS[provider] });
+        return clickSnapshotRef(name, provider, deps, args, snapshot, { policy });
     }
     if (name === 'web_ai_submit_prompt') {
         const provider = providerFromArgs(args);
@@ -185,7 +196,7 @@ export async function handleMcpMessage(message, deps, state = {}) {
         }
         if (message.method === 'tools/call') {
             const params = message.params || {};
-            const result = await callWebAiTool(params.name, params.arguments || {}, deps, state);
+            const result = await callMcpTool(params.name, params.arguments || {}, deps, state);
             return jsonResponse(message.id, jsonResult(result));
         }
         return jsonError(message.id, -32601, `Method not found: ${message.method}`);
@@ -195,6 +206,31 @@ export async function handleMcpMessage(message, deps, state = {}) {
             isError: true,
         });
     }
+}
+
+async function clickSnapshotRef(name, provider, deps, args, snapshot, options = {}) {
+    const ref = snapshot.refs?.[args.ref];
+    if (!ref) throw new Error(`unknown ref for latest snapshot: ${args.ref}`);
+    const page = await deps.getPage();
+    const currentUrl = page.url?.() || null;
+    if (options.enforceCurrentUrl && snapshot.url && currentUrl && currentUrl !== snapshot.url) {
+        throw new Error(`snapshot URL mismatch: ${snapshot.url} !== ${currentUrl}`);
+    }
+    if (options.policy) enforcePolicy(options.policy, { url: currentUrl || snapshot.url || args.url || 'about:blank' });
+    if (!ref.name) throw new Error(`ref is not actionable without an accessible name: ${args.ref}`);
+    const clickOptions = {
+        timeout: Number.isFinite(Number(args.timeout)) ? Math.max(1, Number(args.timeout)) : 5_000,
+        ...(args.button ? { button: args.button } : {}),
+        ...(args.doubleClick === true ? { clickCount: 2 } : {}),
+    };
+    await withMcpActiveCommand(name, provider, deps, args, async () => {
+        const locator = page.getByRole(ref.role, { name: ref.name });
+        const target = Number.isInteger(ref.occurrenceIndex) && ref.occurrenceIndex >= 0
+            ? locator.nth(ref.occurrenceIndex)
+            : locator.first();
+        await target.click(clickOptions);
+    });
+    return { ok: true, snapshotId: snapshot.snapshotId, ref: args.ref };
 }
 
 export async function runMcpServer(deps, {

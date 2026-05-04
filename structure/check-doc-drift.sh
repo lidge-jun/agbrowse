@@ -68,6 +68,7 @@ const webAiCommands = [
 ];
 
 const mcpTools = [
+  'browser_snapshot', 'browser_click_ref',
   'web_ai_snapshot', 'web_ai_click_ref', 'web_ai_submit_prompt',
   'web_ai_wait_response', 'web_ai_copy_markdown', 'web_ai_doctor',
   'web_ai_session_resume',

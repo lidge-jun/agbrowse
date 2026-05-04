@@ -129,6 +129,37 @@ describe('web-ai policy MCP', () => {
         expect(deps.getPage).not.toHaveBeenCalled();
     });
 
+    it('enforces denied browser snapshot origin before touching page', async () => {
+        const state = {
+            latestSnapshots: {
+                browser: {
+                    snapshotId: 'browser-snap-1',
+                    url: 'https://evil.test/page',
+                    refs: {
+                        '@e1': { ref: '@e1', role: 'button', name: 'Send', occurrenceIndex: 0 },
+                    },
+                },
+            },
+        };
+        const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+                name: 'browser_click_ref',
+                arguments: {
+                    snapshotId: 'browser-snap-1',
+                    ref: '@e1',
+                    policy: { version: 1, deniedOrigins: ['https://evil.test'] },
+                },
+            },
+        }, deps, state);
+        expect(response.result.isError).toBe(true);
+        expect(response.result.content[0].text).toContain('origin denied');
+        expect(deps.getPage).not.toHaveBeenCalled();
+    });
+
     it('rejects invalid inline MCP policy before defaulting', async () => {
         const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
         const response = await handleMcpMessage({
@@ -228,5 +259,51 @@ describe('web-ai policy MCP', () => {
         expect(response.result.isError).toBe(true);
         expect(response.result.content[0].text).toContain('target already owned by active command');
         expect(page.locator).not.toHaveBeenCalled();
+    }));
+
+    it('blocks generic browser click when the current target is owned by another active command', async () => withTempHome(async () => {
+        await registerActiveCommand({
+            commandId: 'cmd-owner',
+            targetId: 'target-owned',
+            browserProfileKey: '9222',
+        });
+        const state = {
+            latestSnapshots: {
+                browser: {
+                    snapshotId: 'browser-snap-owned',
+                    url: 'https://example.test/owned',
+                    refs: {
+                        '@e1': { ref: '@e1', role: 'button', name: 'Send', occurrenceIndex: 0 },
+                    },
+                },
+            },
+        };
+        const page = {
+            url: () => 'https://example.test/owned',
+            getByRole: vi.fn(() => {
+                throw new Error('ref should not resolve after ownership conflict');
+            }),
+        };
+        const deps = {
+            getPage: vi.fn(async () => page),
+            getTargetId: vi.fn(async () => 'target-owned'),
+            getPort: () => 9222,
+        };
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+                name: 'browser_click_ref',
+                arguments: {
+                    snapshotId: 'browser-snap-owned',
+                    ref: '@e1',
+                },
+            },
+        }, deps, state);
+
+        expect(response.result.isError).toBe(true);
+        expect(response.result.content[0].text).toContain('target already owned by active command');
+        expect(page.getByRole).not.toHaveBeenCalled();
     }));
 });
