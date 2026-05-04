@@ -24,18 +24,18 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 8 | 3472 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 680 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 365 | bundled agent workflow skill |
-| `web-ai/` | 69 | 10756 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 69 | 10762 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 583 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 362 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 121 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 4 | 202 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 4 | 273 | eval runner and release scripts |
-| `test/unit/` | 53 | 5151 | deterministic module tests |
+| `test/unit/` | 53 | 5199 | deterministic module tests |
 | `test/integration/` | 14 | 1485 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 2 | 79 | adoption and trace docs |
-| `devlog/` | 61 | 13190 | phased plan, research, implementation notes |
+| `devlog/` | 61 | 13194 | phased plan, research, implementation notes |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 

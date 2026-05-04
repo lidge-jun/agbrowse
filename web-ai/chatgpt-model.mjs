@@ -365,10 +365,16 @@ async function isEffortMenuOpen(page, model) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     if (!config) return false;
     const labels = Object.values(config.efforts);
-    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, modelChoice }) => {
+    const unexpectedLabels = Object.entries(CHATGPT_MODEL_EFFORT_OPTIONS)
+        .filter(([choice]) => choice !== model)
+        .flatMap(([, option]) => Object.values(option.efforts))
+        .filter(label => !labels.includes(label));
+    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, unexpectedLabels, modelChoice }) => {
         return menus.some(menu => {
             const text = menu.innerText || menu.textContent || '';
             if (!menuTextMatchesModel(text, modelChoice)) return false;
+            const unexpectedMatches = unexpectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
+            if (unexpectedMatches.length > 0) return false;
             const matches = expectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
             const requiredMatches = expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length);
             return matches.length >= requiredMatches;
@@ -381,7 +387,7 @@ async function isEffortMenuOpen(page, model) {
             if (choice === 'pro') return hasPro && !hasThinking;
             return true;
         }
-    }, { expectedLabels: labels, modelChoice: model }).catch(() => false);
+    }, { expectedLabels: labels, unexpectedLabels, modelChoice: model }).catch(() => false);
 }
 
 async function readCheckedModel(page) {

@@ -19,11 +19,15 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
 - Effort menu verification now rejects model-specific menus for the other
   ChatGPT model. This avoids treating a Pro `Standard`/`Extended` menu as a
   valid Thinking effort menu, or the reverse.
+- Labels-only effort menus now reject unsupported labels for the requested
+  model. A Pro request no longer accepts a labels-only menu that also exposes
+  `Light` or `Heavy`.
 - Checked model and checked effort verification now also read checked row text
   and active pill text, which keeps verification stable on hero/new-chat menus.
 - Unit coverage now simulates model-first menu labels for every supported
   ChatGPT reasoning effort, verifies the generic effort trigger fallback, and
-  covers the wrong-model menu case for both Thinking and Pro.
+  covers the wrong-model menu, labels-only menu, and active-pill verification
+  cases for both Thinking and Pro where applicable.
 
 ## Verification
 

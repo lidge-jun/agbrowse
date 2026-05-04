@@ -121,6 +121,37 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('rejects labels-only effort menus that expose unsupported effort labels for the requested model', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            exactEffortTrigger: false,
+            genericEffortTrigger: true,
+            effortTexts: labelsOnlyProEffortTexts(),
+            genericEffortTexts: labelsOnlyThinkingEffortTexts(),
+        });
+
+        const result = await selectChatGptModel(page, 'pro', { effort: 'extended' });
+
+        expect(result).toMatchObject({ selected: 'pro', effort: 'extended' });
+        expect(result.usedFallbacks).toContain('pro-effort-keyboard-open');
+        expect(result.usedFallbacks).not.toContain('pro-effort-generic-trigger');
+    });
+
+    it('verifies selected effort from the active model pill when checked effort rows disappear', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            effortTexts: thinkingEffortTexts(),
+            checkedEffortRows: false,
+        });
+
+        await expect(selectChatGptModel(page, 'thinking', { effort: 'heavy' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'heavy',
+        });
+    });
+
     it('wires ChatGPT effort options through the CLI surface', () => {
         const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
@@ -148,10 +179,27 @@ function proEffortTexts() {
     };
 }
 
+function labelsOnlyThinkingEffortTexts() {
+    return {
+        light: 'Light',
+        standard: 'Standard',
+        extended: 'Extended',
+        heavy: 'Heavy',
+    };
+}
+
+function labelsOnlyProEffortTexts() {
+    return {
+        standard: 'Standard',
+        extended: 'Extended',
+    };
+}
+
 function createFakeModelPage({
     model = 'thinking',
     effortTexts = {},
     genericEffortTexts = null,
+    checkedEffortRows = true,
     exactEffortTrigger = false,
     genericEffortTrigger = true,
 } = {}) {
@@ -194,8 +242,8 @@ function createFakeModelPage({
         onClick: () => openEffortRows('generic'),
     });
     const modelPill = createElement({
-        text: state.selectedEffort
-            ? `${effortTexts[state.selectedEffort] || state.currentModel}`
+        text: () => state.selectedEffort
+            ? `${effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel,
     });
 
@@ -232,7 +280,7 @@ function createFakeModelPage({
     function currentEffortRows() {
         return Object.entries(currentEffortTexts()).map(([effort, text]) => createElement({
             text,
-            get checked() { return state.selectedEffort === effort; },
+            get checked() { return checkedEffortRows && state.selectedEffort === effort; },
             onClick: () => {
                 state.selectedEffort = effort;
                 state.effortMenuOpen = false;
@@ -267,7 +315,7 @@ function createFakeModelPage({
 
 function createElement(input = {}) {
     return {
-        text: input.text || '',
+        get text() { return typeof input.text === 'function' ? input.text() : input.text || ''; },
         testId: input.testId || null,
         get checked() { return input.checked ?? false; },
         onClick: input.onClick || (() => undefined),
