@@ -77,6 +77,9 @@ repair is considered.
   target resolver before falling back to legacy upload surface scanning.
 - 2026-05-05: ChatGPT `copy.lastResponse` now resolves through the ActionIntent
   target resolver when unambiguous, then stays scoped to the last assistant turn.
+- 2026-05-05: ChatGPT send path now persists `composer.fill`, `send.click`,
+  and optional `upload.attach` resolver metadata in the session trace without
+  prompt or answer text.
 
 ## Not now
 

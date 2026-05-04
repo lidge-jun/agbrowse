@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { queryWebAi } from '../../web-ai/chatgpt.mjs';
+import { getSession } from '../../web-ai/session.mjs';
 
 describe('web-ai fake ChatGPT fixture', () => {
     it('fills composer, stores baseline, filters placeholder, and returns final answer', async () => {
@@ -44,6 +45,15 @@ describe('web-ai fake ChatGPT fixture', () => {
         expect(page.sendResolverValidated).toBe(true);
         expect(page.clickedSend).toBe(true);
         expect(page.keys).not.toContain('Enter');
+        const session = getSession(result.sessionId);
+        const resolverSteps = session.trace.filter(step => step.action === 'target-resolve');
+        expect(resolverSteps.map(step => step.intentId)).toEqual(expect.arrayContaining(['composer.fill', 'send.click']));
+        expect(resolverSteps.every(step => step.status === 'ok')).toBe(true);
+        expect(JSON.stringify(resolverSteps)).not.toContain('Reply exactly: OK');
+        expect(result.traceSummary).toMatchObject({
+            sessionId: result.sessionId,
+            totalSteps: 2,
+        });
     });
 });
 
