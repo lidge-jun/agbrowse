@@ -71,6 +71,8 @@ repair is considered.
 
 - 2026-05-05: ChatGPT `composer.fill` now resolves through the ActionIntent
   target resolver before prompt insertion.
+- 2026-05-05: ChatGPT `send.click` now resolves through the ActionIntent
+  target resolver before falling back to legacy submit behavior.
 
 ## Not now
 

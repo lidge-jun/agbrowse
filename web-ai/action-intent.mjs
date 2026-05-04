@@ -5,6 +5,7 @@ import { semanticTargetsForVendor } from './vendor-editor-contract.mjs';
 const OPERATION_BY_INTENT = Object.freeze({
     'composer.fill': 'fill',
     'composer.click': 'click',
+    'send.click': 'click',
     'copy.lastResponse': 'click',
     'modelPicker.open': 'click',
     'modelPicker.click': 'click',

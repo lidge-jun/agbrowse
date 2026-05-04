@@ -11,6 +11,7 @@ describe('web-ai self-heal', () => {
     describe('resolveIntentFeature', () => {
         it('maps known intents to feature keys', () => {
             expect(resolveIntentFeature('composer.fill')).toBe('composer');
+            expect(resolveIntentFeature('send.click')).toBe('sendButton');
             expect(resolveIntentFeature('copy.lastResponse')).toBe('copyButton');
             expect(resolveIntentFeature('modelPicker.open')).toBe('modelPicker');
         });

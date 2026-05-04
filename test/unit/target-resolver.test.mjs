@@ -54,18 +54,38 @@ describe('target resolver contract', () => {
         expect(result.target).toBe(null);
         expect(result.attempts[0].validation.reason).toBe('not-visible');
     });
+
+    it('resolves ChatGPT send buttons through the send.click contract', async () => {
+        const page = mockPage({
+            matchingSelectors: ['button[data-testid="send-button"]'],
+            evalResult: { role: 'button', label: 'Send message', tagName: 'button', isEditable: false },
+        });
+        const result = await resolveTargetForIntent(page, {
+            provider: 'chatgpt',
+            intentId: 'send.click',
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.intent).toMatchObject({
+            intentId: 'send.click',
+            feature: 'sendButton',
+            operation: 'click',
+        });
+        expect(result.target.selector).toBe('button[data-testid="send-button"]');
+    });
 });
 
 function mockPage(overrides = {}) {
+    const matchingSelectors = new Set(overrides.matchingSelectors || ['#prompt-textarea']);
     return {
         url: vi.fn(() => 'https://chatgpt.com/'),
         locator: vi.fn((selector) => ({
-            count: vi.fn(async () => selector === '#prompt-textarea' ? (overrides.count ?? 1) : 0),
+            count: vi.fn(async () => matchingSelectors.has(selector) ? (overrides.count ?? 1) : 0),
             first: vi.fn(() => ({
                 isVisible: vi.fn(async () => overrides.visible ?? true),
                 isEnabled: vi.fn(async () => overrides.enabled ?? true),
                 isEditable: vi.fn(async () => overrides.editable ?? true),
-                evaluate: vi.fn(async () => overrides.evalResult || { role: 'textbox', label: 'Message ChatGPT' }),
+                evaluate: vi.fn(async () => overrides.evalResult || { role: 'textbox', label: 'Message ChatGPT', tagName: 'textarea', isEditable: true }),
             })),
         })),
         getByRole: vi.fn(),

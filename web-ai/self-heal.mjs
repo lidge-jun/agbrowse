@@ -11,6 +11,7 @@ export { RESOLUTION_SOURCES as ResolutionSource } from './constants.mjs';
 const INTENT_FEATURE = Object.freeze({
     'composer.fill': 'composer',
     'composer.click': 'composer',
+    'send.click': 'sendButton',
     'copy.lastResponse': 'copyButton',
     'modelPicker.open': 'modelPicker',
     'modelPicker.click': 'modelPicker',

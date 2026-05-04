@@ -40,7 +40,8 @@ describe('web-ai fake ChatGPT fixture', () => {
         expect(result.baseline.assistantCount).toBe(1);
         expect(result.baseline.promptHash).toMatch(/^[a-f0-9]{64}$/);
         expect(page.insertedText).toContain('## Question\nReply exactly: OK');
-        expect(page.resolverValidated).toBe(true);
+        expect(page.composerResolverValidated).toBe(true);
+        expect(page.sendResolverValidated).toBe(true);
         expect(page.clickedSend).toBe(true);
         expect(page.keys).not.toContain('Enter');
     });
@@ -54,7 +55,8 @@ function createFakeChatGptPage() {
         assistantTexts: ['old answer'],
         turnTexts: ['old answer'],
         clickedSend: false,
-        resolverValidated: false,
+        composerResolverValidated: false,
+        sendResolverValidated: false,
         url: () => 'https://chatgpt.com/c/fake',
         keyboard: {
             insertText: async text => {
@@ -106,8 +108,12 @@ function createFakeLocator(page, selector) {
         },
         evaluate: async fn => {
             if (isComposer && typeof fn === 'function') {
-                page.resolverValidated = true;
+                page.composerResolverValidated = true;
                 return { role: 'textbox', label: 'Message ChatGPT', tagName: 'textarea', isEditable: true };
+            }
+            if (isSendButton && typeof fn === 'function') {
+                page.sendResolverValidated = true;
+                return { role: 'button', label: 'Send message', tagName: 'button', isEditable: false };
             }
             if (isSendButton) return false;
             if (isComposer && page.composerValue) return undefined;

@@ -94,7 +94,17 @@ export async function insertPromptIntoComposer(page, text, options = {}) {
     }
 }
 
-export async function submitPromptFromComposer(page) {
+export async function submitPromptFromComposer(page, options = {}) {
+    if (options.sendTarget?.selector) {
+        const clickedResolved = await clickResolvedSendButton(page, options.sendTarget);
+        if (clickedResolved) {
+            return {
+                method: 'button',
+                selector: options.sendTarget.selector,
+                resolution: options.sendTarget.resolution || null,
+            };
+        }
+    }
     const clicked = await clickEnabledSendButton(page);
     if (clicked) return { method: 'button' };
     await page.keyboard.press('Enter');
@@ -301,6 +311,28 @@ async function clickEnabledSendButton(page) {
         await page.waitForTimeout?.(100);
     }
     return false;
+}
+
+async function clickResolvedSendButton(page, target) {
+    const button = page.locator(target.selector).first();
+    const visible = typeof button.isVisible === 'function'
+        ? await button.isVisible().catch(() => false)
+        : true;
+    const enabled = typeof button.isEnabled === 'function'
+        ? await button.isEnabled().catch(() => false)
+        : true;
+    if (!visible || !enabled) return false;
+    try {
+        await button.click({ timeout: 5_000 });
+        return true;
+    } catch {
+        try {
+            await button.click({ timeout: 2_000, force: true });
+            return true;
+        } catch {
+            return false;
+        }
+    }
 }
 
 async function readConversationTurns(page) {

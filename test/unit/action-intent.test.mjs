@@ -35,6 +35,22 @@ describe('ActionIntent contract', () => {
         expect(serialized.nameHints.every(hint => typeof hint === 'string')).toBe(true);
     });
 
+    it('derives send click as a send button action', () => {
+        const intent = createActionIntent({
+            provider: 'chatgpt',
+            intentId: 'send.click',
+        });
+
+        expect(intent).toMatchObject({
+            intentId: 'send.click',
+            feature: 'sendButton',
+            operation: 'click',
+            roleHints: ['button'],
+            requiredEvidence: ['visible', 'enabled'],
+        });
+        expect(intent.cssFallbacks).toContain('button[data-testid="send-button"]');
+    });
+
     it('rejects unknown intents unless a feature is explicit', () => {
         expect(() => createActionIntent({ intentId: 'unknown.action' })).toThrow(/unknown action intent/);
         const intent = createActionIntent({

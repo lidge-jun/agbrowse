@@ -72,6 +72,21 @@ describe('web-ai ChatGPT composer hardening', () => {
         expect(page.keys).not.toContain('Enter');
     });
 
+    it('prefers a resolver-selected send button target when provided', async () => {
+        const page = createFakePage();
+        const result = await submitPromptFromComposer(page, {
+            sendTarget: { selector: 'button[data-testid="send-button"]', resolution: 'css-fallback' },
+        });
+        expect(result).toMatchObject({
+            method: 'button',
+            selector: 'button[data-testid="send-button"]',
+            resolution: 'css-fallback',
+        });
+        expect(page.locatorSelectors[0]).toBe('button[data-testid="send-button"]');
+        expect(page.clickedSend).toBe(true);
+        expect(page.keys).not.toContain('Enter');
+    });
+
     it('verifies commit from a new turn and cleared composer', async () => {
         const page = createFakePage();
         page.composerValue = '';
@@ -153,6 +168,8 @@ function createFakeLocator(page, selector) {
             return 0;
         },
         waitFor: async () => undefined,
+        isVisible: async () => isComposer || isSend,
+        isEnabled: async () => isComposer || (isSend && page.hasSendButton),
         click: async () => {
             if (isSend) page.clickedSend = true;
         },

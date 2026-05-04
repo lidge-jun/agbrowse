@@ -205,7 +205,10 @@ export async function sendWebAi(deps, input = {}) {
         attachmentWarnings = upload.warnings || [];
         usedFallbacks = upload.usedFallbacks || [];
     }
-    await adapter.submitPrompt();
+    const sendResolution = await resolveOptionalChatGptSendTarget(page);
+    await adapter.submitPrompt({
+        sendTarget: sendResolution?.target || null,
+    });
     await adapter.verifyPromptCommitted(rendered.composerText, commitBaseline);
     if (uploadPath) {
         const sentAttachment = await verifySentTurnAttachmentLive(page, fileInfoFromPath(uploadPath));
@@ -432,6 +435,15 @@ async function resolveChatGptComposerTarget(page) {
             attempts: summarizeResolverAttempts(result.attempts),
         },
     });
+}
+
+async function resolveOptionalChatGptSendTarget(page) {
+    const result = await resolveTargetForIntent(page, {
+        provider: 'chatgpt',
+        intentId: 'send.click',
+    });
+    if (result.ok && result.target?.selector) return result;
+    return null;
 }
 
 function summarizeResolverAttempts(attempts = []) {
