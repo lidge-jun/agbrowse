@@ -24,18 +24,18 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 8 | 3472 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 680 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 365 | bundled agent workflow skill |
-| `web-ai/` | 67 | 10345 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 69 | 10442 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 583 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 362 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 121 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 4 | 202 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 4 | 273 | eval runner and release scripts |
-| `test/unit/` | 50 | 4547 | deterministic module tests |
+| `test/unit/` | 52 | 4670 | deterministic module tests |
 | `test/integration/` | 14 | 1444 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 2 | 79 | adoption and trace docs |
-| `devlog/` | 53 | 12878 | phased plan, research, implementation notes |
+| `devlog/` | 54 | 12911 | phased plan, research, implementation notes |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -57,6 +57,8 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/source-audit.mjs` | 127 | claim/source coverage audit helper |
 | `web-ai/ax-snapshot.mjs` | 235 | compact accessibility snapshot and refs |
 | `web-ai/self-heal.mjs` | 383 | deterministic target resolution and validation |
+| `web-ai/action-intent.mjs` | 65 | serializable semantic action intent contracts |
+| `web-ai/target-resolver.mjs` | 32 | explainable target resolver wrapper |
 | `scripts/run-web-ai-eval.mjs` | 51 | provider fixture eval CLI wrapper |
 | `scripts/release.sh` | 110 | latest release gate and publish script |
 | `scripts/release-preview.sh` | 94 | preview release gate and publish script |
