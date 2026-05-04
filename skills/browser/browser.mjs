@@ -337,7 +337,6 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
                 console.warn(`[browser] warning: CDP port ${port} appears foreign or stale — agbrowse is attaching to an existing Chrome it did not start; verify --user-data-dir matches if you depend on profile state`);
             }
             const chromePath = opts.chromePath || previousState?.chromePath || CUSTOM_CHROME_PATH;
-            if (!headless) focusChromeApp(chromePath);
             clearPersistedSnapshot();
             writePersistedState({
                 pid: previousState?.port === port ? previousState.pid ?? null : null,
@@ -347,6 +346,7 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
                 headless: previousState?.headless ?? headless,
                 reused: true,
             });
+            if (!headless) await foregroundCdpWindow(port, chromePath);
             console.log(`[browser] CDP already listening on port ${port} — reusing existing instance`);
             activePort = port;
             return;
@@ -394,7 +394,7 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
                 headless,
                 lockToken: lockResult.token,
             });
-            if (!headless) focusChromeApp(chrome);
+            if (!headless) await foregroundCdpWindow(port, chrome);
         } else {
             if (chromeProc && !chromeProc.killed) {
                 chromeProc.kill('SIGTERM');
@@ -429,6 +429,36 @@ function focusChromeApp(chromePath) {
     if (result.status !== 0) {
         console.warn(`[browser] warning: Chrome started headed but macOS foreground activation failed for ${appName}`);
     }
+}
+
+async function foregroundCdpWindow(port, chromePath) {
+    try {
+        const { browser } = await connectCdp(port, 2);
+        const page = browser.contexts().flatMap(context => context.pages())[0];
+        if (!page) {
+            focusChromeApp(chromePath);
+            return;
+        }
+        await page.bringToFront?.().catch(() => undefined);
+        const cdp = await page.context().newCDPSession(page);
+        try {
+            const { targetInfo } = await cdp.send('Target.getTargetInfo');
+            const targetId = targetInfo?.targetId;
+            if (targetId) {
+                const { windowId } = await cdp.send('Browser.getWindowForTarget', { targetId });
+                await cdp.send('Browser.setWindowBounds', {
+                    windowId,
+                    bounds: { windowState: 'normal' },
+                });
+                await cdp.send('Target.activateTarget', { targetId });
+            }
+        } finally {
+            await cdp.detach().catch(() => undefined);
+        }
+    } catch {
+        // macOS app activation is best-effort; CDP readiness remains the source of truth.
+    }
+    focusChromeApp(chromePath);
 }
 
 function macAppNameFromChromePath(chromePath) {

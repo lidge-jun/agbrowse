@@ -13,6 +13,9 @@ describe('active tab persistence contract', () => {
         expect(browserSrc).toMatch(/function resolveHeadlessMode/);
         expect(browserSrc).toMatch(/opts\.headed === true\) return false/);
         expect(browserSrc).toMatch(/function focusChromeApp/);
+        expect(browserSrc).toMatch(/async function foregroundCdpWindow/);
+        expect(browserSrc).toMatch(/Browser\.setWindowBounds/);
+        expect(browserSrc).toMatch(/Target\.activateTarget/);
         expect(browserSrc).toMatch(/spawnSync\('open', \['-a', appName\]/);
         expect(browserSrc).toMatch(/headless:\s*previousState\?\.headless \?\? headless/);
         expect(browserSrc).toMatch(/headless,\s*\n\s*lockToken/);
