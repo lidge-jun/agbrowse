@@ -155,6 +155,20 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(result.usedFallbacks).not.toContain('pro-effort-generic-trigger');
     });
 
+    it('does not reuse a rejected labels-only generic menu as a later row-bound success', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            exactEffortTrigger: false,
+            genericEffortTrigger: true,
+            effortTexts: labelsOnlyProEffortTexts(),
+            genericEffortTexts: labelsOnlyProEffortTexts(),
+            keyboardOpensEffort: false,
+        });
+
+        await expect(selectChatGptModel(page, 'pro', { effort: 'standard' })).rejects.toThrow(/reasoning effort selector not found/);
+    });
+
     it('opens visible-text-only effort controls without data-testid or aria-label hooks', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const page = createFakeModelPage({
@@ -249,6 +263,7 @@ function createFakeModelPage({
     genericEffortTexts = null,
     checkedEffortRows = true,
     roleButtonPill = false,
+    keyboardOpensEffort = true,
     exactEffortTrigger = false,
     genericEffortTrigger = true,
     genericTriggerMode = 'css',
@@ -295,17 +310,21 @@ function createFakeModelPage({
         text: () => state.selectedEffort
             ? `${effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel,
+        onClick: () => { state.modelMenuOpen = true; },
     });
 
     return {
         keyboard: {
             press: async key => {
                 if (key === 'Escape') {
-                    state.modelMenuOpen = false;
-                    state.effortMenuOpen = false;
-                    state.effortMenuSource = null;
+                    if (state.effortMenuOpen) {
+                        state.effortMenuOpen = false;
+                        state.effortMenuSource = null;
+                    } else {
+                        state.modelMenuOpen = false;
+                    }
                 }
-                if (key === 'ArrowRight') openEffortRows('target');
+                if (key === 'ArrowRight' && keyboardOpensEffort) openEffortRows('target');
             },
         },
         mouse: {

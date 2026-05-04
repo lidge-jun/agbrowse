@@ -281,6 +281,7 @@ async function openEffortMenu(page, model, usedFallbacks) {
             usedFallbacks.push(`${model}-effort-generic-trigger`);
             return;
         }
+        await dismissEffortMenuAndReopenModel(page, usedFallbacks);
     }
     const textTrigger = page.locator('button, [role="button"], [role="menuitem"]').filter({ hasText: /^(Effort|Reasoning effort)$/i }).last();
     if (await textTrigger.isVisible().catch(() => false)) {
@@ -290,6 +291,7 @@ async function openEffortMenu(page, model, usedFallbacks) {
             usedFallbacks.push(`${model}-effort-text-trigger`);
             return;
         }
+        await dismissEffortMenuAndReopenModel(page, usedFallbacks);
     }
     if (row) {
         await row.focus({ timeout: 1_000 }).catch(() => undefined);
@@ -313,6 +315,12 @@ async function openEffortMenu(page, model, usedFallbacks) {
     }
     usedFallbacks.push(`${model}-effort-trigger`);
     throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort selector not found for ${model}`, selectorsTried: config.triggerTestIds.map(testId => `[data-testid="${testId}"]`), evidence: { model } });
+}
+
+async function dismissEffortMenuAndReopenModel(page, usedFallbacks) {
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(200).catch(() => undefined);
+    await openModelMenu(page, usedFallbacks);
 }
 
 async function findEffortTriggerBoxNearModelRow(page, model) {

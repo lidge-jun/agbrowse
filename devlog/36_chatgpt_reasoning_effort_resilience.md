@@ -25,6 +25,9 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
 - Broad generic effort triggers no longer accept labels-only menus. They must
   expose model text; otherwise the runtime falls back to row-bound keyboard or
   geometry paths.
+- Rejected generic/text effort menus are dismissed before the row-bound
+  fallbacks run, so a stale labels-only menu cannot be accepted later with the
+  row-bound verification policy.
 - Visible-text-only `Effort` / `Reasoning effort` controls are covered through
   a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text
