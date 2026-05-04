@@ -278,6 +278,22 @@ describe('web-ai ChatGPT model selector policy', () => {
         });
     });
 
+    it('ignores checked labels-only effort rows when verifying the selected model', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            effortTexts: labelsOnlyThinkingEffortTexts(),
+            activePillTexts: { heavy: 'GPT-5.5 Thinking Heavy' },
+            checkedModelRows: false,
+            roleButtonPill: true,
+        });
+
+        await expect(selectChatGptModel(page, 'thinking', { effort: 'heavy' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'heavy',
+        });
+    });
+
     it('wires ChatGPT effort options through the CLI surface', () => {
         const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
@@ -324,8 +340,10 @@ function labelsOnlyProEffortTexts() {
 function createFakeModelPage({
     model = 'thinking',
     effortTexts = {},
+    activePillTexts = null,
     genericEffortTexts = null,
     checkedEffortRows = true,
+    checkedModelRows = true,
     roleButtonPill = false,
     keyboardOpensEffort = true,
     initialModelMenuOpen = true,
@@ -347,19 +365,19 @@ function createFakeModelPage({
         createElement({
             text: 'GPT-5.3 Instant',
             testId: 'model-switcher-gpt-5-3',
-            get checked() { return state.currentModel === 'instant'; },
+            get checked() { return checkedModelRows && state.currentModel === 'instant'; },
             onClick: () => { state.currentModel = 'instant'; },
         }),
         createElement({
             text: 'GPT-5.5 Thinking',
             testId: 'model-switcher-gpt-5-5-thinking',
-            get checked() { return state.currentModel === 'thinking'; },
+            get checked() { return checkedModelRows && state.currentModel === 'thinking'; },
             onClick: () => { state.currentModel = 'thinking'; },
         }),
         createElement({
             text: 'GPT-5.5 Pro',
             testId: 'model-switcher-gpt-5-5-pro',
-            get checked() { return state.currentModel === 'pro'; },
+            get checked() { return checkedModelRows && state.currentModel === 'pro'; },
             onClick: () => { state.currentModel = 'pro'; },
         }),
     ];
@@ -380,7 +398,7 @@ function createFakeModelPage({
     });
     const modelPill = createElement({
         text: () => state.selectedEffort
-            ? `${effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
+            ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel,
         onClick: () => { state.modelMenuOpen = true; },
     });

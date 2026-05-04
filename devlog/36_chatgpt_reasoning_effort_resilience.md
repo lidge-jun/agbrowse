@@ -37,6 +37,8 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
   selection behavior.
 - Model-menu open detection now ignores the closed `model-switcher-dropdown-button`
   and only treats visible `model-switcher-gpt-*` rows as model menu evidence.
+- Final checked-model verification skips standalone effort labels, so a checked
+  `Heavy` effort row cannot be misread as the Pro model.
 - Visible-text-only `Effort` / `Reasoning effort` controls are covered through
   a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text

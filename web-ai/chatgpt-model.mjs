@@ -439,6 +439,7 @@ async function readCheckedModel(page) {
     const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]').all().catch(() => []);
     for (const row of checkedRows) {
         const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (isStandaloneEffortLabel(text)) continue;
         const choice = modelChoiceFromText(text);
         if (choice) return choice;
     }
@@ -490,6 +491,10 @@ function modelChoiceFromText(text) {
     if (/\b(Thinking|Think)\b/i.test(text)) return 'thinking';
     if (/\b(Pro|Heavy)\b/i.test(text)) return 'pro';
     return null;
+}
+
+function isStandaloneEffortLabel(text) {
+    return /^(Light|Standard|Extended|Heavy)$/i.test(String(text || '').trim());
 }
 
 function escapeRegExp(value) {
