@@ -138,6 +138,39 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(result.usedFallbacks).not.toContain('pro-effort-generic-trigger');
     });
 
+    it('does not trust overlapping labels-only menus from broad generic effort triggers', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            exactEffortTrigger: false,
+            genericEffortTrigger: true,
+            effortTexts: labelsOnlyProEffortTexts(),
+            genericEffortTexts: labelsOnlyProEffortTexts(),
+        });
+
+        const result = await selectChatGptModel(page, 'pro', { effort: 'standard' });
+
+        expect(result).toMatchObject({ selected: 'pro', effort: 'standard' });
+        expect(result.usedFallbacks).toContain('pro-effort-keyboard-open');
+        expect(result.usedFallbacks).not.toContain('pro-effort-generic-trigger');
+    });
+
+    it('opens visible-text-only effort controls without data-testid or aria-label hooks', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            exactEffortTrigger: false,
+            genericEffortTrigger: true,
+            genericTriggerMode: 'text',
+            effortTexts: thinkingEffortTexts(),
+        });
+
+        const result = await selectChatGptModel(page, 'thinking', { effort: 'extended' });
+
+        expect(result).toMatchObject({ selected: 'thinking', effort: 'extended' });
+        expect(result.usedFallbacks).toContain('thinking-effort-text-trigger');
+    });
+
     it('verifies selected effort from the active model pill when checked effort rows disappear', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const page = createFakeModelPage({
@@ -149,6 +182,21 @@ describe('web-ai ChatGPT model selector policy', () => {
         await expect(selectChatGptModel(page, 'thinking', { effort: 'heavy' })).resolves.toMatchObject({
             selected: 'thinking',
             effort: 'heavy',
+        });
+    });
+
+    it('verifies selected effort from a role-button composer pill', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            effortTexts: thinkingEffortTexts(),
+            checkedEffortRows: false,
+            roleButtonPill: true,
+        });
+
+        await expect(selectChatGptModel(page, 'thinking', { effort: 'standard' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'standard',
         });
     });
 
@@ -200,8 +248,10 @@ function createFakeModelPage({
     effortTexts = {},
     genericEffortTexts = null,
     checkedEffortRows = true,
+    roleButtonPill = false,
     exactEffortTrigger = false,
     genericEffortTrigger = true,
+    genericTriggerMode = 'css',
 } = {}) {
     const state = {
         modelMenuOpen: true,
@@ -290,7 +340,9 @@ function createFakeModelPage({
     }
 
     function selectElements(selector) {
-        if (selector === 'button') return [modelPill];
+        if (selector === 'button, [role="button"], [role="menuitem"]') return state.genericEffortTrigger && genericTriggerMode === 'text' ? [modelPill, genericTrigger] : [modelPill];
+        if (selector.includes('__composer-pill')) return roleButtonPill ? [modelPill] : [];
+        if (selector === 'button') return roleButtonPill ? [] : [modelPill];
         if (selector === '[role="menu"]') {
             return state.effortMenuOpen ? [createElement({ text: Object.values(currentEffortTexts()).join('\n') })] : [];
         }
@@ -308,7 +360,7 @@ function createFakeModelPage({
             if (testId.includes('thinking-effort')) return state.exactEffortTrigger ? [exactTrigger] : [];
             return modelRows.filter(element => element.testId === testId);
         }
-        if (/Effort|Reasoning|effort/i.test(selector)) return state.genericEffortTrigger ? [genericTrigger] : [];
+        if (/Effort|Reasoning|effort/i.test(selector)) return state.genericEffortTrigger && genericTriggerMode === 'css' ? [genericTrigger] : [];
         return [];
     }
 }

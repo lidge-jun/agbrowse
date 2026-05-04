@@ -22,12 +22,18 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
 - Labels-only effort menus now reject unsupported labels for the requested
   model. A Pro request no longer accepts a labels-only menu that also exposes
   `Light` or `Heavy`.
+- Broad generic effort triggers no longer accept labels-only menus. They must
+  expose model text; otherwise the runtime falls back to row-bound keyboard or
+  geometry paths.
+- Visible-text-only `Effort` / `Reasoning effort` controls are covered through
+  a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text
-  and active pill text, which keeps verification stable on hero/new-chat menus.
+  and active pill text from both `button` and role-button composer pills, which
+  keeps verification stable on hero/new-chat menus.
 - Unit coverage now simulates model-first menu labels for every supported
   ChatGPT reasoning effort, verifies the generic effort trigger fallback, and
-  covers the wrong-model menu, labels-only menu, and active-pill verification
-  cases for both Thinking and Pro where applicable.
+  covers wrong-model menus, labels-only menus, visible-text-only controls, and
+  active-pill verification cases for both Thinking and Pro where applicable.
 
 ## Verification
 

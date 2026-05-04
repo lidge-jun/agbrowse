@@ -277,8 +277,17 @@ async function openEffortMenu(page, model, usedFallbacks) {
         if (!(await trigger.isVisible().catch(() => false))) continue;
         await trigger.click({ timeout: 2_000 }).catch(() => undefined);
         await page.waitForTimeout(300).catch(() => undefined);
-        if (await isEffortMenuOpen(page, model)) {
+        if (await isEffortMenuOpen(page, model, { allowUnlabeled: false })) {
             usedFallbacks.push(`${model}-effort-generic-trigger`);
+            return;
+        }
+    }
+    const textTrigger = page.locator('button, [role="button"], [role="menuitem"]').filter({ hasText: /^(Effort|Reasoning effort)$/i }).last();
+    if (await textTrigger.isVisible().catch(() => false)) {
+        await textTrigger.click({ timeout: 2_000 }).catch(() => undefined);
+        await page.waitForTimeout(300).catch(() => undefined);
+        if (await isEffortMenuOpen(page, model, { allowUnlabeled: false })) {
+            usedFallbacks.push(`${model}-effort-text-trigger`);
             return;
         }
     }
@@ -316,7 +325,10 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
         });
         if (!row) return null;
         const rowRect = row.getBoundingClientRect();
-        const effortButtons = Array.from(document.querySelectorAll(triggerSelectors.join(',')));
+        const selectorButtons = Array.from(document.querySelectorAll(triggerSelectors.join(',')));
+        const textButtons = Array.from(document.querySelectorAll('button, [role="button"], [role="menuitem"]'))
+            .filter(candidate => /^(Effort|Reasoning effort)$/i.test((candidate.innerText || candidate.textContent || '').trim()));
+        const effortButtons = [...selectorButtons, ...textButtons];
         const button = effortButtons.find((candidate) => {
             const rect = candidate.getBoundingClientRect();
             const rowCenterY = rowRect.y + rowRect.height / 2;
@@ -361,7 +373,8 @@ async function readCheckedEffort(page, model) {
     return null;
 }
 
-async function isEffortMenuOpen(page, model) {
+async function isEffortMenuOpen(page, model, options = {}) {
+    const allowUnlabeled = options.allowUnlabeled !== false;
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     if (!config) return false;
     const labels = Object.values(config.efforts);
@@ -369,25 +382,25 @@ async function isEffortMenuOpen(page, model) {
         .filter(([choice]) => choice !== model)
         .flatMap(([, option]) => Object.values(option.efforts))
         .filter(label => !labels.includes(label));
-    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, unexpectedLabels, modelChoice }) => {
+    return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, unexpectedLabels, modelChoice, allowUnlabeled }) => {
         return menus.some(menu => {
             const text = menu.innerText || menu.textContent || '';
-            if (!menuTextMatchesModel(text, modelChoice)) return false;
+            if (!menuTextMatchesModel(text, modelChoice, allowUnlabeled)) return false;
             const unexpectedMatches = unexpectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
             if (unexpectedMatches.length > 0) return false;
             const matches = expectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
             const requiredMatches = expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length);
             return matches.length >= requiredMatches;
         });
-        function menuTextMatchesModel(text, choice) {
+        function menuTextMatchesModel(text, choice, permitUnlabeled) {
             const hasThinking = /\b(Thinking|Think)\b/i.test(text);
             const hasPro = /\bPro\b/i.test(text);
-            if (!hasThinking && !hasPro) return true;
+            if (!hasThinking && !hasPro) return permitUnlabeled;
             if (choice === 'thinking') return hasThinking && !hasPro;
             if (choice === 'pro') return hasPro && !hasThinking;
             return true;
         }
-    }, { expectedLabels: labels, unexpectedLabels, modelChoice: model }).catch(() => false);
+    }, { expectedLabels: labels, unexpectedLabels, modelChoice: model, allowUnlabeled }).catch(() => false);
 }
 
 async function readCheckedModel(page) {
@@ -408,6 +421,15 @@ async function readCheckedModel(page) {
 }
 
 async function readActiveModelPill(page) {
+    for (const selector of CHATGPT_COMPOSER_MODEL_PILL_SELECTORS) {
+        const candidates = await page.locator(selector).count().catch(() => 0);
+        for (let index = candidates - 1; index >= 0; index -= 1) {
+            const loc = page.locator(selector).nth(index);
+            if (!(await loc.isVisible().catch(() => false))) continue;
+            const text = (await loc.innerText({ timeout: 500 }).catch(() => '')).trim();
+            if (CHATGPT_MODEL_TEXT_BUTTON_PATTERN.test(text)) return text;
+        }
+    }
     const candidates = await page.locator('button').count().catch(() => 0);
     for (let index = candidates - 1; index >= 0; index -= 1) {
         const loc = page.locator('button').nth(index);
