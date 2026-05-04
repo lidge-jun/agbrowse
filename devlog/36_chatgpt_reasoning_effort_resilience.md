@@ -35,6 +35,8 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
 - The model capability/status probe uses the same requested-effort menu
   verification path as selection, so status checks cannot drift from send-time
   selection behavior.
+- Model-menu open detection now ignores the closed `model-switcher-dropdown-button`
+  and only treats visible `model-switcher-gpt-*` rows as model menu evidence.
 - Visible-text-only `Effort` / `Reasoning effort` controls are covered through
   a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text

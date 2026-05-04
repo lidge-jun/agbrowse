@@ -13,7 +13,7 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
     '[role="button"].__composer-pill',
 ];
 
-const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-"]';
+const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-gpt-"]';
 const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b)/i;
 const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
     '[data-testid*="thinking-effort"]',
@@ -467,7 +467,11 @@ async function readActiveModelPill(page) {
 }
 
 async function isModelMenuOpen(page) {
-    return page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR).first().isVisible().catch(() => false);
+    return page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR)
+        .filter({ hasText: CHATGPT_MODEL_TEXT_BUTTON_PATTERN })
+        .first()
+        .isVisible()
+        .catch(() => false);
 }
 
 function modelLabelPattern(choice, label) {

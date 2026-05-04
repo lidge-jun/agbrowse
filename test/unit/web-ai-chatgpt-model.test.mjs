@@ -63,6 +63,21 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('does not treat the closed model dropdown button as an open model menu', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            initialModelMenuOpen: false,
+            closedDropdownButton: true,
+            effortTexts: thinkingEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, 'thinking', { effort: 'standard' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'standard',
+        });
+    });
+
     it('opens the reasoning menu through generic effort controls for every supported effort when exact test ids are absent', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const cases = [
@@ -313,12 +328,14 @@ function createFakeModelPage({
     checkedEffortRows = true,
     roleButtonPill = false,
     keyboardOpensEffort = true,
+    initialModelMenuOpen = true,
+    closedDropdownButton = false,
     exactEffortTrigger = false,
     genericEffortTrigger = true,
     genericTriggerMode = 'css',
 } = {}) {
     const state = {
-        modelMenuOpen: true,
+        modelMenuOpen: initialModelMenuOpen,
         effortMenuOpen: false,
         currentModel: model,
         selectedEffort: null,
@@ -354,6 +371,12 @@ function createFakeModelPage({
     const genericTrigger = createElement({
         text: 'Reasoning effort',
         onClick: () => openEffortRows('generic'),
+    });
+    const dropdownButton = createElement({
+        text: 'ChatGPT',
+        testId: 'model-switcher-dropdown-button',
+        onClick: () => { state.modelMenuOpen = true; },
+        visible: closedDropdownButton,
     });
     const modelPill = createElement({
         text: () => state.selectedEffort
@@ -410,11 +433,12 @@ function createFakeModelPage({
     function selectElements(selector) {
         if (selector === 'button, [role="button"], [role="menuitem"]') return state.genericEffortTrigger && genericTriggerMode === 'text' ? [modelPill, genericTrigger] : [modelPill];
         if (selector.includes('__composer-pill')) return roleButtonPill ? [modelPill] : [];
-        if (selector === 'button') return roleButtonPill ? [] : [modelPill];
+        if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, modelPill].filter(element => element.visible);
         if (selector === '[role="menu"]') {
             return state.effortMenuOpen ? [createElement({ text: Object.values(currentEffortTexts()).join('\n') })] : [];
         }
         if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows : [];
+        if (selector === '[data-testid^="model-switcher-gpt-"]') return state.modelMenuOpen ? modelRows : [];
         if (selector === '[role="menuitemradio"], [role="menuitem"]') return state.effortMenuOpen ? currentEffortRows() : modelRows;
         if (selector === '[role="menuitemradio"]') return state.effortMenuOpen ? currentEffortRows() : [];
         if (selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')) {
@@ -425,8 +449,9 @@ function createFakeModelPage({
         }
         const testId = selector.match(/data-testid="([^"]+)"/)?.[1];
         if (testId) {
+            if (testId === 'model-switcher-dropdown-button') return closedDropdownButton ? [dropdownButton] : [];
             if (testId.includes('thinking-effort')) return state.exactEffortTrigger ? [exactTrigger] : [];
-            return modelRows.filter(element => element.testId === testId);
+            return state.modelMenuOpen ? modelRows.filter(element => element.testId === testId) : [];
         }
         if (/Effort|Reasoning|effort/i.test(selector)) return state.genericEffortTrigger && genericTriggerMode === 'css' ? [genericTrigger] : [];
         return [];
