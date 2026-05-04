@@ -169,6 +169,24 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('probes plan-base Thinking standard and extended menus with the requested effort', async () => {
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        for (const effort of ['standard', 'extended']) {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                exactEffortTrigger: false,
+                genericEffortTrigger: true,
+                effortTexts: labelsOnlyProEffortTexts(),
+                genericEffortTexts: labelsOnlyProEffortTexts(),
+            });
+
+            await expect(chatGptModelCapabilityProbe(page, 'thinking', { effort })).resolves.toMatchObject({
+                state: 'ok',
+                evidence: { requested: 'thinking', effort },
+            });
+        }
+    });
+
     it('does not trust overlapping labels-only menus from broad generic effort triggers', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const page = createFakeModelPage({

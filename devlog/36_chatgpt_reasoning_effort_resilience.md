@@ -32,6 +32,9 @@ Live menus can put the model name first, such as `GPT-5.5 Thinking Extended` or
   base labels. `Standard` / `Extended` menus no longer require Pro-only
   `Light` / `Heavy` labels, while `Light` / `Heavy` still must be visible when
   requested.
+- The model capability/status probe uses the same requested-effort menu
+  verification path as selection, so status checks cannot drift from send-time
+  selection behavior.
 - Visible-text-only `Effort` / `Reasoning effort` controls are covered through
   a text trigger fallback and row-near geometry fallback.
 - Checked model and checked effort verification now also read checked row text

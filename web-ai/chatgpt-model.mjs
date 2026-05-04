@@ -509,7 +509,7 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     let effortOption = null;
     if (option && requestedEffort) {
         try {
-            await openEffortMenu(page, requested, usedFallbacks);
+            await openEffortMenu(page, requested, requestedEffort, usedFallbacks);
             effortOption = await findEffortOption(page, requested, requestedEffort);
         } catch {
             effortOption = null;
