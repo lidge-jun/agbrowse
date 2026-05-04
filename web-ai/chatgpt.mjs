@@ -287,7 +287,10 @@ export async function pollWebAi(deps, input = {}) {
                     const warnings = [];
                     let answerText = latest;
                     if (input.allowCopyMarkdownFallback === true) {
-                        const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS);
+                        const copyResolution = await resolveOptionalChatGptCopyTarget(page);
+                        const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
+                            copyTarget: copyResolution?.target || null,
+                        });
                         const copiedText = preferCopiedText(latest, copied);
                         if (copiedText) {
                             answerText = cleanAssistantText(copiedText);
@@ -324,7 +327,10 @@ export async function pollWebAi(deps, input = {}) {
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
-        const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS);
+        const copyResolution = await resolveOptionalChatGptCopyTarget(page);
+        const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
+            copyTarget: copyResolution?.target || null,
+        });
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
@@ -453,6 +459,15 @@ async function resolveOptionalChatGptUploadTarget(page) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'upload.attach',
+    });
+    if (result.ok && result.target?.selector) return result;
+    return null;
+}
+
+async function resolveOptionalChatGptCopyTarget(page) {
+    const result = await resolveTargetForIntent(page, {
+        provider: 'chatgpt',
+        intentId: 'copy.lastResponse',
     });
     if (result.ok && result.target?.selector) return result;
     return null;

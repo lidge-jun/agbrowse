@@ -92,6 +92,25 @@ describe('target resolver contract', () => {
         });
         expect(result.target.selector).toBe('button[aria-label*="Attach" i]');
     });
+
+    it('resolves ChatGPT copy buttons through the copy.lastResponse contract when unambiguous', async () => {
+        const page = mockPage({
+            matchingSelectors: ['button[data-testid="copy-turn-action-button"]'],
+            evalResult: { role: 'button', label: 'Copy', tagName: 'button', isEditable: false },
+        });
+        const result = await resolveTargetForIntent(page, {
+            provider: 'chatgpt',
+            intentId: 'copy.lastResponse',
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.intent).toMatchObject({
+            intentId: 'copy.lastResponse',
+            feature: 'copyButton',
+            operation: 'click',
+        });
+        expect(result.target.selector).toBe('button[data-testid="copy-turn-action-button"]');
+    });
 });
 
 function mockPage(overrides = {}) {

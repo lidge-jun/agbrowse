@@ -28,6 +28,7 @@ export const GROK_COPY_SELECTORS = {
 };
 
 export async function captureCopiedResponseText(page, selectors, options = {}) {
+    const selectorSet = copySelectorsWithTarget(selectors, options.copyTarget);
     try {
         const result = await page.evaluate?.(
             async ({ selectorSet, timeoutMs, stableTicks }) => {
@@ -113,7 +114,7 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                 }
             },
             {
-                selectorSet: selectors,
+                selectorSet,
                 timeoutMs: Math.max(250, options.timeoutMs ?? 1500),
                 stableTicks: Math.max(1, options.stableTicks ?? 3),
             },
@@ -123,6 +124,24 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
     } catch (e) {
         return { ok: false, status: 'exception', error: e.message };
     }
+}
+
+function copySelectorsWithTarget(selectors, copyTarget = null) {
+    if (!copyTarget?.selector) return selectors;
+    const existingSelectors = selectors.copyButtonSelectors || [];
+    if (existingSelectors.includes(copyTarget.selector)) {
+        return {
+            ...selectors,
+            copyButtonSelectors: [...new Set(existingSelectors)],
+        };
+    }
+    return {
+        ...selectors,
+        copyButtonSelectors: [
+            copyTarget.selector,
+            ...existingSelectors,
+        ],
+    };
 }
 
 export function preferCopiedText(domText, copied) {

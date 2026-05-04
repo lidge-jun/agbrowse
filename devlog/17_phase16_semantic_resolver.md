@@ -75,6 +75,8 @@ repair is considered.
   target resolver before falling back to legacy submit behavior.
 - 2026-05-05: ChatGPT `upload.attach` now resolves through the ActionIntent
   target resolver before falling back to legacy upload surface scanning.
+- 2026-05-05: ChatGPT `copy.lastResponse` now resolves through the ActionIntent
+  target resolver when unambiguous, then stays scoped to the last assistant turn.
 
 ## Not now
 
