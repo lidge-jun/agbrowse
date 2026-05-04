@@ -3,6 +3,19 @@
 <head>
   <meta charset="utf-8">
   <title>Smoke Browser</title>
+  <style>
+    [data-scroll-panel] {
+      width: 240px;
+      height: 80px;
+      overflow: auto;
+      border: 1px solid #999;
+      margin-top: 12px;
+    }
+
+    [data-scroll-spacer] {
+      height: 260px;
+    }
+  </style>
   <script>
     function markProbe(which) {
       document.body.dataset.lastProbe = which;
@@ -39,6 +52,12 @@
       <option value="a">Alpha</option>
       <option value="b">Beta</option>
     </select>
+    <div role="region" aria-label="Scrollable Panel" tabindex="0" data-scroll-panel>
+      <button aria-label="Scroll Anchor" type="button">Scroll Anchor</button>
+      <p>Scroll start</p>
+      <div data-scroll-spacer></div>
+      <p>Scroll end</p>
+    </div>
     <div id="delayed-status" aria-live="polite"></div>
   </main>
   <script>

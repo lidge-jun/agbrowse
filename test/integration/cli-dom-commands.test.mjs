@@ -32,11 +32,13 @@ describe.sequential('browser DOM commands', () => {
         const buttonRefs = extractRefs(snapshot, 'button', 'Probe Button');
         const inputRef = extractRef(snapshot, 'textbox', 'Name');
         const selectRef = extractRef(snapshot, 'combobox', 'Pick One');
+        const scrollRef = extractRef(snapshot, 'button', 'Scroll Anchor');
 
         expect(buttonRef).toBeTruthy();
         expect(buttonRefs).toHaveLength(2);
         expect(inputRef).toBeTruthy();
         expect(selectRef).toBeTruthy();
+        expect(scrollRef).toBeTruthy();
 
         const click = await execBrowser(['click', buttonRef, '--right'], { env });
         expect(click.code).toBe(0);
@@ -60,6 +62,15 @@ describe.sequential('browser DOM commands', () => {
         const select = await execBrowser(['select', selectRef, 'b'], { env });
         expect(select.code).toBe(0);
         expect(select.stdout).toContain(`selected "b"`);
+
+        const scrollBefore = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop', '--unsafe-allow', 'evaluate'], { env });
+        const scroll = await execBrowser(['scroll', 'down', '--amount', '80', '--ref', scrollRef, '--json'], { env });
+        expect(scroll.code).toBe(0);
+        const scrollPayload = JSON.parse(scroll.stdout);
+        expect(scrollPayload).toMatchObject({ ok: true, direction: 'down', pixels: 80, ref: scrollRef });
+
+        const scrollAfter = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop', '--unsafe-allow', 'evaluate'], { env });
+        expect(Number(scrollAfter.stdout)).toBeGreaterThan(Number(scrollBefore.stdout));
 
         const reload = await execBrowser(['reload'], { env });
         expect(reload.code).toBe(0);

@@ -948,20 +948,21 @@ async function mouseClick(port, x, y, opts = {}) {
 
 async function scroll(port, direction, opts = {}) {
     const page = await getReadyPage(port);
-
-    if (opts.ref) {
-        // Scroll to specific element
-        const locator = await refToLocator(page, port, opts.ref);
-        await locator.scrollIntoViewIfNeeded();
-        return { ok: true, scrolledTo: opts.ref };
-    }
-
     const amount = opts.amount || 500;
     const deltaMap = {
         down: [0, amount], up: [0, -amount],
         right: [amount, 0], left: [-amount, 0],
     };
     const [dx, dy] = deltaMap[direction] || [0, amount];
+
+    if (opts.ref) {
+        const locator = await refToLocator(page, port, opts.ref);
+        await locator.scrollIntoViewIfNeeded();
+        await locator.hover();
+        await page.mouse.wheel(dx, dy);
+        return { ok: true, direction, pixels: amount, ref: opts.ref };
+    }
+
     await page.mouse.wheel(dx, dy);
     return { ok: true, direction, pixels: amount };
 }
@@ -1719,15 +1720,15 @@ try {
             const dir = process.argv[3];
             const scrollRef = process.argv.includes('--ref') ? process.argv[process.argv.indexOf('--ref') + 1] : null;
             const scrollAmount = process.argv.includes('--amount') ? parseInt(process.argv[process.argv.indexOf('--amount') + 1]) : undefined;
+            if (!dir || !['up', 'down', 'left', 'right'].includes(dir)) {
+                console.error('Usage: browser.mjs scroll <up|down|left|right> [--amount N] [--ref eN] [--json]');
+                process.exit(1);
+            }
             if (scrollRef) {
-                const sr = await scroll(getPort(), 'down', { ref: scrollRef });
+                const sr = await scroll(getPort(), dir, { amount: scrollAmount, ref: scrollRef });
                 if (json) console.log(JSON.stringify(sr, null, 2));
-                else console.log(`scrolled to ${sr.scrolledTo}`);
+                else console.log(`scrolled ${sr.direction} ${sr.pixels}px on ${sr.ref}`);
             } else {
-                if (!dir || !['up', 'down', 'left', 'right'].includes(dir)) {
-                    console.error('Usage: browser.mjs scroll <up|down|left|right> [--amount N] [--ref eN] [--json]');
-                    process.exit(1);
-                }
                 const sr = await scroll(getPort(), dir, { amount: scrollAmount });
                 if (json) console.log(JSON.stringify(sr, null, 2));
                 else console.log(`scrolled ${sr.direction} ${sr.pixels}px`);

@@ -21,7 +21,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 8 | 3471 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
+| `skills/browser/` | 8 | 3472 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 680 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 365 | bundled agent workflow skill |
 | `web-ai/` | 63 | 9899 | provider automation, sessions, MCP, eval, policy, trace |
@@ -31,7 +31,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/trace/` | 4 | 202 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 4 | 273 | eval runner and release scripts |
 | `test/unit/` | 46 | 4298 | deterministic module tests |
-| `test/integration/` | 14 | 1241 | CLI, MCP, policy, provider fixture tests |
+| `test/integration/` | 14 | 1252 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 2 | 79 | adoption and trace docs |
@@ -43,7 +43,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
-| `skills/browser/browser.mjs` | 2087 | root CLI parser, Chrome lifecycle, browser primitive commands |
+| `skills/browser/browser.mjs` | 2088 | root CLI parser, Chrome lifecycle, browser primitive commands |
 | `skills/browser/tab-manager.mjs` | 371 | CDP target list, create, close, switch |
 | `skills/browser/tab-lifecycle.mjs` | 191 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 280 | bundled skill list/get/install |
