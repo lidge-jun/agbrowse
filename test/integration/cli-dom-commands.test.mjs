@@ -45,7 +45,12 @@ describe.sequential('browser DOM commands', () => {
         const secondClick = await execBrowser(['click', buttonRefs[1]], { env });
         expect(secondClick.code).toBe(0);
 
-        const probeState = await execBrowser(['evaluate', 'document.body.dataset.lastProbe'], { env });
+        const deniedEvaluate = await execBrowser(['evaluate', 'document.body.dataset.lastProbe'], { env });
+        expect(deniedEvaluate.code).not.toBe(0);
+        expect(deniedEvaluate.stderr).toContain('evaluate denied by policy');
+
+        const probeState = await execBrowser(['evaluate', 'document.body.dataset.lastProbe', '--unsafe-allow', 'evaluate'], { env });
+        expect(probeState.code).toBe(0);
         expect(probeState.stdout).toContain('"second"');
 
         const type = await execBrowser(['type', inputRef, 'Alice', '--submit'], { env });
