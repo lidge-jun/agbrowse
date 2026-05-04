@@ -12,6 +12,7 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('Requires --model');
         expect(result.stdout).toContain('Tab lease policy:');
         expect(result.stdout).toContain('leaseClosedTabs');
+        expect(result.stdout).toContain('mcp-server');
         expect(result.stdout).toMatch(/agbrowse web-ai query\s+--vendor grok/);
     });
 

@@ -14,6 +14,7 @@ import { cleanupIdleTabs } from '../skills/browser/tab-lifecycle.mjs';
 import { withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
+import { runMcpServer } from './mcp-server.mjs';
 export { parseDurationToMs };
 
 const VENDOR_DEFAULT_URLS = {
@@ -27,6 +28,7 @@ const COMMANDS = new Set([
     'watch', 'snapshot',
     'sessions', 'doctor',
     'context-dry-run', 'context-render',
+    'mcp-server',
 ]);
 export const WEB_AI_USAGE = `
 Usage:
@@ -44,6 +46,7 @@ Commands:
   sessions <sub>      Manage persisted sessions: list | show | resume | reattach | prune
   context-dry-run     Build a context package without sending
   context-render      Render full prompt/context package text
+  mcp-server          Run stdio MCP bridge exposing web-ai tools
 
 Provider:
   --vendor <name>     chatgpt | gemini | grok (default: chatgpt)
@@ -119,6 +122,12 @@ Snapshot:
   agbrowse web-ai snapshot --vendor <v> [--interactive] [--compact] [--json]
                       Compact Playwright-MCP-style accessibility snapshot.
 
+MCP:
+  agbrowse web-ai mcp-server
+                      Starts a stdio JSON-RPC MCP server with tools/list and
+                      tools/call. Tool schemas are exported from
+                      web-ai/tool-schema.mjs for AI SDK consumers.
+
 Doctor snapshot:
   agbrowse web-ai doctor --vendor <v> --snapshot interactive [--json]
                       Adds content-safe snapshot stats and semantic target candidates.
@@ -191,6 +200,10 @@ async function runWebAiCliInner(argv = [], deps) {
     }
     if (!COMMANDS.has(command)) {
         throw new Error(WEB_AI_USAGE.trim());
+    }
+    if (command === 'mcp-server') {
+        await runMcpServer(deps);
+        return { ok: true, status: 'mcp-server-stopped' };
     }
 
     const { values } = parseArgs({

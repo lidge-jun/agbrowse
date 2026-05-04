@@ -70,6 +70,7 @@ describe('web-ai provider integration (source-string contracts)', () => {
     const chatgptSrc = readFileSync(join(root, 'web-ai/chatgpt.mjs'), 'utf8');
     const geminiSrc = readFileSync(join(root, 'web-ai/gemini-live.mjs'), 'utf8');
     const grokSrc = readFileSync(join(root, 'web-ai/grok-live.mjs'), 'utf8');
+    const finalizerSrc = readFileSync(join(root, 'web-ai/tab-finalizer.mjs'), 'utf8');
 
     it('all three providers create a session on send and return sessionId', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
@@ -87,11 +88,13 @@ describe('web-ai provider integration (source-string contracts)', () => {
         }
     });
 
-    it('all three providers updateSession on completion and on timeout', () => {
+    it('all three providers finalize completion and updateSession on timeout', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
-            expect(src).toMatch(/updateSession\(session\.sessionId, \{ status: 'complete'/);
+            expect(src).toMatch(/finalizeProviderTab\(deps, \{[\s\S]*?session[\s\S]*?answerText/);
             expect(src).toMatch(/updateSession\(session\.sessionId, \{ status: 'timeout' \}\)/);
         }
+        expect(finalizerSrc).toMatch(/updateSession\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
+        expect(finalizerSrc).toMatch(/completedAt: new Date\(\)\.toISOString\(\)/);
     });
 
     it('queryWebAi forwards sent.sessionId into pollWebAi to keep one session record', () => {
