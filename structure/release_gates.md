@@ -56,8 +56,8 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | `npm run test:eval-fixtures` | offline fixture runner | fixture config와 JSON result 확인 |
 | `npm run test:contract-drift` | contract audit unit test | provider contract drift 차단 |
 | `npm run test:trace-policy` | trace와 policy tests | evidence와 mutation guard 확인 |
-| `npm run release` | latest release script | clean tree, install, audit, tests, pack, publish dry-run, tag/publish |
-| `npm run release:preview` | preview release script | preview version, audit, tests, pack, publish dry-run, tag/publish |
+| `npm run release` | latest release script | clean tree, install, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
+| `npm run release:preview` | preview release script | preview version, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `bash structure/verify-counts.sh` | structure count verifier | source map line/file counts drift 차단 |
 
 ## 금지 Claim

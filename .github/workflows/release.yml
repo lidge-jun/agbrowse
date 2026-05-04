@@ -45,6 +45,20 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Structure docs drift
+        run: npm run docs:drift
+
+      - name: Structure counts
+        run: npm run docs:counts
+
+      - name: Fixture evals
+        run: |
+          npm run test:eval-fixtures
+          npm run eval:web-ai:fixtures
+
+      - name: Git diff whitespace check
+        run: git diff --check
+
       - name: Verify package
         run: npm pack --dry-run
 

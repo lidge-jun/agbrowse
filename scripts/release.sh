@@ -54,6 +54,17 @@ npm audit --audit-level=high
 echo "Running tests..."
 npm test
 
+echo "Running structure documentation gates..."
+npm run docs:drift
+npm run docs:counts
+
+echo "Running fixture evals..."
+npm run test:eval-fixtures
+npm run eval:web-ai:fixtures
+
+echo "Checking diff whitespace..."
+git diff --check
+
 echo "Verifying package contents..."
 npm pack --dry-run >/dev/null
 npm publish --dry-run --access public >/dev/null
@@ -65,7 +76,7 @@ fi
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
   git add package.json package-lock.json
-  git commit -m "chore: release $TAG"
+  git commit -m "[agent] chore: release $TAG"
 fi
 
 echo "Creating tag $TAG..."

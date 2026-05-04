@@ -8,6 +8,7 @@ on:
       - 'test/unit/web-ai-eval*.test.mjs'
       - 'test/unit/web-ai-dom-scrubber.test.mjs'
       - 'scripts/run-web-ai-eval.mjs'
+      - 'structure/**'
       - '.github/workflows/contract-drift.yml'
       - 'package.json'
       - 'package-lock.json'
