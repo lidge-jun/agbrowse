@@ -22,6 +22,7 @@ import { createTraceId } from './trace/types.mjs';
 import { writeCommandTrace } from './trace/writer.mjs';
 import { loadAndEnforcePolicy } from './policy/enforce.mjs';
 import { activeCommandTargetIds, withActiveCommand } from './active-command-store.mjs';
+import { auditSources } from './source-audit.mjs';
 export { parseDurationToMs };
 
 const VENDOR_DEFAULT_URLS = {
@@ -98,6 +99,10 @@ Attachments and context:
   --files-report                    Include file report metadata
   --allow-copy-markdown-fallback    Capture provider Copy button output after DOM response
   --allow-grok-context-pack         Override Grok hard-gate (Grok prefers inline + single --file)
+  --require-source-audit            Fail closed when completed answers lack inline sources
+  --source-audit-ratio <0..1>       Required sourced claim ratio (default 1)
+  --source-audit-scope <text>       Checked scope for absence/no-result claims
+  --source-audit-date <text>        Checked date for absence/no-result claims
   --trace-dir <dir>                 Write redacted JSONL trace evidence for non-render commands
   --policy <path>                   Enforce action policy before browser mutation
   --unsafe-allow <name>             Explicit unsafe allowance; repeatable
@@ -278,6 +283,10 @@ async function runWebAiCliInner(argv = [], deps) {
             'inline-only': { type: 'boolean', default: false },
             'allow-copy-markdown-fallback': { type: 'boolean', default: false },
             'allow-grok-context-pack': { type: 'boolean', default: false },
+            'require-source-audit': { type: 'boolean', default: false },
+            'source-audit-ratio': { type: 'string' },
+            'source-audit-scope': { type: 'string' },
+            'source-audit-date': { type: 'string' },
             file: { type: 'string' },
             model: { type: 'string' },
             effort: { type: 'string' },
@@ -363,6 +372,10 @@ async function runWebAiCliInner(argv = [], deps) {
         inlineOnly: values['inline-only'],
         allowCopyMarkdownFallback: values['allow-copy-markdown-fallback'] === true,
         allowGrokContextPack: values['allow-grok-context-pack'] === true,
+        requireSourceAudit: values['require-source-audit'] === true,
+        sourceAuditRatio: values['source-audit-ratio'],
+        sourceAuditScope: values['source-audit-scope'],
+        sourceAuditDate: values['source-audit-date'],
         probe: values.probe,
         interval: values.interval,
         pollTimeoutSec: values['poll-timeout'],
@@ -390,7 +403,7 @@ async function runWebAiCliInner(argv = [], deps) {
     await enforceCliPolicy(command, input);
     await ensureHeadedBrowserForWebAi(deps, command, argv);
 
-    const result = command === 'watch'
+    let result = command === 'watch'
         ? await watchSession(deps, input)
         : command === 'snapshot'
             ? await runSnapshotCommand(deps, input, values)
@@ -403,6 +416,7 @@ async function runWebAiCliInner(argv = [], deps) {
                         : isContextCommand(command)
                             ? await runContextCommand(command, input, values)
                             : await runCommand(command, deps, input);
+    result = applyRequiredSourceAudit(command, result, input);
     const traceId = input.traceDir && command !== 'render'
         ? createTraceId(`${command}:${Date.now()}`)
         : null;
@@ -444,6 +458,65 @@ async function runWebAiCliInner(argv = [], deps) {
     else if (command === 'sessions') printSessionsHuman(result);
     else printHuman(command, result);
     return result;
+}
+
+export function applyRequiredSourceAudit(command, result = {}, input = {}) {
+    if (input.requireSourceAudit !== true) return result;
+    const answerText = result.answerText || result.answerArtifact?.text || result.answerArtifact?.markdown || '';
+    const auditsCompletedAnswers = ['poll', 'query', 'watch'].includes(command);
+    if (!answerText && (!auditsCompletedAnswers || result.ok === false)) return result;
+    if (!answerText) {
+        throw new WebAiError({
+            errorCode: 'source-audit.answer-missing',
+            stage: 'source-audit',
+            vendor: result.vendor || input.vendor,
+            retryHint: 'poll-or-disable-audit',
+            message: `source audit requires completed answer text for web-ai ${command}`,
+            mutationAllowed: false,
+            evidence: { status: result.status || null },
+        });
+    }
+    const requiredSourceRatio = parseSourceAuditRatio(input.sourceAuditRatio);
+    const sourceAudit = auditSources(answerText, {
+        requiredSourceRatio,
+        checkedScope: input.sourceAuditScope || null,
+        checkedDate: input.sourceAuditDate || null,
+    });
+    result.sourceAudit = sourceAudit;
+    if (!sourceAudit.ok) {
+        throw new WebAiError({
+            errorCode: 'source-audit.failed',
+            stage: 'source-audit',
+            vendor: result.vendor || input.vendor,
+            retryHint: 'add-inline-sources-or-disable-audit',
+            message: `source audit failed: ${sourceAudit.gaps.map(gap => gap.code).join(', ')}`,
+            mutationAllowed: false,
+            evidence: {
+                gaps: sourceAudit.gaps,
+                claimCount: sourceAudit.claims.length,
+                unsourcedClaimCount: sourceAudit.unsourcedClaims.length,
+                checkedScope: sourceAudit.checkedScope,
+                checkedDate: sourceAudit.checkedDate,
+            },
+        });
+    }
+    return result;
+}
+
+export function parseSourceAuditRatio(value) {
+    if (value === undefined || value === null || value === '') return 1;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+        throw new WebAiError({
+            errorCode: 'source-audit.invalid-ratio',
+            stage: 'source-audit',
+            retryHint: 'fix-source-audit-ratio',
+            message: '--source-audit-ratio must be a number between 0 and 1',
+            mutationAllowed: false,
+            evidence: { value },
+        });
+    }
+    return parsed;
 }
 
 async function enforceCliPolicy(command, input) {

@@ -590,6 +590,28 @@ agbrowse web-ai query \
 The fallback is opt-in because provider copy buttons are UI details and can
 change.
 
+## Source Audit
+
+Use `--require-source-audit` on `poll` or `query` when a research answer must
+carry inline sources next to factual claims. The audit checks completed
+`answerText` locally and fails closed when claims are unsourced.
+
+```bash
+agbrowse web-ai query \
+  --vendor grok \
+  --model expert \
+  --inline-only \
+  --require-source-audit \
+  --source-audit-scope "official product docs and release notes" \
+  --source-audit-date "2026-05-05" \
+  --prompt "Summarize the latest official product changes with sources."
+```
+
+Absence claims such as "no official response was found" require
+`--source-audit-scope` and `--source-audit-date`. Use
+`--source-audit-ratio <0..1>` only when partial sourcing is deliberate; the
+default requires every detected claim to carry an inline source.
+
 ## Active Tab Safety
 
 `tab-switch` stores a CDP target id, and mutating commands resolve the active

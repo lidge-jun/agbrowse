@@ -129,6 +129,30 @@ describe('web-ai CLI contract', () => {
         expect(result.stderr).not.toContain('Unknown option');
     });
 
+    it('parses source audit flags for query preflight', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'query',
+            '--vendor',
+            'chatgpt',
+            '--inline-only',
+            '--prompt',
+            'hello',
+            '--require-source-audit',
+            '--source-audit-ratio',
+            '0.5',
+            '--source-audit-scope',
+            'official docs',
+            '--source-audit-date',
+            '2026-05-05',
+            '--model',
+            'deepthink',
+        ]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('unsupported ChatGPT model selection');
+        expect(result.stderr).not.toContain('Unknown option');
+    });
+
     it('supports context dry-run without a running browser', async () => {
         const result = await execBrowser([
             'web-ai',
