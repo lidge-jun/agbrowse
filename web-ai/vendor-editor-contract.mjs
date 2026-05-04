@@ -8,6 +8,7 @@ import {
 } from './chatgpt-composer.mjs';
 import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } from './copy-markdown.mjs';
 import { CHATGPT_MODEL_SELECTOR_BUTTONS } from './chatgpt-model.mjs';
+import { UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_BUTTON_SELECTORS } from './chatgpt-attachments.mjs';
 
 export function createChatGptEditorAdapter(page, options = {}) {
     return {
@@ -47,7 +48,7 @@ export const GEMINI_DEEP_THINK_CONSTRAINTS = {
 
 export const CHATGPT_COMPOSER_SELECTORS = CHATGPT_INPUT_SELECTORS;
 export const CHATGPT_SEND_SELECTORS = CHATGPT_SEND_BUTTON_SELECTORS;
-export const CHATGPT_UPLOAD_SELECTORS = ['button[aria-label*="Upload" i]', 'button[aria-label*="Attach" i]', 'button[data-testid*="plus" i]'];
+export const CHATGPT_UPLOAD_SELECTORS = CHATGPT_UPLOAD_BUTTON_SELECTORS;
 export const CHATGPT_RESPONSE_SELECTORS = ['[data-message-author-role="assistant"]', '[data-turn="assistant"]', 'article[data-testid^="conversation-turn"]'];
 export const CHATGPT_STREAMING_SELECTORS = ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]'];
 

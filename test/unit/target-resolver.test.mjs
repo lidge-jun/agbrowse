@@ -73,6 +73,25 @@ describe('target resolver contract', () => {
         });
         expect(result.target.selector).toBe('button[data-testid="send-button"]');
     });
+
+    it('resolves ChatGPT upload surfaces through the upload.attach contract', async () => {
+        const page = mockPage({
+            matchingSelectors: ['button[aria-label*="Attach" i]'],
+            evalResult: { role: 'button', label: 'Attach files', tagName: 'button', isEditable: false },
+        });
+        const result = await resolveTargetForIntent(page, {
+            provider: 'chatgpt',
+            intentId: 'upload.attach',
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.intent).toMatchObject({
+            intentId: 'upload.attach',
+            feature: 'uploadSurface',
+            operation: 'click',
+        });
+        expect(result.target.selector).toBe('button[aria-label*="Attach" i]');
+    });
 });
 
 function mockPage(overrides = {}) {

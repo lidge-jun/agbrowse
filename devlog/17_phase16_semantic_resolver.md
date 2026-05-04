@@ -73,6 +73,8 @@ repair is considered.
   target resolver before prompt insertion.
 - 2026-05-05: ChatGPT `send.click` now resolves through the ActionIntent
   target resolver before falling back to legacy submit behavior.
+- 2026-05-05: ChatGPT `upload.attach` now resolves through the ActionIntent
+  target resolver before falling back to legacy upload surface scanning.
 
 ## Not now
 

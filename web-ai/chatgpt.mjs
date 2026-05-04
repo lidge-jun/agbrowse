@@ -193,7 +193,10 @@ export async function sendWebAi(deps, input = {}) {
     }
     const uploadPath = input.filePath || contextAttachmentPath;
     if (uploadPath) {
-        const upload = await attachLocalFileLive(page, fileInfoFromPath(uploadPath));
+        const uploadResolution = await resolveOptionalChatGptUploadTarget(page);
+        const upload = await attachLocalFileLive(page, fileInfoFromPath(uploadPath), {
+            uploadTarget: uploadResolution?.target || null,
+        });
         if (!upload.ok) throw new WebAiError({
             errorCode: 'provider.attachment-evidence-missing',
             stage: 'attachment-verify',
@@ -441,6 +444,15 @@ async function resolveOptionalChatGptSendTarget(page) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'send.click',
+    });
+    if (result.ok && result.target?.selector) return result;
+    return null;
+}
+
+async function resolveOptionalChatGptUploadTarget(page) {
+    const result = await resolveTargetForIntent(page, {
+        provider: 'chatgpt',
+        intentId: 'upload.attach',
     });
     if (result.ok && result.target?.selector) return result;
     return null;

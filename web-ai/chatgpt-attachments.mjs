@@ -9,7 +9,7 @@ const UNSUPPORTED_EXTENSIONS = new Set(['.gdoc', '.gsheet', '.gslides']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']);
 const SPREADSHEET_EXTENSIONS = new Set(['.csv', '.tsv', '.xls', '.xlsx']);
 
-const UPLOAD_BUTTON_SELECTORS = [
+export const UPLOAD_BUTTON_SELECTORS = [
     'button[aria-label*="Upload" i]',
     'button[aria-label*="Attach" i]',
     'button[aria-label*="Add" i]',
@@ -69,7 +69,7 @@ export function preflightAttachment(file) {
     return { ok: true, softWarnings, basename: file.basename, sizeBytes: file.sizeBytes, extension };
 }
 
-export async function attachLocalFileLive(page, file) {
+export async function attachLocalFileLive(page, file, options = {}) {
     const usedFallbacks = [];
     const warnings = [];
     const preflight = preflightAttachment(file);
@@ -80,7 +80,7 @@ export async function attachLocalFileLive(page, file) {
 
     let inputSel = await findFirstFileInput(page);
     if (!inputSel) {
-        await openUploadSurface(page, usedFallbacks);
+        await openUploadSurface(page, usedFallbacks, options.uploadTarget);
         inputSel = await findFirstFileInput(page);
     }
     if (!inputSel) {
@@ -141,7 +141,14 @@ export async function verifySentTurnAttachmentLive(page, expectedFile = null) {
     return { ok: true, stage: 'attachment-verified', chipVisible: true, fileCount: evidence, usedFallbacks: [], warnings: [] };
 }
 
-async function openUploadSurface(page, usedFallbacks) {
+async function openUploadSurface(page, usedFallbacks, uploadTarget = null) {
+    if (uploadTarget?.selector) {
+        const clicked = await clickUploadButton(page, uploadTarget.selector);
+        if (clicked) {
+            await page.waitForTimeout(500);
+            return;
+        }
+    }
     for (const sel of UPLOAD_BUTTON_SELECTORS) {
         const loc = page.locator(sel).first();
         if (!(await loc.isVisible().catch(() => false))) continue;
@@ -152,6 +159,21 @@ async function openUploadSurface(page, usedFallbacks) {
         } catch (e) {
             usedFallbacks.push(`upload-button-click-failed:${sel}:${e.message}`);
         }
+    }
+}
+
+async function clickUploadButton(page, selector) {
+    const loc = page.locator(selector).first();
+    const visible = await loc.isVisible().catch(() => false);
+    const enabled = typeof loc.isEnabled === 'function'
+        ? await loc.isEnabled().catch(() => false)
+        : true;
+    if (!visible || !enabled) return false;
+    try {
+        await loc.click({ timeout: 3_000 });
+        return true;
+    } catch {
+        return false;
     }
 }
 

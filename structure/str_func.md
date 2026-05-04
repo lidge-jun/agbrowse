@@ -24,18 +24,18 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 8 | 3472 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 680 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 365 | bundled agent workflow skill |
-| `web-ai/` | 69 | 10541 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 69 | 10576 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 583 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 362 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 121 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 4 | 202 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 4 | 273 | eval runner and release scripts |
-| `test/unit/` | 52 | 4737 | deterministic module tests |
+| `test/unit/` | 53 | 4820 | deterministic module tests |
 | `test/integration/` | 14 | 1459 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 2 | 79 | adoption and trace docs |
-| `devlog/` | 56 | 12990 | phased plan, research, implementation notes |
+| `devlog/` | 57 | 13025 | phased plan, research, implementation notes |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -48,7 +48,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/tab-lifecycle.mjs` | 191 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 280 | bundled skill list/get/install |
 | `web-ai/cli.mjs` | 1008 | `web-ai` subcommand parser and command orchestration |
-| `web-ai/chatgpt.mjs` | 526 | ChatGPT provider send/poll/query/status |
+| `web-ai/chatgpt.mjs` | 538 | ChatGPT provider send/poll/query/status |
 | `web-ai/gemini-live.mjs` | 620 | Gemini provider send/poll/query/status |
 | `web-ai/grok-live.mjs` | 487 | Grok provider send/poll/query/status |
 | `web-ai/mcp-server.mjs` | 255 | stdio JSON-RPC MCP bridge |
