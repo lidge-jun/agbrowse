@@ -53,13 +53,19 @@
     "test:release-gates": "bash structure/check-doc-drift.sh && bash structure/verify-counts.sh",
     "benchmark:trajectory": "node benchmarks/agbrowse/run-task.mjs",
     "release": "bash scripts/release.sh",
-    "release:preview": "bash scripts/release-preview.sh"
+    "release:preview": "bash scripts/release-preview.sh",
+    "typecheck": "tsc --noEmit",
+    "check:strict-baseline": "node scripts/check-strict-baseline.mjs",
+    "pack:dry": "npm pack --dry-run --json",
+    "smoke:bins": "node scripts/smoke-bins.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
     "playwright-core": "^1.58.2"
   },
   "devDependencies": {
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "typescript": "^5.6.0",
+    "@types/node": "^20.0.0"
   }
 }
