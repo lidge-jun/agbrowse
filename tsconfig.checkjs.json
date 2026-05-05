@@ -60,7 +60,8 @@
     "skills/browser/tab-monitor.mjs",
     "web-ai/tab-finalizer.mjs",
     "skills/browser/skill-install.mjs",
-    "web-ai/tab-recovery.mjs"
+    "web-ai/tab-recovery.mjs",
+    "skills/browser/tab-lifecycle.mjs"
   ],
   "exclude": [
     "node_modules",
