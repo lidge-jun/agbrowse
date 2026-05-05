@@ -1,21 +1,40 @@
+// @ts-check
 import { EventEmitter } from 'node:events';
 import { isTabAlive, getTabInfo } from './tab-manager.mjs';
+
+/**
+ * @typedef {Object} MonitorEntry
+ * @property {ReturnType<typeof setInterval>} interval
+ * @property {number} lastCheck
+ */
+
+/**
+ * @typedef {Object} HealthEntry
+ * @property {boolean} alive
+ * @property {number} lastSeen
+ * @property {string|null|undefined} error
+ */
 
 /**
  * Tab Monitor - watches tab health and emits events
  */
 export class TabMonitor extends EventEmitter {
+    /**
+     * @param {number} port
+     */
     constructor(port) {
         super();
         this.port = port;
-        this.monitors = new Map(); // targetId -> { interval, lastCheck }
-        this.healthStatus = new Map(); // targetId -> { alive, lastSeen, error }
+        /** @type {Map<string, MonitorEntry>} */
+        this.monitors = new Map();
+        /** @type {Map<string, HealthEntry>} */
+        this.healthStatus = new Map();
     }
 
     /**
      * Start monitoring a tab
      * @param {string} targetId - Tab to monitor
-     * @param {number} intervalMs - Check interval (default: 30000)
+     * @param {number} [intervalMs] - Check interval (default: 30000)
      */
     startMonitoring(targetId, intervalMs = 30000) {
         if (this.monitors.has(targetId)) {
@@ -46,9 +65,9 @@ export class TabMonitor extends EventEmitter {
                 this.healthStatus.set(targetId, {
                     alive: false,
                     lastSeen: Date.now(),
-                    error: error.message
+                    error: /** @type {{ message?: string }} */ (error).message
                 });
-                this.emit('tab:crashed', { targetId, error: error.message });
+                this.emit('tab:crashed', { targetId, error: /** @type {{ message?: string }} */ (error).message });
             }
         };
 
@@ -85,7 +104,7 @@ export class TabMonitor extends EventEmitter {
     /**
      * Get health status for a tab
      * @param {string} targetId 
-     * @returns {{alive, lastSeen, error}|undefined}
+     * @returns {HealthEntry|undefined}
      */
     getHealth(targetId) {
         return this.healthStatus.get(targetId);
@@ -93,7 +112,7 @@ export class TabMonitor extends EventEmitter {
 
     /**
      * Get all monitored tabs
-     * @returns {Array<{targetId, health}>}
+     * @returns {Array<{ targetId: string } & HealthEntry>}
      */
     getAllHealth() {
         return Array.from(this.healthStatus.entries()).map(([targetId, health]) => ({
@@ -102,6 +121,7 @@ export class TabMonitor extends EventEmitter {
         }));
     }
 }
+
 
 /**
  * Create a tab monitor instance

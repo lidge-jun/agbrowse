@@ -56,7 +56,8 @@
     "web-ai/tab-lease-store.mjs",
     "web-ai/tab-pool.mjs",
     "skills/browser/profile-lock.mjs",
-    "skills/browser/browser-core.mjs"
+    "skills/browser/browser-core.mjs",
+    "skills/browser/tab-monitor.mjs"
   ],
   "exclude": [
     "node_modules",
