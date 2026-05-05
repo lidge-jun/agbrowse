@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // strict-baseline gate for agbrowse.
 // - Counts `\bany\b` and `@strict-debt` markers per tracked directory.
 // - Compares against the frozen floor recorded in docs/migration/strict-baseline.md.
@@ -28,6 +29,9 @@ const SOURCE_GLOBS = ['**/*.{ts,mts,cts}', '!**/*.d.ts'];
 const ANY_RE = /\bany\b/g;
 const DEBT_RE = /@strict-debt\b/g;
 
+/**
+ * @returns {Record<string,{any:number,debt:number,allow:number}>|null}
+ */
 function readBaseline() {
   const p = join(ROOT, 'docs', 'migration', 'strict-baseline.md');
   let text;
@@ -36,6 +40,7 @@ function readBaseline() {
   } catch {
     return null;
   }
+  /** @type {Record<string,{any:number,debt:number,allow:number}>} */
   const rows = {};
   const tableRe = /\|\s*([\w./-]+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
   for (const m of text.matchAll(tableRe)) {
@@ -50,6 +55,10 @@ function readBaseline() {
   return rows;
 }
 
+/**
+ * @param {string} dir
+ * @returns {Promise<{any:number,debt:number}>}
+ */
 async function countDir(dir) {
   const abs = join(ROOT, dir);
   try {
@@ -68,8 +77,12 @@ async function countDir(dir) {
   return { any, debt };
 }
 
+/**
+ * @returns {Promise<void>}
+ */
 async function main() {
   const baseline = readBaseline();
+  /** @type {Record<string,{any:number,debt:number}>} */
   const counts = {};
   for (const dir of TRACKED_DIRS) {
     counts[dir] = await countDir(dir);

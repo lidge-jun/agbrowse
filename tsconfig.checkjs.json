@@ -68,7 +68,8 @@
     "benchmarks/agbrowse/run-task.mjs",
     "scripts/render-trace-report.mjs",
     "skills/vision-click/vision-core.mjs",
-    "scripts/run-web-ai-eval.mjs"
+    "scripts/run-web-ai-eval.mjs",
+    "scripts/check-strict-baseline.mjs"
   ],
   "exclude": [
     "node_modules",
