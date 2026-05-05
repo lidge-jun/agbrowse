@@ -1,4 +1,13 @@
+// @ts-check
 import { WebAiError } from './errors.mjs';
+
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+/** @typedef {'instant'|'thinking'|'pro'} ModelChoice */
+/** @typedef {'light'|'standard'|'extended'|'heavy'} EffortChoice */
+/** @typedef {{ testIds: string[], labels: string[] }} ModelOptionConfig */
+/** @typedef {{ triggerTestIds: string[], efforts: Readonly<Record<string, string>> }} EffortConfig */
+/** @typedef {{ x: number, y: number, width: number, height: number }} BoundingBox */
 
 export const CHATGPT_MODEL_SELECTOR_BUTTONS = [
     'button[data-testid="model-switcher-dropdown-button"]',
@@ -26,12 +35,14 @@ const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
     '[role="menuitem"][aria-label*="Reasoning" i]',
 ];
 
+/** @type {Readonly<Record<ModelChoice, ModelOptionConfig>>} */
 export const CHATGPT_MODEL_OPTIONS = {
     instant: { testIds: ['model-switcher-gpt-5-3'], labels: ['Instant'] },
     thinking: { testIds: ['model-switcher-gpt-5-5-thinking', 'model-switcher-gpt-5-5-thinking-thinking-effort'], labels: ['Thinking'] },
     pro: { testIds: ['model-switcher-gpt-5-5-pro', 'model-switcher-gpt-5-5-pro-thinking-effort'], labels: ['Pro', 'Heavy'] },
 };
 
+/** @type {Readonly<Record<string, EffortConfig>>} */
 export const CHATGPT_MODEL_EFFORT_OPTIONS = {
     thinking: {
         triggerTestIds: ['model-switcher-gpt-5-5-thinking-thinking-effort'],
@@ -51,6 +62,7 @@ export const CHATGPT_MODEL_EFFORT_OPTIONS = {
     },
 };
 
+/** @type {Readonly<Record<string, ModelChoice>>} */
 const MODEL_ALIASES = {
     instant: 'instant',
     fast: 'instant',
@@ -65,6 +77,7 @@ const MODEL_ALIASES = {
     'gpt-5.5-pro': 'pro',
 };
 
+/** @type {Readonly<Record<string, EffortChoice>>} */
 const EFFORT_ALIASES = {
     light: 'light',
     low: 'light',
@@ -77,24 +90,59 @@ const EFFORT_ALIASES = {
     heavy: 'heavy',
 };
 
+/**
+ * @param {unknown} model
+ * @returns {ModelChoice | null}
+ */
 export function normalizeChatGptModelChoice(model) {
     const key = String(model || '').trim().toLowerCase();
     if (!key) return null;
     return MODEL_ALIASES[key] || null;
 }
 
+/**
+ * @param {unknown} effort
+ * @returns {EffortChoice | null}
+ */
 export function normalizeChatGptEffortChoice(effort) {
     const key = String(effort || '').trim().toLowerCase();
     if (!key) return null;
     return EFFORT_ALIASES[key] || null;
 }
 
+/**
+ * @param {unknown} model
+ * @param {unknown} effort
+ * @returns {boolean}
+ */
 export function isChatGptEffortSupported(model, effort) {
-    const requestedModel = normalizeChatGptModelChoice(model) || model;
-    const requestedEffort = normalizeChatGptEffortChoice(effort) || effort;
+    const requestedModel = normalizeChatGptModelChoice(model) || /** @type {string} */ (model);
+    const requestedEffort = normalizeChatGptEffortChoice(effort) || /** @type {string} */ (effort);
     return Boolean(CHATGPT_MODEL_EFFORT_OPTIONS[requestedModel]?.efforts?.[requestedEffort]);
 }
 
+/**
+ * @typedef {Object} SelectModelOptions
+ * @property {string} [effort]
+ * @property {string} [reasoningEffort]
+ */
+
+/**
+ * @typedef {Object} SelectModelResult
+ * @property {ModelChoice | string | null} requested
+ * @property {ModelChoice | null} selected
+ * @property {boolean} alreadySelected
+ * @property {string | null} effort
+ * @property {EffortChoice | null} requestedEffort
+ * @property {string[]} usedFallbacks
+ */
+
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @param {SelectModelOptions} [options]
+ * @returns {Promise<SelectModelResult | null>}
+ */
 export async function selectChatGptModel(page, model, options = {}) {
     const requested = normalizeChatGptModelChoice(model);
     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
@@ -105,6 +153,7 @@ export async function selectChatGptModel(page, model, options = {}) {
     if ((options.effort || options.reasoningEffort) && !requestedEffort) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `unsupported ChatGPT reasoning effort: ${options.effort || options.reasoningEffort}`, evidence: { effort: options.effort || options.reasoningEffort } });
     }
+    /** @type {string[]} */
     const usedFallbacks = [];
     await openModelMenu(page, usedFallbacks);
     let currentModel = await readCheckedModel(page, requested || null);
@@ -123,9 +172,10 @@ export async function selectChatGptModel(page, model, options = {}) {
         currentModel = await readCheckedModel(page, requested);
         modelChanged = true;
     }
+    /** @type {{ requested: string, selected: string|null, changed: boolean } | null} */
     let selectedEffort = null;
     if (requestedEffort) {
-        selectedEffort = await selectChatGptEffort(page, targetModel, requestedEffort, usedFallbacks);
+        selectedEffort = await selectChatGptEffort(page, /** @type {string} */ (targetModel), requestedEffort, usedFallbacks);
         await openModelMenu(page, usedFallbacks);
     }
     const after = await readCheckedModel(page, targetModel);
@@ -141,6 +191,7 @@ export async function selectChatGptModel(page, model, options = {}) {
     };
 }
 
+/** @param {Page} page */
 async function closeModelMenu(page) {
     for (let i = 0; i < 3; i += 1) {
         if (!(await isModelMenuOpen(page))) return;
@@ -149,6 +200,10 @@ async function closeModelMenu(page) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} usedFallbacks
+ */
 async function openModelMenu(page, usedFallbacks) {
     if (await isModelMenuOpen(page)) return;
     const deadline = Date.now() + 8_000;
@@ -186,7 +241,12 @@ async function openModelMenu(page, usedFallbacks) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<Locator | null>}
+ */
 async function findComposerModelPill(page) {
+    /** @type {Locator | null} */
     let standaloneHeavy = null;
     for (const selector of CHATGPT_COMPOSER_MODEL_PILL_SELECTORS) {
         const candidates = await page.locator(selector).count().catch(() => 0);
@@ -206,7 +266,12 @@ async function findComposerModelPill(page) {
     return standaloneHeavy || findModelTextButton(page);
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<Locator | null>}
+ */
 async function findModelTextButton(page) {
+    /** @type {Locator | null} */
     let standaloneHeavy = null;
     const candidates = await page.locator('button').count().catch(() => 0);
     for (let index = candidates - 1; index >= 0; index -= 1) {
@@ -223,6 +288,11 @@ async function findModelTextButton(page) {
     return standaloneHeavy;
 }
 
+/**
+ * @param {Page} page
+ * @param {ModelChoice} choice
+ * @returns {Promise<Locator | null>}
+ */
 async function findModelOption(page, choice) {
     const option = CHATGPT_MODEL_OPTIONS[choice];
     for (const testId of option.testIds) {
@@ -244,6 +314,11 @@ async function findModelOption(page, choice) {
     return null;
 }
 
+/**
+ * @param {Locator} loc
+ * @param {ModelChoice} choice
+ * @returns {Promise<boolean>}
+ */
 async function isModelOptionCandidate(loc, choice) {
     const text = (await loc.innerText({ timeout: 500 }).catch(() => '')).trim();
     if (!text) return false;
@@ -251,6 +326,13 @@ async function isModelOptionCandidate(loc, choice) {
     return modelChoiceFromText(text) === choice;
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @param {string} effort
+ * @param {string[]} usedFallbacks
+ * @returns {Promise<{ requested: string, selected: string|null, changed: boolean }>}
+ */
 async function selectChatGptEffort(page, model, effort, usedFallbacks) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     if (!config?.efforts?.[effort]) {
@@ -274,21 +356,33 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
     return { requested: effort, selected: after, changed: true };
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @param {string} effort
+ * @returns {Promise<Locator | null>}
+ */
 async function findEffortOption(page, model, effort) {
     const label = CHATGPT_MODEL_EFFORT_OPTIONS[model]?.efforts?.[effort];
     if (!label) return null;
     const candidates = page.locator('[role="menuitemradio"], [role="menuitem"]').filter({ hasText: effortLabelPattern(label) });
-    const modelSpecific = candidates.filter({ hasText: modelLabelPattern(model, CHATGPT_MODEL_OPTIONS[model]?.labels?.[0] || '') }).last();
+    const modelSpecific = candidates.filter({ hasText: modelLabelPattern(/** @type {ModelChoice} */ (model), CHATGPT_MODEL_OPTIONS[/** @type {ModelChoice} */ (model)]?.labels?.[0] || '') }).last();
     if (await modelSpecific.isVisible().catch(() => false)) return modelSpecific;
     const option = candidates.last();
     return (await option.isVisible().catch(() => false)) ? option : null;
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @param {string} effort
+ * @param {string[]} usedFallbacks
+ */
 async function openEffortMenu(page, model, effort, usedFallbacks) {
     if (await isEffortMenuOpen(page, model, { effort })) return;
     if (!(await isModelMenuOpen(page))) await openModelMenu(page, usedFallbacks);
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
-    const row = await findModelOption(page, model);
+    const row = await findModelOption(page, /** @type {ModelChoice} */ (model));
     const rowBox = row ? await row.boundingBox().catch(() => null) : null;
     if (rowBox) {
         await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2).catch(() => undefined);
@@ -351,25 +445,34 @@ async function openEffortMenu(page, model, effort, usedFallbacks) {
     throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort selector not found for ${model}`, selectorsTried: config.triggerTestIds.map(testId => `[data-testid="${testId}"]`), evidence: { model } });
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} usedFallbacks
+ */
 async function dismissEffortMenuAndReopenModel(page, usedFallbacks) {
     await page.keyboard.press('Escape').catch(() => undefined);
     await page.waitForTimeout(200).catch(() => undefined);
     await openModelMenu(page, usedFallbacks);
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @returns {Promise<BoundingBox | null>}
+ */
 async function findEffortTriggerBoxNearModelRow(page, model) {
-    const labels = CHATGPT_MODEL_OPTIONS[model]?.labels || [];
+    const labels = CHATGPT_MODEL_OPTIONS[/** @type {ModelChoice} */ (model)]?.labels || [];
     return page.evaluate(({ expectedLabels, modelChoice, triggerSelectors }) => {
         const rows = Array.from(document.querySelectorAll('[role="menuitemradio"][data-testid^="model-switcher-"], [role="menuitemradio"]'));
         const row = rows.find((candidate) => {
-            const text = (candidate.innerText || candidate.textContent || '').trim();
+            const text = (/** @type {HTMLElement} */ (candidate).innerText || candidate.textContent || '').trim();
             return matchesModelText(text, modelChoice, expectedLabels);
         });
         if (!row) return null;
         const rowRect = row.getBoundingClientRect();
         const selectorButtons = Array.from(document.querySelectorAll(triggerSelectors.join(',')));
         const textButtons = Array.from(document.querySelectorAll('button, [role="button"], [role="menuitem"]'))
-            .filter(candidate => /^(Effort|Reasoning effort)$/i.test((candidate.innerText || candidate.textContent || '').trim()));
+            .filter(candidate => /^(Effort|Reasoning effort)$/i.test((/** @type {HTMLElement} */ (candidate).innerText || candidate.textContent || '').trim()));
         const effortButtons = [...selectorButtons, ...textButtons];
         const button = effortButtons.find((candidate) => {
             const rect = candidate.getBoundingClientRect();
@@ -379,6 +482,11 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
         if (!button) return null;
         const rect = button.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        /**
+         * @param {string} text
+         * @param {string} choice
+         * @param {string[]} labelsForChoice
+         */
         function matchesModelText(text, choice, labelsForChoice) {
             if (choice === 'instant') return /\b(Instant|Fast)\b/i.test(text);
             if (choice === 'thinking') return /\b(Thinking|Think)\b/i.test(text);
@@ -388,6 +496,11 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
     }, { expectedLabels: labels, modelChoice: model, triggerSelectors: CHATGPT_EFFORT_TRIGGER_SELECTORS }).catch(() => null);
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @returns {Promise<EffortChoice | null>}
+ */
 async function readCheckedEffort(page, model) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     for (const [effort, label] of Object.entries(config?.efforts || {})) {
@@ -396,15 +509,21 @@ async function readCheckedEffort(page, model) {
             .last()
             .isVisible()
             .catch(() => false);
-        if (checked) return effort;
+        if (checked) return /** @type {EffortChoice} */ (effort);
     }
     const active = await readActiveEffortPill(page);
     for (const [effort, label] of Object.entries(config?.efforts || {})) {
-        if (effortLabelPattern(label).test(active)) return effort;
+        if (effortLabelPattern(label).test(active)) return /** @type {EffortChoice} */ (effort);
     }
     return null;
 }
 
+/**
+ * @param {Page} page
+ * @param {string} model
+ * @param {{ allowUnlabeled?: boolean, effort?: string | null }} [options]
+ * @returns {Promise<boolean>}
+ */
 async function isEffortMenuOpen(page, model, options = {}) {
     const allowUnlabeled = options.allowUnlabeled !== false;
     const requestedEffort = options.effort || null;
@@ -418,7 +537,7 @@ async function isEffortMenuOpen(page, model, options = {}) {
         .filter(label => !labels.includes(label));
     return page.locator('[role="menu"]').evaluateAll((menus, { expectedLabels, requiredLabels, unexpectedLabels, modelChoice, allowUnlabeled }) => {
         return menus.some(menu => {
-            const text = menu.innerText || menu.textContent || '';
+            const text = /** @type {HTMLElement} */ (menu).innerText || menu.textContent || '';
             if (!menuTextMatchesModel(text, modelChoice, allowUnlabeled)) return false;
             const unexpectedMatches = unexpectedLabels.filter(label => new RegExp(`(^|\\s)${label}(\\s|$)`, 'i').test(text));
             if (unexpectedMatches.length > 0) return false;
@@ -428,6 +547,11 @@ async function isEffortMenuOpen(page, model, options = {}) {
             const minimumMatches = requiredLabels.length || (expectedLabels.length <= 2 ? expectedLabels.length : Math.min(3, expectedLabels.length));
             return matches.length >= minimumMatches;
         });
+        /**
+         * @param {string} text
+         * @param {string} choice
+         * @param {boolean} permitUnlabeled
+         */
         function menuTextMatchesModel(text, choice, permitUnlabeled) {
             const hasThinking = /\b(Thinking|Think)\b/i.test(text);
             const hasPro = /\bPro\b/i.test(text);
@@ -439,6 +563,11 @@ async function isEffortMenuOpen(page, model, options = {}) {
     }, { expectedLabels: labels, requiredLabels, unexpectedLabels, modelChoice: model, allowUnlabeled }).catch(() => false);
 }
 
+/**
+ * @param {string} model
+ * @param {string | null} [effort]
+ * @returns {string[]}
+ */
 function requiredEffortMenuLabels(model, effort) {
     const efforts = CHATGPT_MODEL_EFFORT_OPTIONS[model]?.efforts || {};
     if (model === 'thinking') {
@@ -453,14 +582,19 @@ function requiredEffortMenuLabels(model, effort) {
     return Object.values(efforts);
 }
 
+/**
+ * @param {Page} page
+ * @param {ModelChoice | null} [expectedModel]
+ * @returns {Promise<ModelChoice | null>}
+ */
 async function readCheckedModel(page, expectedModel = null) {
     for (const [choice, option] of Object.entries(CHATGPT_MODEL_OPTIONS)) {
         for (const testId of option.testIds) {
             const checked = await page.locator(`[role="menuitemradio"][data-testid="${testId}"][aria-checked="true"], [data-testid="${testId}"][aria-checked="true"]`).first().isVisible().catch(() => false);
-            if (checked) return choice;
+            if (checked) return /** @type {ModelChoice} */ (choice);
         }
     }
-    const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]').all().catch(() => []);
+    const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]').all().catch(() => /** @type {Locator[]} */ ([]));
     for (const row of checkedRows) {
         const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
         if (isStandaloneEffortLabel(text)) continue;
@@ -471,6 +605,11 @@ async function readCheckedModel(page, expectedModel = null) {
     return modelChoiceFromText(active);
 }
 
+/**
+ * @param {Page} page
+ * @param {{ allowStandaloneHeavy?: boolean }} [options]
+ * @returns {Promise<string>}
+ */
 async function readActiveModelPill(page, options = {}) {
     const allowStandaloneHeavy = options.allowStandaloneHeavy === true;
     let standaloneHeavy = '';
@@ -503,6 +642,10 @@ async function readActiveModelPill(page, options = {}) {
     return standaloneHeavy;
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<string>}
+ */
 async function readActiveEffortPill(page) {
     const labels = [...new Set(Object.values(CHATGPT_MODEL_EFFORT_OPTIONS).flatMap(option => Object.values(option.efforts)))];
     for (const selector of CHATGPT_COMPOSER_MODEL_PILL_SELECTORS) {
@@ -524,11 +667,15 @@ async function readActiveEffortPill(page) {
     return '';
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<boolean>}
+ */
 async function isModelMenuOpen(page) {
     return page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR)
         .filter({ hasText: CHATGPT_MODEL_TEXT_BUTTON_PATTERN })
         .evaluateAll((items) => items.some(item => {
-            const text = (item.innerText || item.textContent || '').trim();
+            const text = (/** @type {HTMLElement} */ (item).innerText || item.textContent || '').trim();
             const testId = item.getAttribute?.('data-testid') || '';
             if (!text) return false;
             if (testId.includes('effort') && /^(Light|Standard|Extended|Heavy|Standard Pro|Extended Pro)$/i.test(text)) return false;
@@ -537,6 +684,11 @@ async function isModelMenuOpen(page) {
         .catch(() => false);
 }
 
+/**
+ * @param {ModelChoice} choice
+ * @param {string} label
+ * @returns {RegExp}
+ */
 function modelLabelPattern(choice, label) {
     if (choice === 'instant') return /\b(Instant|Fast)\b/i;
     if (choice === 'thinking') return /\b(Thinking|Think)\b/i;
@@ -544,10 +696,18 @@ function modelLabelPattern(choice, label) {
     return new RegExp(`(^|\\s)${escapeRegExp(label)}\\b`, 'i');
 }
 
+/**
+ * @param {string} label
+ * @returns {RegExp}
+ */
 function effortLabelPattern(label) {
     return new RegExp(`(^|\\s)${escapeRegExp(label)}\\b`, 'i');
 }
 
+/**
+ * @param {string} text
+ * @returns {ModelChoice | null}
+ */
 function modelChoiceFromText(text) {
     if (/\b(Instant|Fast)\b/i.test(text)) return 'instant';
     if (/\b(Thinking|Think)\b/i.test(text)) return 'thinking';
@@ -555,18 +715,40 @@ function modelChoiceFromText(text) {
     return null;
 }
 
+/** @param {string} text @returns {boolean} */
 function isModelPillText(text) {
     return CHATGPT_MODEL_TEXT_BUTTON_PATTERN.test(text) || CHATGPT_OBSERVED_PRO_PILL_LABELS.includes(text);
 }
 
+/** @param {unknown} text @returns {boolean} */
 function isStandaloneEffortLabel(text) {
     return /^(Light|Standard|Extended|Heavy)$/i.test(String(text || '').trim());
 }
 
+/** @param {unknown} value @returns {string} */
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * @typedef {Object} CapabilityProbeOptions
+ * @property {string} [effort]
+ * @property {string} [reasoningEffort]
+ */
+
+/**
+ * @typedef {Object} CapabilityProbeResult
+ * @property {'ok'|'warn'|'fail'|'unknown'} state
+ * @property {Record<string, unknown>} evidence
+ * @property {string} next
+ */
+
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @param {CapabilityProbeOptions} [options]
+ * @returns {Promise<CapabilityProbeResult>}
+ */
 export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     const requested = normalizeChatGptModelChoice(model);
     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
@@ -574,6 +756,7 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested, effort: options.effort || options.reasoningEffort }, next: 'model-fallback' };
     if (requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) return { state: 'fail', evidence: { requested, effort: requestedEffort }, next: 'model-fallback' };
+    /** @type {string[]} */
     const usedFallbacks = [];
     try {
         await openModelMenu(page, usedFallbacks);
@@ -581,6 +764,7 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
         return { state: 'fail', evidence: { requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
     }
     const option = await findModelOption(page, requested).catch(() => null);
+    /** @type {Locator | null} */
     let effortOption = null;
     if (option && requestedEffort) {
         try {
