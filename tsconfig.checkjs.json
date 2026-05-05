@@ -64,7 +64,8 @@
     "skills/browser/tab-lifecycle.mjs",
     "scripts/smoke-bins.mjs",
     "vitest.config.mjs",
-    "benchmarks/agbrowse/trajectory.mjs"
+    "benchmarks/agbrowse/trajectory.mjs",
+    "benchmarks/agbrowse/run-task.mjs"
   ],
   "exclude": [
     "node_modules",

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 import fs from 'node:fs/promises';
 import process from 'node:process';
 import {
@@ -8,6 +9,10 @@ import {
     writeTrajectoryBundle,
 } from './trajectory.mjs';
 
+/**
+ * @param {string[]} [argv]
+ * @returns {Promise<number>}
+ */
 async function main(argv = process.argv.slice(2)) {
     const opts = parseArgs(argv);
     if (opts.help) {
@@ -27,14 +32,19 @@ async function main(argv = process.argv.slice(2)) {
     });
     const result = await writeTrajectoryBundle(trajectory, outputDir);
     if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify({ ok: true, ...(/** @type {any} */ (result)) }, null, 2)}\n`);
     } else {
         process.stdout.write(`wrote trajectory: ${result.path}\n`);
     }
     return 0;
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {{ help?: boolean, json?: boolean, input?: string, outputDir?: string }}
+ */
 function parseArgs(argv) {
+    /** @type {{ help?: boolean, json?: boolean, input?: string, outputDir?: string }} */
     const opts = {};
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
