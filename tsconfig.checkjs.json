@@ -65,7 +65,8 @@
     "scripts/smoke-bins.mjs",
     "vitest.config.mjs",
     "benchmarks/agbrowse/trajectory.mjs",
-    "benchmarks/agbrowse/run-task.mjs"
+    "benchmarks/agbrowse/run-task.mjs",
+    "scripts/render-trace-report.mjs"
   ],
   "exclude": [
     "node_modules",

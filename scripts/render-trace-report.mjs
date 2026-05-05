@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 import { parseArgs } from 'node:util';
 import { renderTraceReport } from '../web-ai/trace/report.mjs';
 
