@@ -83,6 +83,7 @@ export function artifactFromPollResult(result = {}, context = {}) {
 
 /**
  * @template {Record<string, any>} R
+ *   `Record<string, any>` (not `unknown`) is required for `R & { ... }` spread compatibility in checkJs.
  * @param {R} [result]
  * @param {Record<string, any>} [context]
  * @returns {R & { answerArtifact?: AnswerArtifact }}

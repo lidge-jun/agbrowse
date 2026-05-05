@@ -47,11 +47,11 @@ export async function runCapabilities(deps, capabilities, input = {}) {
             const probeResult = await cap.probeFn(deps, input);
             rows.push({ capabilityId: cap.capabilityId, ...normalizeRow(probeResult) });
         } catch (err) {
-            const e = /** @type {{ message?: string }} */ (err);
+            const message = err instanceof Error ? err.message : String(err);
             rows.push({
                 capabilityId: cap.capabilityId,
                 state: 'unknown',
-                evidence: { error: e?.message || String(err) },
+                evidence: { error: message },
                 next: 're-snapshot',
             });
         }
