@@ -17,7 +17,8 @@
     "web-ai/chatgpt-composer.mjs",
     "web-ai/vendor-editor-contract.mjs",
     "web-ai/contract-audit.mjs",
-    "web-ai/self-heal.mjs"
+    "web-ai/self-heal.mjs",
+    "web-ai/action-intent.mjs"
   ],
   "exclude": [
     "node_modules",
