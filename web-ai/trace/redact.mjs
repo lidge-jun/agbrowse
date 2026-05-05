@@ -1,3 +1,5 @@
+// @ts-check
+
 const REDACTIONS = [
     { name: 'email', pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, replacement: '[redacted-email]' },
     { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, replacement: '[redacted-jwt]' },
@@ -24,12 +26,16 @@ const REDACT_KEYS = new Set([
     'authorization',
 ]);
 
+/**
+ * @param {unknown} value
+ * @returns {unknown}
+ */
 export function redactTraceValue(value) {
     if (value === null || value === undefined) return value;
     if (typeof value === 'string') return redactString(value);
     if (Array.isArray(value)) return value.map(redactTraceValue);
     if (typeof value === 'object') {
-        return Object.fromEntries(Object.entries(value).map(([key, child]) => {
+        return Object.fromEntries(Object.entries(/** @type {Record<string, unknown>} */ (value)).map(([key, child]) => {
             if (REDACT_KEYS.has(key)) return [key, '[redacted]'];
             return [key, redactTraceValue(child)];
         }));
@@ -37,6 +43,10 @@ export function redactTraceValue(value) {
     return value;
 }
 
+/**
+ * @param {unknown} text
+ * @returns {string}
+ */
 export function redactString(text) {
     let out = String(text);
     for (const rule of REDACTIONS) out = out.replace(rule.pattern, rule.replacement);
