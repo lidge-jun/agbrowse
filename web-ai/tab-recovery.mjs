@@ -1,11 +1,27 @@
+// @ts-check
 import { createTab, isTabAlive, getPageByTargetId, listManagedTabs } from '../skills/browser/tab-manager.mjs';
 import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
 
+/** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
+
+/**
+ * @typedef {Object} RecoverDeps
+ * @property {() => number} getPort
+ * @property {(targetId?: string) => Promise<unknown>} [getPage]
+ */
+
+/**
+ * @typedef {Object} RecoverResult
+ * @property {boolean} recovered
+ * @property {'existing-tab' | 'new-tab'} strategy
+ * @property {string | null} targetId
+ */
+
 /**
  * Recover a session's tab
- * @param {Object} deps - Dependencies { getPort, getPage }
- * @param {Object} session - Session record
- * @returns {Promise<{recovered: boolean, strategy, targetId}>}
+ * @param {RecoverDeps} deps
+ * @param {WebAiSession} session
+ * @returns {Promise<RecoverResult>}
  */
 export async function recoverSessionTab(deps, session) {
     if (!session) throw new Error('recoverSessionTab: session required');
@@ -13,16 +29,16 @@ export async function recoverSessionTab(deps, session) {
     const port = deps.getPort();
 
     // 1. Check if original tab still exists
-    const alive = await isTabAlive(port, session.targetId);
+    const alive = await isTabAlive(port, /** @type {string} */ (session.targetId));
 
     if (alive) {
         // Tab exists - verify URL by checking the actual page
-        const page = await getPageByTargetId(port, session.targetId);
+        const page = await getPageByTargetId(port, /** @type {string} */ (session.targetId));
         if (page) {
             const currentUrl = page.url();
             if (currentUrl !== session.conversationUrl) {
                 // Navigate to correct URL
-                await page.goto(session.conversationUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                await page.goto(/** @type {string} */ (session.conversationUrl), { waitUntil: 'domcontentloaded', timeout: 30_000 });
             }
             return {
                 recovered: true,
@@ -53,10 +69,17 @@ export async function recoverSessionTab(deps, session) {
 }
 
 /**
+ * @typedef {Object} VerifyResult
+ * @property {boolean} valid
+ * @property {string | null} [targetId]
+ * @property {boolean} needsRecovery
+ */
+
+/**
  * Verify session tab is still valid
- * @param {Object} deps - Dependencies
- * @param {Object} session - Session record
- * @returns {Promise<{valid: boolean, targetId, needsRecovery}>}
+ * @param {RecoverDeps} deps
+ * @param {WebAiSession | null | undefined} session
+ * @returns {Promise<VerifyResult>}
  */
 export async function verifySessionTab(deps, session) {
     if (!session?.targetId) {
@@ -110,8 +133,13 @@ export async function reconcileSessionTabs(port) {
     return { checked: activeSessions.length, orphaned };
 }
 
+/**
+ * @param {unknown} err
+ * @returns {boolean}
+ */
 function isPageDeathError(err) {
-    const msg = String(err?.message || err || '').toLowerCase();
+    const e = /** @type {{ message?: unknown }} */ (err);
+    const msg = String(e?.message || err || '').toLowerCase();
     return (
         msg.includes('target closed') ||
         msg.includes('page closed') ||
@@ -121,13 +149,22 @@ function isPageDeathError(err) {
 }
 
 /**
+ * @template T
+ * @typedef {Object} ResolvedPage
+ * @property {unknown} page
+ * @property {string | null} targetId
+ * @property {WebAiSession} session
+ */
+
+/**
  * Execute operation with session's bound page
  * GPT Pro recommendation: resolve page directly, don't use active tab routing
  * Catches page death mid-operation and retries once after recovery
- * @param {Object} deps - Dependencies { getPort }
- * @param {string} sessionId - Session ID
- * @param {Function} fn - Callback({ page, targetId, session })
- * @returns {Promise<any>}
+ * @template T
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @param {(ctx: ResolvedPage<T>) => Promise<T> | T} fn
+ * @returns {Promise<T>}
  */
 export async function withSessionPage(deps, sessionId, fn) {
     const session = getSession(sessionId);
@@ -147,15 +184,15 @@ export async function withSessionPage(deps, sessionId, fn) {
                 if (!recovery.recovered) {
                     throw new Error(`Session ${sessionId} tab recovery failed`);
                 }
-                const recovered = getSession(sessionId);
-                const page = await getPageByTargetId(port, recovered.targetId);
+                const recovered = /** @type {WebAiSession} */ (getSession(sessionId));
+                const page = await getPageByTargetId(port, /** @type {string} */ (recovered.targetId));
                 if (!page) throw new Error(`Session ${sessionId} page not found after recovery`);
                 return { page, targetId: recovered.targetId, session: recovered };
             }
             throw new Error(`Session ${sessionId} tab is not valid and cannot be recovered`);
         }
 
-        const page = await getPageByTargetId(port, current.targetId);
+        const page = await getPageByTargetId(port, /** @type {string} */ (current.targetId));
         if (!page) throw new Error(`Session ${sessionId} page not found for targetId ${current.targetId}`);
         if (current.conversationUrl && page.url() !== current.conversationUrl) {
             await page.goto(current.conversationUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
