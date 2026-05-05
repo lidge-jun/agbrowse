@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * @typedef {'summary'|'json'|'full'} ContextDryRunMode
  * @typedef {'inline'|'upload'|'auto'|'none'} ContextTransportMode

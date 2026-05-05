@@ -1,3 +1,4 @@
+// @ts-check
 export const WEB_AI_VENDOR = Object.freeze({
     CHATGPT: 'chatgpt',
     GEMINI: 'gemini',

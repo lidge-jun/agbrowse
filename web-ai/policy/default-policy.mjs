@@ -1,3 +1,4 @@
+// @ts-check
 export const DEFAULT_WEB_AI_POLICY = Object.freeze({
     version: 1,
     allowedOrigins: [],

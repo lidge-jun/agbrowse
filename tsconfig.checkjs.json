@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "web-ai/types.mjs",
+    "web-ai/constants.mjs",
+    "web-ai/context-pack/types.mjs",
+    "web-ai/policy/default-policy.mjs"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}
+

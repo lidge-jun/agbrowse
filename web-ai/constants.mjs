@@ -1,3 +1,4 @@
+// @ts-check
 export const CACHE_SCHEMA_VERSION = 2;
 export const VALIDATION_THRESHOLD = 0.6;
 export const MAX_TRACE_STEPS = 200;
