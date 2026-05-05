@@ -51,7 +51,8 @@
     "web-ai/gemini-model.mjs",
     "web-ai/eval-runner.mjs",
     "web-ai/active-command-store.mjs",
-    "web-ai/chatgpt-attachments.mjs"
+    "web-ai/chatgpt-attachments.mjs",
+    "skills/browser/tab-manager.mjs"
   ],
   "exclude": [
     "node_modules",

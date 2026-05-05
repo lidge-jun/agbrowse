@@ -1,12 +1,32 @@
 /**
  * Tab Manager — self-contained (no import from browser.mjs to avoid circular deps)
  */
+// @ts-check
+/// <reference types="playwright-core" />
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
-const cdpConnections = new Map(); // port -> { browser, connectedAt }
-const tabActivity = new Map(); // targetId -> lastActiveAt timestamp
+/**
+ * @typedef {import('playwright-core').Browser} Browser
+ * @typedef {import('playwright-core').Page} Page
+ * @typedef {import('playwright-core').CDPSession} CDPSession
+ * @typedef {{ browser: Browser, connectedAt: number }} CdpConnectionEntry
+ * @typedef {{ id?: string, type?: string, url?: string, title?: string, attached?: boolean }} RawTab
+ * @typedef {{ send: (method: string, params?: Record<string, unknown>) => Promise<any>, detach: () => Promise<void> }} CdpSessionLike
+ * @typedef {{ targetId: string, url: string, title: string, activated: boolean, lastActiveAt: number|null, reusedBlank?: boolean }} CreateTabResult
+ * @typedef {{ closed: boolean, targetId: string, alreadyClosed?: boolean }} CloseTabResult
+ * @typedef {{ active: true, previousTargetId: string|undefined, currentTargetId: string, lastActiveAt: number|null }} SwitchTabResult
+ * @typedef {{ targetId: string, url: string, title: string, type: string, attached?: boolean, lastActiveAt: number|null }} ManagedTabRow
+ * @typedef {{ targetId: string, url: string, title: string, type: string }} TabInfo
+ * @typedef {{ activate?: boolean, reuseBlank?: boolean }} TabOpts
+ */
+
+/** @type {Map<number, CdpConnectionEntry>} */
+const cdpConnections = new Map();
+/** @type {Map<string, number>} */
+const tabActivity = new Map();
 let tabActivityLoaded = false;
 
 const DATA_DIR = process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
@@ -17,7 +37,7 @@ function loadTabActivity() {
     tabActivityLoaded = true;
     if (!existsSync(TAB_ACTIVITY_FILE)) return;
     try {
-        const parsed = JSON.parse(readFileSync(TAB_ACTIVITY_FILE, 'utf8'));
+        const parsed = /** @type {{ tabs?: Record<string, number> }} */ (JSON.parse(readFileSync(TAB_ACTIVITY_FILE, 'utf8')));
         for (const [targetId, lastActiveAt] of Object.entries(parsed.tabs || {})) {
             if (targetId && Number.isFinite(lastActiveAt)) tabActivity.set(targetId, lastActiveAt);
         }
@@ -32,6 +52,11 @@ function saveTabActivity() {
     writeFileSync(TAB_ACTIVITY_FILE, `${JSON.stringify({ tabs }, null, 2)}\n`);
 }
 
+/**
+ * @param {string} targetId
+ * @param {number} [at]
+ * @returns {number|null}
+ */
 export function markTabActive(targetId, at = Date.now()) {
     if (!targetId) return null;
     loadTabActivity();
@@ -40,6 +65,9 @@ export function markTabActive(targetId, at = Date.now()) {
     return at;
 }
 
+/**
+ * @param {string} targetId
+ */
 export function forgetTabActivity(targetId) {
     if (!targetId) return;
     loadTabActivity();
@@ -47,16 +75,22 @@ export function forgetTabActivity(targetId) {
     saveTabActivity();
 }
 
+/**
+ * @param {string} targetId
+ * @returns {number|null}
+ */
 export function getTabActivity(targetId) {
     loadTabActivity();
     return tabActivity.get(targetId) || null;
 }
 
+/** @returns {Promise<typeof import('playwright-core')>} */
 async function loadPlaywright() {
     try {
         return await import('playwright-core');
     } catch (error) {
-        if (error?.code === 'ERR_MODULE_NOT_FOUND' || String(error?.message || '').includes('playwright-core')) {
+        const err = /** @type {{ code?: string, message?: string }} */ (error);
+        if (err?.code === 'ERR_MODULE_NOT_FOUND' || String(err?.message || '').includes('playwright-core')) {
             throw new Error(
                 `playwright-core is required.\n` +
                 `  Fix: cd <project-root> && npm install playwright-core`
@@ -66,6 +100,10 @@ async function loadPlaywright() {
     }
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<Browser>}
+ */
 async function getBrowserForPort(port) {
     const existing = cdpConnections.get(port);
     if (existing?.browser?.isConnected?.()) return existing.browser;
@@ -77,17 +115,29 @@ async function getBrowserForPort(port) {
     return browser;
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<{ browser: Browser, cdpUrl: string }>}
+ */
 async function connectCdp(port) {
     const browser = await getBrowserForPort(port);
     return { browser, cdpUrl: `http://127.0.0.1:${port}` };
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<Page|null>}
+ */
 async function getActivePage(port) {
     const browser = await getBrowserForPort(port);
     const pages = browser.contexts().flatMap(c => c.pages());
     return pages[pages.length - 1] || null;
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<CDPSession|CdpSessionLike|null>}
+ */
 async function getCdpSession(port) {
     try {
         const page = await getActivePage(port);
@@ -97,29 +147,37 @@ async function getCdpSession(port) {
             return browser.newBrowserCDPSession();
         }
     } catch (error) {
-        if (!String(error?.message || '').includes('Browser.setDownloadBehavior')) throw error;
+        const msg = String(/** @type {{ message?: string }} */ (error)?.message || '');
+        if (!msg.includes('Browser.setDownloadBehavior')) throw error;
     }
     return createRawBrowserCdpSession(port);
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<CdpSessionLike|null>}
+ */
 async function createRawBrowserCdpSession(port) {
-    const version = await fetch(`http://127.0.0.1:${port}/json/version`).then(resp => resp.json());
+    const version = /** @type {{ webSocketDebuggerUrl?: string }} */ (await fetch(`http://127.0.0.1:${port}/json/version`).then(resp => resp.json()));
     const endpoint = version?.webSocketDebuggerUrl;
     if (!endpoint || typeof WebSocket !== 'function') return null;
     const ws = new WebSocket(endpoint);
     let nextId = 1;
+    /** @type {Map<number, { resolve: (value: any) => void, reject: (reason?: unknown) => void }>} */
     const pending = new Map();
     ws.addEventListener('message', event => {
+        /** @type {{ id?: number, error?: { message?: string }, result?: unknown } | null} */
         let payload = null;
-        try { payload = JSON.parse(String(event.data)); } catch { return; }
+        try { payload = JSON.parse(String(/** @type {{ data: unknown }} */ (event).data)); } catch { return; }
         if (!payload?.id || !pending.has(payload.id)) return;
-        const { resolve, reject } = pending.get(payload.id);
+        const entry = /** @type {{ resolve: (value: any) => void, reject: (reason?: unknown) => void }} */ (pending.get(payload.id));
+        const { resolve, reject } = entry;
         pending.delete(payload.id);
         if (payload.error) reject(new Error(payload.error.message || JSON.stringify(payload.error)));
         else resolve(payload.result || {});
     });
     await new Promise((resolve, reject) => {
-        ws.addEventListener('open', resolve, { once: true });
+        ws.addEventListener('open', () => resolve(undefined), { once: true });
         ws.addEventListener('error', reject, { once: true });
     });
     return {
@@ -137,11 +195,20 @@ async function createRawBrowserCdpSession(port) {
     };
 }
 
+/**
+ * @param {number} port
+ * @returns {Promise<RawTab[]>}
+ */
 async function listTabs(port) {
     const resp = await fetch(`http://127.0.0.1:${port}/json/list`);
-    return (await resp.json()).filter(t => t.type === 'page');
+    const all = /** @type {RawTab[]} */ (await resp.json());
+    return all.filter(t => t.type === 'page');
 }
 
+/**
+ * @param {RawTab} tab
+ * @param {RawTab[]} [allTabs]
+ */
 function isReusableBlankTab(tab, allTabs = []) {
     const url = String(tab?.url || '').toLowerCase();
     if (!tab?.id || !(url === 'about:blank' || url === '')) return false;
@@ -154,10 +221,9 @@ function isReusableBlankTab(tab, allTabs = []) {
 /**
  * Create a new browser tab and optionally navigate to URL
  * @param {number} port - CDP port
- * @param {string} url - Initial URL
- * @param {Object} opts - Options
- * @param {boolean} opts.activate - Switch to new tab immediately (default: true)
- * @returns {Promise<{targetId, url, title}>}
+ * @param {string} [url] - Initial URL
+ * @param {TabOpts} [opts] - Options
+ * @returns {Promise<CreateTabResult>}
  */
 export async function createTab(port, url = 'about:blank', opts = {}) {
     const cdp = await getCdpSession(port);
@@ -185,7 +251,8 @@ export async function createTab(port, url = 'about:blank', opts = {}) {
             }
         }
 
-        const { targetId } = await createTargetWithWindowFallback(cdp, url, opts);
+        const created = /** @type {{ targetId: string }} */ (await createTargetWithWindowFallback(cdp, url, opts));
+        const { targetId } = created;
 
         await new Promise(r => setTimeout(r, 100));
 
@@ -205,6 +272,12 @@ export async function createTab(port, url = 'about:blank', opts = {}) {
     }
 }
 
+/**
+ * @param {CDPSession|CdpSessionLike} cdp
+ * @param {string} url
+ * @param {TabOpts} [opts]
+ * @returns {Promise<{ targetId: string }>}
+ */
 async function createTargetWithWindowFallback(cdp, url, opts = {}) {
     try {
         return await cdp.send('Target.createTarget', {
@@ -213,7 +286,8 @@ async function createTargetWithWindowFallback(cdp, url, opts = {}) {
             background: !opts.activate
         });
     } catch (error) {
-        if (!String(error?.message || '').includes('no browser is open')) throw error;
+        const msg = String(/** @type {{ message?: string }} */ (error)?.message || '');
+        if (!msg.includes('no browser is open')) throw error;
         return cdp.send('Target.createTarget', {
             url,
             newWindow: true,
@@ -226,7 +300,7 @@ async function createTargetWithWindowFallback(cdp, url, opts = {}) {
  * Close a tab by targetId
  * @param {number} port - CDP port
  * @param {string} targetId - CDP target ID
- * @returns {Promise<{closed: boolean, targetId}>}
+ * @returns {Promise<CloseTabResult>}
  */
 export async function closeTab(port, targetId) {
     const cdp = await getCdpSession(port);
@@ -237,7 +311,8 @@ export async function closeTab(port, targetId) {
         forgetTabActivity(targetId);
         return { closed: true, targetId };
     } catch (error) {
-        if (error.message?.includes('No target')) {
+        const msg = /** @type {{ message?: string }} */ (error)?.message;
+        if (msg?.includes('No target')) {
             forgetTabActivity(targetId);
             return { closed: true, targetId, alreadyClosed: true };
         }
@@ -251,15 +326,15 @@ export async function closeTab(port, targetId) {
  * Switch active tab to targetId
  * @param {number} port - CDP port
  * @param {string} targetId - CDP target ID
- * @returns {Promise<{active: boolean, previousTargetId, currentTargetId}>}
+ * @returns {Promise<SwitchTabResult>}
  */
 export async function switchToTab(port, targetId) {
     const cdp = await getCdpSession(port);
     if (!cdp) throw new Error('No CDP session available for tab switch');
 
     try {
-        const { targetInfo } = await cdp.send('Target.getTargetInfo');
-        const previousTargetId = targetInfo?.targetId;
+        const info = /** @type {{ targetInfo?: { targetId?: string } }} */ (await cdp.send('Target.getTargetInfo'));
+        const previousTargetId = info?.targetInfo?.targetId;
 
         await cdp.send('Target.activateTarget', { targetId });
         const now = markTabActive(targetId);
@@ -278,17 +353,17 @@ export async function switchToTab(port, targetId) {
 /**
  * List all managed tabs with metadata
  * @param {number} port - CDP port
- * @returns {Promise<Array<{targetId, url, title, type, attached}>>}
+ * @returns {Promise<ManagedTabRow[]>}
  */
 export async function listManagedTabs(port) {
     const tabs = await listTabs(port);
     return tabs.map(t => ({
-        targetId: t.id,
-        url: t.url,
-        title: t.title,
-        type: t.type,
+        targetId: /** @type {string} */ (t.id),
+        url: /** @type {string} */ (t.url),
+        title: /** @type {string} */ (t.title),
+        type: /** @type {string} */ (t.type),
         attached: t.attached,
-        lastActiveAt: getTabActivity(t.id)
+        lastActiveAt: getTabActivity(/** @type {string} */ (t.id))
     }));
 }
 
@@ -296,7 +371,7 @@ export async function listManagedTabs(port) {
  * Get info for a specific tab
  * @param {number} port - CDP port
  * @param {string} targetId - Tab target ID
- * @returns {Promise<{targetId, url, title, type}>}
+ * @returns {Promise<TabInfo>}
  */
 export async function getTabInfo(port, targetId) {
     const tabs = await listTabs(port);
@@ -304,10 +379,10 @@ export async function getTabInfo(port, targetId) {
     if (!tab) throw new Error(`Tab not found: ${targetId}`);
 
     return {
-        targetId: tab.id,
-        url: tab.url,
-        title: tab.title,
-        type: tab.type
+        targetId: /** @type {string} */ (tab.id),
+        url: /** @type {string} */ (tab.url),
+        title: /** @type {string} */ (tab.title),
+        type: /** @type {string} */ (tab.type)
     };
 }
 
@@ -330,7 +405,7 @@ export async function isTabAlive(port, targetId) {
  * Wait for a page to be attached for a given targetId
  * @param {number} port - CDP port
  * @param {string} targetId - Tab target ID
- * @param {number} timeoutMs - Max wait time
+ * @param {number} [timeoutMs] - Max wait time
  * @returns {Promise<Page>}
  */
 export async function waitForPageByTargetId(port, targetId, timeoutMs = 10_000) {
@@ -356,8 +431,8 @@ export async function getPageByTargetId(port, targetId) {
         for (const page of context.pages()) {
             const session = await context.newCDPSession(page);
             try {
-                const { targetInfo } = await session.send('Target.getTargetInfo');
-                if (targetInfo.targetId === targetId) {
+                const info = /** @type {{ targetInfo?: { targetId?: string } }} */ (await session.send('Target.getTargetInfo'));
+                if (info.targetInfo?.targetId === targetId) {
                     markTabActive(targetId);
                     return page;
                 }
