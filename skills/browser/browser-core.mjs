@@ -1,4 +1,62 @@
+// @ts-check
+
+/**
+ * @typedef {Object} AriaYamlNode
+ * @property {string} ref
+ * @property {string} role
+ * @property {string} name
+ * @property {number} depth
+ */
+
+/**
+ * @template [T=unknown]
+ * @typedef {Object} CdpAxValue
+ * @property {T} [value]
+ */
+
+/**
+ * @typedef {Object} CdpAxNode
+ * @property {string} nodeId
+ * @property {string} [parentId]
+ * @property {boolean} [ignored]
+ * @property {CdpAxValue<string>} [role]
+ * @property {CdpAxValue<string>} [name]
+ * @property {CdpAxValue} [value]
+ */
+
+/**
+ * @typedef {Object} ParsedAxNode
+ * @property {string} ref
+ * @property {string} role
+ * @property {string} name
+ * @property {number} depth
+ * @property {unknown} [value]
+ */
+
+/**
+ * @typedef {Object} AnnotatedAxNode
+ * @property {string} ref
+ * @property {string} role
+ * @property {string} [name]
+ * @property {number} depth
+ * @property {unknown} [value]
+ * @property {number} occurrence
+ */
+
+/**
+ * @typedef {Object} HttpRequestRecord
+ * @property {string} url
+ * @property {string} method
+ * @property {string} [type]
+ * @property {string} [source]
+ */
+
+/**
+ * @param {string} yaml
+ * @returns {AriaYamlNode[]}
+ */
 export function parseAriaYaml(yaml) {
+    /** @type {AriaYamlNode[]} */
     const nodes = [];
     let counter = 0;
     for (const line of yaml.split('\n')) {
@@ -15,9 +73,15 @@ export function parseAriaYaml(yaml) {
     return nodes;
 }
 
+/**
+ * @param {CdpAxNode[]} axNodes
+ * @returns {ParsedAxNode[]}
+ */
 export function parseCdpAxTree(axNodes) {
+    /** @type {ParsedAxNode[]} */
     const nodes = [];
     let counter = 0;
+    /** @type {Record<string, number>} */
     const depthMap = {};
     for (const node of axNodes) {
         const parentDepth = node.parentId ? (depthMap[node.parentId] ?? 0) : -1;
@@ -39,7 +103,13 @@ export function parseCdpAxTree(axNodes) {
     return nodes;
 }
 
+/**
+ * @template {{ role: string, name?: string }} T
+ * @param {T[]} nodes
+ * @returns {Array<Omit<T, 'occurrence'> & { occurrence: number }>}
+ */
 export function annotateNodeOccurrences(nodes) {
+    /** @type {Map<string, number>} */
     const counts = new Map();
     return nodes.map(node => {
         const key = `${node.role}\u0000${node.name ?? ''}`;
@@ -49,12 +119,22 @@ export function annotateNodeOccurrences(nodes) {
     });
 }
 
+/**
+ * @param {HttpRequestRecord[]} requests
+ * @param {string|null|undefined} filter
+ * @returns {HttpRequestRecord[]}
+ */
 export function filterRequests(requests, filter) {
     if (!filter) return requests;
     return requests.filter(request => request.url.includes(filter));
 }
 
+/**
+ * @param {HttpRequestRecord[]} requests
+ * @returns {HttpRequestRecord[]}
+ */
 export function dedupeRequests(requests) {
+    /** @type {Set<string>} */
     const seen = new Set();
     return requests.filter(request => {
         const key = `${request.method}:${request.type || ''}:${request.url}:${request.source || ''}`;
