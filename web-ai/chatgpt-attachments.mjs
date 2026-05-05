@@ -41,7 +41,7 @@ import { statSync } from 'node:fs';
  * @property {boolean} [chipVisible]
  * @property {number} [fileCount]
  * @property {string[]} usedFallbacks
- * @property {string[]} [warnings]
+ * @property {string[]} warnings
  */
 
 /**
@@ -182,7 +182,7 @@ export async function attachLocalFileLive(page, file, options = {}) {
         chipVisible: accepted.chipVisible,
         fileCount: accepted.fileCount,
         usedFallbacks: [...usedFallbacks, ...accepted.usedFallbacks],
-        warnings: [...warnings, ...(accepted.warnings || [])],
+        warnings: [...warnings, ...accepted.warnings],
     };
 }
 
