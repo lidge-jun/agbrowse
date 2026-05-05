@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Tab Pool compatibility layer.
  *
@@ -12,6 +13,39 @@ import {
     removeLease,
 } from './tab-lease-store.mjs';
 
+/**
+ * @typedef {Object} PoolTabOptions
+ * @property {string} [owner]
+ * @property {string} [sessionType]
+ * @property {string|null} [sessionId]
+ * @property {number} [port]
+ * @property {string} [browserProfileKey]
+ * @property {number} [maxPerKey]
+ * @property {number} [globalMax]
+ * @property {number} [ttlMs]
+ */
+
+/**
+ * @typedef {Object} GetPooledTabOptions
+ * @property {string} [owner]
+ * @property {string} [sessionType]
+ * @property {string} [origin]
+ * @property {string} [url]
+ * @property {string} [browserProfileKey]
+ */
+
+/**
+ * @typedef {Object} CleanupPoolTabsOptions
+ * @property {number} [maxAgeMs]
+ * @property {string} [browserProfileKey]
+ */
+
+/**
+ * @param {string} vendor
+ * @param {string} targetId
+ * @param {string|null|undefined} url
+ * @param {PoolTabOptions} [options]
+ */
 export async function poolTab(vendor, targetId, url, options = {}) {
     if (!vendor || !targetId) return null;
     return releaseCompletedLease(options.port || 9222, {
@@ -29,6 +63,11 @@ export async function poolTab(vendor, targetId, url, options = {}) {
     });
 }
 
+/**
+ * @param {number} port
+ * @param {string} vendor
+ * @param {GetPooledTabOptions} [options]
+ */
 export async function getPooledTab(port, vendor, options = {}) {
     const lease = await checkoutPooledLease(port, {
         owner: options.owner || 'web-ai',
@@ -42,11 +81,19 @@ export async function getPooledTab(port, vendor, options = {}) {
     return lease ? { targetId: lease.targetId, url: lease.url } : null;
 }
 
+/**
+ * @param {string} vendor
+ * @param {string} targetId
+ */
 export async function unpoolTab(vendor, targetId) {
     void vendor;
     await removeLease(targetId);
 }
 
+/**
+ * @param {number} port
+ * @param {CleanupPoolTabsOptions} [options]
+ */
 export async function cleanupPoolTabs(port, options = {}) {
     return cleanupLeasedTabs(port, options);
 }

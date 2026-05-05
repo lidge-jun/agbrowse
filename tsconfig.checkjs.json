@@ -53,7 +53,8 @@
     "web-ai/active-command-store.mjs",
     "web-ai/chatgpt-attachments.mjs",
     "skills/browser/tab-manager.mjs",
-    "web-ai/tab-lease-store.mjs"
+    "web-ai/tab-lease-store.mjs",
+    "web-ai/tab-pool.mjs"
   ],
   "exclude": [
     "node_modules",
