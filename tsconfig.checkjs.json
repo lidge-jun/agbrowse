@@ -15,7 +15,8 @@
     "web-ai/trace/types.mjs",
     "web-ai/eval/types.mjs",
     "web-ai/cache-metrics.mjs",
-    "web-ai/churn-log.mjs"
+    "web-ai/churn-log.mjs",
+    "web-ai/observe-targets.mjs"
   ],
   "exclude": [
     "node_modules",
