@@ -1,3 +1,4 @@
+// @ts-check
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -9,6 +10,10 @@ import { buildWebAiSnapshot, summarizeSnapshotForDoctor } from './ax-snapshot.mj
 import { observeProviderTargets } from './observe-targets.mjs';
 import { editorContractForVendor } from './vendor-editor-contract.mjs';
 import { reportCacheMetricsFromEvents } from './cache-metrics.mjs';
+
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('./vendor-editor-contract.mjs').VendorName} VendorName */
+/** @typedef {{ feature: string, selectors: readonly string[] }} FeatureDefinition */
 
 const CHATGPT_FEATURES = [
     { feature: 'composer', selectors: ['#prompt-textarea', '[data-testid="composer-textarea"]', 'div[contenteditable="true"]'] },
@@ -37,6 +42,7 @@ const GROK_FEATURES = [
     { feature: 'streaming-indicator', selectors: ['button[aria-label*="Stop" i]'] },
 ];
 
+/** @type {Readonly<Record<string, Set<string>>>} */
 const PROVIDER_HOSTS = {
     chatgpt: new Set(['chatgpt.com', 'chat.openai.com']),
     gemini: new Set(['gemini.google.com']),
@@ -46,7 +52,12 @@ const PROVIDER_HOSTS = {
 const DEFAULT_MAX_REPORT_BYTES = 4096;
 const FULL_MAX_REPORT_BYTES = 16384;
 
+/**
+ * @param {string} vendor
+ * @returns {FeatureDefinition[]}
+ */
 export function featureDefinitionsForVendor(vendor) {
+    /** @param {FeatureDefinition} f */
     const deepCopy = f => ({ ...f, selectors: [...f.selectors] });
     switch (vendor) {
         case 'chatgpt': return CHATGPT_FEATURES.map(deepCopy);
@@ -56,8 +67,13 @@ export function featureDefinitionsForVendor(vendor) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @param {FeatureDefinition} feature
+ * @param {Record<string, any>} [options]
+ */
 export async function diagnoseFeature(page, feature, options = {}) {
-    const matches = await selectorMatchSummary(page, feature.selectors);
+    const matches = await selectorMatchSummary(page, /** @type {string[]} */ (/** @type {unknown} */ (feature.selectors)));
     const anyVisible = matches.some(m => m.visible);
     const anyMatched = matches.some(m => m.matched > 0);
     const totalMatches = matches.reduce((s, m) => s + m.matched, 0);
@@ -67,10 +83,14 @@ export async function diagnoseFeature(page, feature, options = {}) {
         selectorMatches: matches.filter(m => m.matched > 0),
         selectorCounts: { tried: feature.selectors.length, matched: matches.filter(m => m.matched > 0).length, total: totalMatches },
         state: anyVisible ? 'ok' : anyMatched ? 'warn' : 'fail',
-        domHash: await domHashAround(page, feature.selectors, options),
+        domHash: await domHashAround(page, /** @type {string[]} */ (/** @type {unknown} */ (feature.selectors)), options),
     };
 }
 
+/**
+ * @param {{ getPage: () => Promise<Page> }} deps
+ * @param {Record<string, any>} [options]
+ */
 export async function runDoctor(deps, options = {}) {
     const page = await deps.getPage();
     const vendor = options.vendor || 'chatgpt';
@@ -108,22 +128,24 @@ export async function runDoctor(deps, options = {}) {
             semanticTargets = sanitizeObservedTargetsForDoctor(
                 await observeProviderTargets(page, {
                     provider: vendor,
-                    featureMap: editorContractForVendor(vendor),
+                    featureMap: /** @type {any} */ (editorContractForVendor(vendor)),
                     snapshot,
                 }),
             );
         } catch (err) {
-            warnings.push(`snapshot-failed:${err?.errorCode || err?.message || String(err)}`);
+            const e = /** @type {any} */ (err);
+            warnings.push(`snapshot-failed:${e?.errorCode || e?.message || String(err)}`);
             snapshotSummary = {
                 enabled: false,
                 contentSafe: true,
-                errorCode: err?.errorCode || 'snapshot.failed',
-                retryHint: err?.retryHint || 're-run-without-snapshot',
+                errorCode: e?.errorCode || 'snapshot.failed',
+                retryHint: e?.retryHint || 're-run-without-snapshot',
             };
         }
     }
 
     const lastSession = findActiveSession({ vendor, conversationUrl: url });
+    /** @type {Record<string, any>} */
     const report = {
         vendor,
         url: redactUrl(url),
@@ -145,6 +167,9 @@ export async function runDoctor(deps, options = {}) {
     return clampReport(report, maxBytes);
 }
 
+/**
+ * @param {string} url
+ */
 function redactUrl(url) {
     try {
         const u = new URL(url);
@@ -154,7 +179,11 @@ function redactUrl(url) {
     }
 }
 
-function summarizeSessionForDoctor(session) {
+/**
+ * @param {any} session
+ * @param {Record<string, any>} [_options]
+ */
+function summarizeSessionForDoctor(session, _options) {
     return {
         sessionId: session.sessionId,
         status: session.status,
@@ -164,10 +193,14 @@ function summarizeSessionForDoctor(session) {
     };
 }
 
+/**
+ * @param {Record<string, any[]>} [observed]
+ */
 function sanitizeObservedTargetsForDoctor(observed = {}) {
+    /** @type {Record<string, any[]>} */
     const out = {};
     for (const [feature, candidates] of Object.entries(observed)) {
-        out[feature] = (candidates || []).slice(0, 8).map(candidate => {
+        out[feature] = (candidates || []).slice(0, 8).map(/** @param {any} candidate */ candidate => {
             const { name, ...rest } = candidate;
             return {
                 ...rest,
@@ -181,19 +214,30 @@ function sanitizeObservedTargetsForDoctor(observed = {}) {
     return out;
 }
 
+/**
+ * @param {unknown} value
+ */
 function doctorHashField(value) {
     return `sha256:${createHash('sha256').update(String(value)).digest('hex').slice(0, 12)}`;
 }
 
+/**
+ * @param {string} str
+ */
 function byteLength(str) {
     return Buffer.byteLength(str, 'utf8');
 }
 
+/**
+ * @param {Record<string, any>} report
+ * @param {number} maxBytes
+ */
 function clampReport(report, maxBytes) {
     if (byteLength(JSON.stringify(report)) <= maxBytes) return report;
     const rawBytes = byteLength(JSON.stringify(report));
+    /** @type {Record<string, any>} */
     const clamped = { ...report, truncated: true, maxBytes };
-    clamped.features = clamped.features.map(f => ({
+    clamped.features = clamped.features.map(/** @param {any} f */ f => ({
         feature: f.feature,
         selectorCounts: f.selectorCounts,
         state: f.state,
@@ -202,7 +246,7 @@ function clampReport(report, maxBytes) {
     clamped.lastSession = null;
     clamped.warnings = [...(clamped.warnings || []), `report-clamped:${rawBytes}→${maxBytes}`];
     if (byteLength(JSON.stringify(clamped)) > maxBytes) {
-        clamped.features = clamped.features.map(f => ({ feature: f.feature, state: f.state }));
+        clamped.features = clamped.features.map(/** @param {any} f */ f => ({ feature: f.feature, state: f.state }));
         clamped.warnings = [`report-clamped:${rawBytes}→${maxBytes}`];
     }
     if (byteLength(JSON.stringify(clamped)) > maxBytes) {

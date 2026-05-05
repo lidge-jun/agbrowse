@@ -19,7 +19,8 @@
     "web-ai/contract-audit.mjs",
     "web-ai/self-heal.mjs",
     "web-ai/action-intent.mjs",
-    "web-ai/target-resolver.mjs"
+    "web-ai/target-resolver.mjs",
+    "web-ai/doctor.mjs"
   ],
   "exclude": [
     "node_modules",
