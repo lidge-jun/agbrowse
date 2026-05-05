@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // smoke-bins: prove both bin shims execute and respond to --help.
 // Used in P00, P01, and every later phase to lock the bin contract.
 
