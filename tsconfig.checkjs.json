@@ -63,7 +63,8 @@
     "web-ai/tab-recovery.mjs",
     "skills/browser/tab-lifecycle.mjs",
     "scripts/smoke-bins.mjs",
-    "vitest.config.mjs"
+    "vitest.config.mjs",
+    "benchmarks/agbrowse/trajectory.mjs"
   ],
   "exclude": [
     "node_modules",
