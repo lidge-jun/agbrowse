@@ -54,7 +54,8 @@
     "web-ai/chatgpt-attachments.mjs",
     "skills/browser/tab-manager.mjs",
     "web-ai/tab-lease-store.mjs",
-    "web-ai/tab-pool.mjs"
+    "web-ai/tab-pool.mjs",
+    "skills/browser/profile-lock.mjs"
   ],
   "exclude": [
     "node_modules",
