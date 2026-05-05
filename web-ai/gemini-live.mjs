@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { basename } from 'node:path';
 import { statSync } from 'node:fs';
 import { normalizeEnvelope, renderQuestionEnvelope, renderQuestionEnvelopeWithContext } from './question.mjs';
@@ -57,18 +63,18 @@ const GEMINI_UPLOAD_SELECTORS = [
 ];
 
 export const geminiCapabilities = [
-    defineCapability('gemini-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), GEMINI_HOSTS)),
-    defineCapability('gemini-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), INPUT_SELECTORS)),
-    defineCapability('gemini-model-alias-selectable', async (deps, input) => geminiModelCapabilityProbe(await deps.getPage(), input.model)),
-    defineCapability('gemini-upload-surface-visible', async (deps, input) => {
+    defineCapability('gemini-active-tab-verification', async (/** @type {any} */ deps) => probeHostMatches(await deps.getPage(), GEMINI_HOSTS)),
+    defineCapability('gemini-composer-visible', async (/** @type {any} */ deps) => probeFirstVisibleSelector(await deps.getPage(), INPUT_SELECTORS)),
+    defineCapability('gemini-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => geminiModelCapabilityProbe(await deps.getPage(), input.model)),
+    defineCapability('gemini-upload-surface-visible', async (/** @type {any} */ deps, /** @type {any} */ input) => {
         if (!input.filePath && input.inlineOnly !== false) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), GEMINI_UPLOAD_SELECTORS, { failNext: 'inline-only' });
     }),
-    defineCapability('gemini-copy-button-present', async (deps, input) => {
+    defineCapability('gemini-copy-button-present', async (/** @type {any} */ deps, /** @type {any} */ input) => {
         if (!input.allowCopyMarkdownFallback) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), GEMINI_COPY_SELECTORS.copyButtonSelectors, { timeoutMs: 500, failNext: 'send', failState: 'warn' });
     }),
-    defineCapability('gemini-response-streaming', async (deps) => {
+    defineCapability('gemini-response-streaming', async (/** @type {any} */ deps) => {
         const page = await deps.getPage();
         for (const sel of COMPLETION_SELECTORS) {
             if (await page.locator(sel).first().isVisible().catch(() => false)) {
@@ -81,6 +87,10 @@ export const geminiCapabilities = [
     }),
 ];
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function geminiStatusWebAi(deps, input = {}) {
     const page = await deps.getPage();
     const capabilities = await runCapabilities(deps, geminiCapabilities, input);
@@ -96,6 +106,10 @@ export async function geminiStatusWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function geminiSendWebAi(deps, input = {}) {
     const page = await deps.getPage();
     if (input.url) {
@@ -134,6 +148,7 @@ export async function geminiSendWebAi(deps, input = {}) {
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelopeWithContext(envelope, undefined);
+    /** @type {any[]} */
     const usedFallbacks = [];
     const warnings = [...rendered.warnings, ...(contextPack?.warnings || [])];
 
@@ -170,13 +185,13 @@ export async function geminiSendWebAi(deps, input = {}) {
     await dismissBlockingOverlays(page, warnings);
     await clearGeminiComposerAttachments(page, warnings);
     await page.locator(inputSel).first().click({ timeout: 5_000 });
-    await page.evaluate(({ selector, text }) => {
+    await page.evaluate((/** @type {{selector:string,text:string}} */ {selector, text}) => {
         const el = document.querySelector(selector);
         if (!el) throw new Error(`selector not found: ${selector}`);
         const target = el.shadowRoot?.querySelector('[contenteditable="true"], textarea') || el;
         target.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: text, bubbles: true, cancelable: true }));
         document.execCommand?.('insertText', false, text);
-        if (!String(target.textContent || target.value || '').includes(text.slice(0, 20))) {
+        if (!String(target.textContent || (/** @type {any} */ (target)).value || '').includes(text.slice(0, 20))) {
             target.textContent = text;
             target.dispatchEvent(new InputEvent('input', { data: text, bubbles: true }));
         }
@@ -193,7 +208,7 @@ export async function geminiSendWebAi(deps, input = {}) {
             mutationAllowed: true,
         });
         usedFallbacks.push(...uploaded.usedFallbacks);
-        warnings.push(...uploaded.warnings);
+        warnings.push(...(/** @type {any[]} */ (uploaded.warnings)));
     }
 
     const sendSel = await findFirstSelector(page, SEND_SELECTORS, 5_000);
@@ -260,13 +275,21 @@ export async function geminiSendWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {any} filePath
+ */
 function fileInfoFromPath(filePath) {
     const stat = statSync(filePath);
     if (!stat.isFile()) throw new Error(`not a regular file: ${filePath}`);
     return { path: filePath, basename: basename(filePath), sizeBytes: stat.size };
 }
 
+/**
+ * @param {any} page
+ * @param {any} file
+ */
 async function attachGeminiLocalFileLive(page, file) {
+    /** @type {any[]} */
     const usedFallbacks = [];
     const warnings = [];
     const preflight = preflightAttachment(file);
@@ -286,14 +309,18 @@ async function attachGeminiLocalFileLive(page, file) {
         const chooser = await chooserPromise;
         await chooser.setFiles(file.path);
     } catch (e) {
-        usedFallbacks.push(`gemini-filechooser-failed:${e.message}`);
-        return { ok: false, error: `gemini file chooser upload failed: ${e.message}`, usedFallbacks };
+        usedFallbacks.push(`gemini-filechooser-failed:${(/** @type {any} */ (e)).message}`);
+        return { ok: false, error: `gemini file chooser upload failed: ${(/** @type {any} */ (e)).message}`, usedFallbacks };
     }
     const accepted = await waitForGeminiAttachmentAccepted(page, file);
     if (!accepted.ok) return { ok: false, error: accepted.error, usedFallbacks };
     return { ok: true, usedFallbacks, warnings };
 }
 
+/**
+ * @param {any} page
+ * @param {any} expectedFile
+ */
 async function waitForGeminiAttachmentAccepted(page, expectedFile) {
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline) {
@@ -304,17 +331,25 @@ async function waitForGeminiAttachmentAccepted(page, expectedFile) {
     return { ok: false, error: 'gemini attachment never showed visible chip' };
 }
 
+/**
+ * @param {any} page
+ * @param {any} warnings
+ */
 async function clearGeminiComposerAttachments(page, warnings) {
     const removeButtons = await page.locator('button[aria-label^="Remove file"]').all().catch(() => []);
     for (const button of removeButtons) {
         try {
             await button.click({ timeout: 2_000 });
         } catch (e) {
-            warnings.push(`gemini attachment remove failed: ${e.message}`);
+            warnings.push(`gemini attachment remove failed: ${(/** @type {any} */ (e)).message}`);
         }
     }
 }
 
+/**
+ * @param {any} page
+ * @param {any} expectedFile
+ */
 async function verifyGeminiSentTurnAttachment(page, expectedFile) {
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
@@ -324,6 +359,10 @@ async function verifyGeminiSentTurnAttachment(page, expectedFile) {
     return { ok: false, error: 'Gemini sent turn has no attachment evidence' };
 }
 
+/**
+ * @param {any} page
+ * @param {any} expectedFile
+ */
 async function hasGeminiAttachmentEvidence(page, expectedFile) {
     const expected = [expectedFile.basename, stripExtension(expectedFile.basename), expectedFile.basename.replace(/\(\d+\)(?=\.)/, '')].filter(Boolean);
     const bodyText = await page.innerText('body').catch(() => '');
@@ -338,11 +377,18 @@ async function hasGeminiAttachmentEvidence(page, expectedFile) {
     return chipCount > 0;
 }
 
+/**
+ * @param {any} name
+ */
 function stripExtension(name) {
     const idx = name.lastIndexOf('.');
     return idx < 0 ? name : name.slice(0, idx);
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function geminiPollWebAi(deps, input = {}) {
     const page = await deps.getPage();
     if (!isGeminiUrl(page.url())) throw new WebAiError({
@@ -381,6 +427,7 @@ export async function geminiPollWebAi(deps, input = {}) {
                 continue;
             }
             let answerText = next;
+            /** @type {any[]} */
             const usedFallbacks = [];
             const warnings = [];
             if (input.allowCopyMarkdownFallback === true) {
@@ -390,11 +437,11 @@ export async function geminiPollWebAi(deps, input = {}) {
                     answerText = normalizeGeminiResponseText(copiedText);
                     usedFallbacks.push('copy-markdown');
                 } else {
-                    warnings.push(`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`);
+                    warnings.push(`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`);
                 }
             }
             if (session) {
-                await finalizeProviderTab(deps, { vendor: 'gemini', session, page, answerText, warnings });
+                await finalizeProviderTab(deps, { vendor: 'gemini', session: /** @type {any} */ (session), page, answerText, warnings });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -414,6 +461,10 @@ export async function geminiPollWebAi(deps, input = {}) {
     return { ok: false, vendor: 'gemini', status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for gemini response' };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function geminiQueryWebAi(deps, input = {}) {
     const sent = await geminiSendWebAi(deps, input);
     const result = await geminiPollWebAi(deps, {
@@ -429,17 +480,28 @@ export async function geminiQueryWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {any} deps
+ */
 export async function geminiStopWebAi(deps) {
     const page = await deps.getPage();
     await page.keyboard.press('Escape').catch(() => undefined);
     return { ok: true, vendor: 'gemini', status: 'blocked', url: page.url(), warnings: ['sent Escape'] };
 }
 
+/**
+ * @param {any} url
+ */
 function isGeminiUrl(url) {
     try { return GEMINI_HOSTS.has(new URL(url).hostname.replace(/^www\./, '')); }
     catch { return false; }
 }
 
+/**
+ * @param {any} page
+ * @param {any} usedFallbacks
+ * @param {any} warnings
+ */
 async function ensureDeepThinkMode(page, usedFallbacks, warnings) {
     if (await isDeepThinkToolActive(page)) return true;
     const clickedTools = await clickToolsButton(page);
@@ -448,7 +510,7 @@ async function ensureDeepThinkMode(page, usedFallbacks, warnings) {
         warnings.push('tools button not found');
         return false;
     }
-    if (toolsSel) await page.locator(toolsSel).first().click({ timeout: 5_000 }).catch(e => warnings.push(`tools click failed: ${e.message}`));
+    if (toolsSel) await page.locator(toolsSel).first().click({ timeout: 5_000 }).catch((/** @type {any} */ e) => warnings.push(`tools click failed: ${e.message}`));
     await page.waitForTimeout(300).catch(() => undefined);
     if (await clickDeepThinkMenuItem(page)) {
         await page.waitForTimeout(700).catch(() => undefined);
@@ -475,11 +537,14 @@ async function ensureDeepThinkMode(page, usedFallbacks, warnings) {
         return isDeepThinkToolActive(page);
     } catch (e) {
         usedFallbacks.push('deep-think-click-failed');
-        warnings.push(`Deep think tool click failed: ${e.message}`);
+        warnings.push(`Deep think tool click failed: ${(/** @type {any} */ (e)).message}`);
         return false;
     }
 }
 
+/**
+ * @param {any} page
+ */
 async function clickToolsButton(page) {
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
@@ -498,6 +563,9 @@ async function clickToolsButton(page) {
     return false;
 }
 
+/**
+ * @param {any} page
+ */
 async function clickDeepThinkMenuItem(page) {
     const items = await page.locator('[role="menuitemcheckbox"], [role="menuitem"], button').all().catch(() => []);
     for (const item of items) {
@@ -511,6 +579,10 @@ async function clickDeepThinkMenuItem(page) {
     return false;
 }
 
+/**
+ * @param {any} page
+ * @param {any} warnings
+ */
 async function openFreshGeminiChat(page, warnings) {
     const beforeUrl = page.url();
     const newChatSel = await findFirstSelector(page, NEW_CHAT_SELECTORS, 5_000);
@@ -533,6 +605,9 @@ async function openFreshGeminiChat(page, warnings) {
     }
 }
 
+/**
+ * @param {any} page
+ */
 async function isDeepThinkToolActive(page) {
     for (const sel of DEEP_THINK_ACTIVE_SELECTORS) {
         if (await page.locator(sel).first().isVisible().catch(() => false)) return true;
@@ -540,17 +615,26 @@ async function isDeepThinkToolActive(page) {
     return false;
 }
 
+/**
+ * @param {any} page
+ * @param {any} warnings
+ */
 async function dismissBlockingOverlays(page, warnings) {
     const backdrop = page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').first();
     if (!await backdrop.isVisible().catch(() => false)) return;
     await page.keyboard.press('Escape').catch(() => undefined);
     await page.waitForTimeout(250).catch(() => undefined);
     if (await backdrop.isVisible().catch(() => false)) {
-        await backdrop.click({ timeout: 2_000, force: true }).catch(e => warnings.push(`overlay backdrop dismiss failed: ${e.message}`));
+        await backdrop.click({ timeout: 2_000, force: true }).catch((/** @type {any} */ e) => warnings.push(`overlay backdrop dismiss failed: ${e.message}`));
     }
     if (await backdrop.isVisible().catch(() => false)) warnings.push('overlay backdrop remained visible before composer focus');
 }
 
+/**
+ * @param {any} page
+ * @param {any} selectors
+ * @param {any} timeoutMs
+ */
 async function findFirstSelector(page, selectors, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -563,10 +647,16 @@ async function findFirstSelector(page, selectors, timeoutMs) {
     return null;
 }
 
+/**
+ * @param {any} page
+ */
 async function countResponses(page) {
     return (await readResponses(page)).length;
 }
 
+/**
+ * @param {any} page
+ */
 async function readResponses(page) {
     for (const sel of RESPONSE_SELECTORS) {
         const locs = await page.locator(sel).all().catch(() => []);
@@ -586,6 +676,9 @@ async function readResponses(page) {
     return [];
 }
 
+/**
+ * @param {any} text
+ */
 function normalizeGeminiResponseText(text) {
     return String(text || '')
         .split('\n')
@@ -595,10 +688,16 @@ function normalizeGeminiResponseText(text) {
         .trim();
 }
 
+/**
+ * @param {any} text
+ */
 function isPendingDeepThinkText(text) {
     return /(?:responses with deep think can take some time|generating your response|check back later|i'?m on it)/i.test(String(text || ''));
 }
 
+/**
+ * @param {any} page
+ */
 async function hasCompletionSignal(page) {
     for (const sel of COMPLETION_SELECTORS) {
         if ((await page.locator(sel).count().catch(() => 0)) > 0) return true;
@@ -606,9 +705,12 @@ async function hasCompletionSignal(page) {
     return (await page.locator('[role="progressbar"]').count().catch(() => 0)) === 0;
 }
 
+/**
+ * @param {any} contextPack
+ */
 function summarizeContextPack(contextPack) {
     return {
-        files: contextPack.files.map(file => ({
+        files: contextPack.files.map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
