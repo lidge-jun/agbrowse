@@ -68,7 +68,7 @@ export const GROK_COPY_SELECTORS = {
 export async function captureCopiedResponseText(page, selectors, options = {}) {
     const selectorSet = copySelectorsWithTarget(selectors, options.copyTarget ?? null);
     try {
-        const result = /** @type {CaptureCopyResult|undefined} */ (await page.evaluate?.(
+        const result = await page.evaluate?.(
             /**
              * @param {{ selectorSet: CopySelectors, timeoutMs: number, stableTicks: number }} args
              * @returns {Promise<CaptureCopyResult>}
@@ -162,7 +162,7 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                 timeoutMs: Math.max(250, options.timeoutMs ?? 1500),
                 stableTicks: Math.max(1, options.stableTicks ?? 3),
             },
-        ));
+        );
         if (result?.ok && typeof result.text === 'string' && result.text.trim()) return { ok: true, text: result.text };
         const status = (result && !result.ok) ? result.status : 'empty';
         const errField = (result && !result.ok && result.error) ? { error: String(result.error) } : {};

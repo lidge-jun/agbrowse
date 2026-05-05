@@ -8,7 +8,6 @@
   },
   "include": [
     "types/**/*.d.ts",
-    "web-ai/observe-targets.mjs",
     "web-ai/dom-hash.mjs",
     "web-ai/copy-markdown.mjs"
   ],
