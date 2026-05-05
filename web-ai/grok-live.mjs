@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { normalizeEnvelope, renderQuestionEnvelope, renderQuestionEnvelopeWithContext } from './question.mjs';
 import {
     bindSessionToTab,
@@ -46,18 +52,18 @@ const GROK_UPLOAD_SELECTORS = [
 ];
 
 export const grokCapabilities = [
-    defineCapability('grok-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), GROK_HOSTS)),
-    defineCapability('grok-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), COMPOSER_SELECTORS)),
-    defineCapability('grok-model-alias-selectable', async (deps, input) => grokModelCapabilityProbe(await deps.getPage(), input.model)),
-    defineCapability('grok-upload-surface-visible', async (deps, input) => {
+    defineCapability('grok-active-tab-verification', async (/** @type {Deps} */ deps) => probeHostMatches(await deps.getPage(), GROK_HOSTS)),
+    defineCapability('grok-composer-visible', async (/** @type {Deps} */ deps) => probeFirstVisibleSelector(await deps.getPage(), COMPOSER_SELECTORS)),
+    defineCapability('grok-model-alias-selectable', async (/** @type {Deps} */ deps, /** @type {Input} */ input) => grokModelCapabilityProbe(await deps.getPage(), input.model)),
+    defineCapability('grok-upload-surface-visible', async (/** @type {Deps} */ deps, /** @type {Input} */ input) => {
         if (!input.filePath && input.inlineOnly !== false) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), GROK_UPLOAD_SELECTORS, { failNext: 'inline-only' });
     }),
-    defineCapability('grok-copy-button-present', async (deps, input) => {
+    defineCapability('grok-copy-button-present', async (/** @type {Deps} */ deps, /** @type {Input} */ input) => {
         if (!input.allowCopyMarkdownFallback) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), GROK_COPY_SELECTORS.copyButtonSelectors, { timeoutMs: 500, failNext: 'send', failState: 'warn' });
     }),
-    defineCapability('grok-response-streaming', async (deps) => {
+    defineCapability('grok-response-streaming', async (/** @type {Deps} */ deps) => {
         const page = await deps.getPage();
         for (const sel of STOP_SELECTORS) {
             if (await page.locator(sel).first().isVisible().catch(() => false)) {
@@ -68,6 +74,10 @@ export const grokCapabilities = [
     }),
 ];
 
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ */
 export async function grokStatusWebAi(deps, input = {}) {
     const page = await deps.getPage();
     const capabilities = await runCapabilities(deps, grokCapabilities, input);
@@ -83,6 +93,10 @@ export async function grokStatusWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ */
 export async function grokSendWebAi(deps, input = {}) {
     const page = await deps.getPage();
     if (input.url) await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -216,6 +230,10 @@ export async function grokSendWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ */
 export async function grokPollWebAi(deps, input = {}) {
     const page = await deps.getPage();
     if (!isGrokUrl(page.url())) throw new WebAiError({
@@ -264,11 +282,11 @@ export async function grokPollWebAi(deps, input = {}) {
                             answerText = cleanGrokResponseText(copiedText);
                             usedFallbacks.push('copy-markdown');
                         } else {
-                            warnings.push(`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`);
+                            warnings.push(`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`);
                         }
                     }
                     if (session) {
-                        await finalizeProviderTab(deps, { vendor: 'grok', session, page, answerText, warnings });
+                        await finalizeProviderTab(deps, { vendor: 'grok', session: /** @type {any} */ (session), page, answerText, warnings });
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -297,6 +315,10 @@ export async function grokPollWebAi(deps, input = {}) {
     return { ok: false, vendor: 'grok', status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for grok response' };
 }
 
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ */
 export async function grokQueryWebAi(deps, input = {}) {
     const sent = await grokSendWebAi(deps, input);
     const result = await grokPollWebAi(deps, {
@@ -312,17 +334,27 @@ export async function grokQueryWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {Deps} deps
+ */
 export async function grokStopWebAi(deps) {
     const page = await deps.getPage();
     await page.keyboard.press('Escape').catch(() => undefined);
     return { ok: true, vendor: 'grok', status: 'blocked', url: page.url(), warnings: ['sent Escape'] };
 }
 
+/**
+ * @param {string} url
+ */
 function isGrokUrl(url) {
     try { return GROK_HOSTS.has(new URL(url).hostname.replace(/^www\./, '')); }
     catch { return false; }
 }
 
+/**
+ * @param {Page} page
+ * @param {any[]} warnings
+ */
 async function openFreshGrokChat(page, warnings) {
     const existingTurns = await countResponses(page);
     if (existingTurns === 0) return;
@@ -344,19 +376,27 @@ async function openFreshGrokChat(page, warnings) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @param {string} composerSel
+ * @param {string} text
+ */
 async function insertGrokPrompt(page, composerSel, text) {
     const composer = page.locator(composerSel).first();
     await composer.click({ timeout: 5_000 }).catch(() => composer.click({ timeout: 2_000, force: true }));
-    await page.evaluate(({ selector, value }) => {
+    await page.evaluate((/** @type {{selector:string,value:string}} */ {selector, value}) => {
         const el = document.querySelector(selector);
         if (!el) throw new Error(`selector not found: ${selector}`);
-        el.focus();
-        document.execCommand('selectAll', false, null);
+        /** @type {any} */ (el).focus();
+        document.execCommand('selectAll', false, /** @type {any} */ (null));
         document.execCommand('insertText', false, value);
         el.dispatchEvent(new InputEvent('input', { data: value, inputType: 'insertText', bubbles: true }));
     }, { selector: composerSel, value: text });
 }
 
+/**
+ * @param {Page} page
+ */
 async function clickGrokSubmit(page) {
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
@@ -385,6 +425,10 @@ async function clickGrokSubmit(page) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @param {any} expectedFile
+ */
 async function verifyGrokSentTurnAttachment(page, expectedFile) {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -395,6 +439,10 @@ async function verifyGrokSentTurnAttachment(page, expectedFile) {
     return readGrokSentTurnAttachmentEvidence(page, expectedFile);
 }
 
+/**
+ * @param {Page} page
+ * @param {any} expectedFile
+ */
 async function readGrokSentTurnAttachmentEvidence(page, expectedFile) {
     const turn = page.locator(USER_SELECTOR).last();
     if ((await turn.count().catch(() => 0)) === 0) {
@@ -404,7 +452,7 @@ async function readGrokSentTurnAttachmentEvidence(page, expectedFile) {
     if (text.includes(expectedFile.basename) || text.includes(stripExtension(expectedFile.basename))) {
         return { ok: true };
     }
-    const siblingEvidence = await turn.evaluate((el, selectors) => {
+    const siblingEvidence = await turn.evaluate((/** @type {any} */ el, /** @type {string[]} */ selectors) => {
         const root = el.closest('[id^="response-"]') || el.parentElement;
         if (!root) return false;
         const selectorList = selectors.join(',');
@@ -422,6 +470,11 @@ async function readGrokSentTurnAttachmentEvidence(page, expectedFile) {
     return { ok: false, error: 'Grok sent turn has no attachment evidence' };
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} selectors
+ * @param {number} [timeoutMs]
+ */
 async function findFirstSelector(page, selectors, timeoutMs = 10_000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -434,14 +487,20 @@ async function findFirstSelector(page, selectors, timeoutMs = 10_000) {
     return null;
 }
 
+/**
+ * @param {Page} page
+ */
 async function countResponses(page) {
     return (await readResponses(page)).length;
 }
 
+/**
+ * @param {Page} page
+ */
 async function readResponses(page) {
-    return await page.locator(ASSISTANT_SELECTOR).evaluateAll((turns, textSelector) => {
+    return await page.locator(ASSISTANT_SELECTOR).evaluateAll((/** @type {any[]} */ turns, /** @type {string} */ textSelector) => {
         return turns
-            .map((turn) => {
+            .map((/** @type {any} */ turn) => {
                 const textNodes = Array.from(turn.querySelectorAll(String(textSelector)));
                 const candidates = textNodes.length ? textNodes : [turn];
                 return candidates
@@ -449,9 +508,12 @@ async function readResponses(page) {
                     .find(Boolean) || '';
             })
             .filter(Boolean);
-    }, RESPONSE_TEXT_SELECTOR).then(items => items.map(cleanGrokResponseText).filter(Boolean)).catch(() => []);
+    }, RESPONSE_TEXT_SELECTOR).then((/** @type {any[]} */ items) => items.map(cleanGrokResponseText).filter(Boolean)).catch(() => []);
 }
 
+/**
+ * @param {Page} page
+ */
 async function isStreaming(page) {
     for (const selector of STOP_SELECTORS) {
         if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
@@ -459,6 +521,9 @@ async function isStreaming(page) {
     return false;
 }
 
+/**
+ * @param {string} text
+ */
 function cleanGrokResponseText(text) {
     return String(text || '')
         .split('\n')
@@ -468,11 +533,17 @@ function cleanGrokResponseText(text) {
         .trim();
 }
 
+/**
+ * @param {string} name
+ */
 function stripExtension(name) {
     const idx = name.lastIndexOf('.');
     return idx < 0 ? name : name.slice(0, idx);
 }
 
+/**
+ * @param {any} contextPack
+ */
 function summarizeContextPack(contextPack) {
     if (!contextPack) return undefined;
     return {
@@ -481,6 +552,6 @@ function summarizeContextPack(contextPack) {
         totalEstimatedTokens: contextPack.totalEstimatedTokens,
         includedFiles: contextPack.includedFiles?.length || 0,
         truncatedFiles: contextPack.truncatedFiles?.length || 0,
-        attachments: contextPack.attachments?.map(attachment => ({ path: attachment.displayPath || attachment.path, bytes: attachment.bytes })) || [],
+        attachments: contextPack.attachments?.map((/** @type {any} */ attachment) => ({ path: attachment.displayPath || attachment.path, bytes: attachment.bytes })) || [],
     };
 }

@@ -20,7 +20,8 @@
     "web-ai/self-heal.mjs",
     "web-ai/action-intent.mjs",
     "web-ai/target-resolver.mjs",
-    "web-ai/doctor.mjs"
+    "web-ai/doctor.mjs",
+    "web-ai/grok-live.mjs"
   ],
   "exclude": [
     "node_modules",
