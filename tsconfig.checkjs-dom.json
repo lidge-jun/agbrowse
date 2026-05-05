@@ -12,7 +12,8 @@
     "web-ai/post-action-assert.mjs",
     "web-ai/browser-primitives.mjs",
     "web-ai/copy-markdown.mjs",
-    "web-ai/ax-snapshot.mjs"
+    "web-ai/ax-snapshot.mjs",
+    "web-ai/chatgpt-model.mjs"
   ],
   "exclude": [
     "node_modules",
