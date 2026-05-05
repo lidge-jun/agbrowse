@@ -207,7 +207,7 @@ export function summarizeSnapshotForDoctor(snapshot, { maxRefs = 8 } = {}) {
  */
 async function captureAccessibilitySnapshot(page, { interactiveOnly, rootSelector }) {
     const ax = /** @type {{ snapshot?: (opts: { interestingOnly?: boolean, root?: unknown }) => Promise<AxNode|null> } | undefined} */ (
-        /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (page)).accessibility
+        /** @type {{ accessibility?: unknown } | null | undefined} */ (/** @type {unknown} */ (page))?.accessibility
     );
     if (!ax || typeof ax.snapshot !== 'function') {
         throw new WebAiError({
