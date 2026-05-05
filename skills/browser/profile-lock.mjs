@@ -26,7 +26,7 @@ const STALE_AFTER_MS = 5 * 60 * 1000;
  */
 export function isPidAlive(pid) {
     if (!pid || typeof pid !== 'number') return false;
-    try { process.kill(pid, 0); return true; } catch (e) { return /** @type {{ code?: string }} */ (e)?.code === 'EPERM'; }
+    try { process.kill(pid, 0); return true; } catch (e) { return /** @type {{ code?: string }} */ (e).code === 'EPERM'; }
 }
 
 /**
