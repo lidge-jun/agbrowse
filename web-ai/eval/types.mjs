@@ -1,3 +1,15 @@
+// @ts-check
+
+/**
+ * @typedef {Error & {
+ *   errorCode: string,
+ *   stage: string,
+ *   mutationAllowed: boolean,
+ *   evidence: Record<string, unknown>,
+ *   toJSON: () => Record<string, unknown>,
+ * }} WebAiEvalError
+ */
+
 export const EVAL_SCHEMA_VERSION = 1;
 export const DEFAULT_MAX_FIXTURE_CONCURRENCY = 1;
 export const MAX_FIXTURE_CONCURRENCY = 4;
@@ -8,6 +20,10 @@ export const DEFAULT_EVAL_RUN_VARIANTS = ['baseline', 'cosmetic-churn', 'structu
 export const EVAL_VENDOR_SET = new Set(EVAL_VENDORS);
 export const EVAL_VARIANT_SET = new Set(EVAL_VARIANTS);
 
+/**
+ * @param {string} [vendor]
+ * @returns {string}
+ */
 export function normalizeEvalVendor(vendor = 'chatgpt') {
     const normalized = String(vendor || 'chatgpt').trim().toLowerCase();
     if (!EVAL_VENDOR_SET.has(normalized)) {
@@ -19,6 +35,10 @@ export function normalizeEvalVendor(vendor = 'chatgpt') {
     return normalized;
 }
 
+/**
+ * @param {string} [variant]
+ * @returns {string}
+ */
 export function normalizeEvalVariant(variant = 'baseline') {
     const normalized = String(variant || 'baseline').trim().toLowerCase();
     if (!EVAL_VARIANT_SET.has(normalized)) {
@@ -30,6 +50,11 @@ export function normalizeEvalVariant(variant = 'baseline') {
     return normalized;
 }
 
+/**
+ * @param {unknown} value
+ * @param {{ defaultValue?: number, max?: number }} [options]
+ * @returns {number}
+ */
 export function parseFixtureConcurrency(value, {
     defaultValue = DEFAULT_MAX_FIXTURE_CONCURRENCY,
     max = MAX_FIXTURE_CONCURRENCY,
@@ -45,6 +70,11 @@ export function parseFixtureConcurrency(value, {
     return parsed;
 }
 
+/**
+ * @param {number|string} numerator
+ * @param {number|string} denominator
+ * @param {number} [threshold]
+ */
 export function makeRatioMetric(numerator, denominator, threshold) {
     const safeNumerator = Number(numerator);
     const safeDenominator = Number(denominator);
@@ -57,8 +87,15 @@ export function makeRatioMetric(numerator, denominator, threshold) {
     };
 }
 
+/**
+ * @param {string} errorCode
+ * @param {string} stage
+ * @param {string} message
+ * @param {Record<string, unknown>} [evidence]
+ * @returns {WebAiEvalError}
+ */
 export function createEvalError(errorCode, stage, message, evidence = {}) {
-    const error = new Error(message);
+    const error = /** @type {WebAiEvalError} */ (new Error(message));
     error.name = 'WebAiEvalError';
     error.errorCode = errorCode;
     error.stage = stage;
@@ -75,14 +112,19 @@ export function createEvalError(errorCode, stage, message, evidence = {}) {
     return error;
 }
 
+/**
+ * @param {unknown} error
+ * @returns {Record<string, unknown>}
+ */
 export function serializeEvalError(error) {
-    if (typeof error?.toJSON === 'function') return error.toJSON();
+    const e = /** @type {Partial<WebAiEvalError>} */ (error);
+    if (typeof e?.toJSON === 'function') return e.toJSON();
     return {
-        name: error?.name || 'Error',
-        errorCode: error?.errorCode || 'eval.unhandled',
-        stage: error?.stage || 'eval',
-        message: error?.message || String(error),
+        name: e?.name || 'Error',
+        errorCode: e?.errorCode || 'eval.unhandled',
+        stage: e?.stage || 'eval',
+        message: e?.message || String(error),
         mutationAllowed: false,
-        evidence: error?.evidence || {},
+        evidence: e?.evidence || {},
     };
 }

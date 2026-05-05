@@ -10,7 +10,12 @@
     "web-ai/types.mjs",
     "web-ai/constants.mjs",
     "web-ai/context-pack/types.mjs",
-    "web-ai/policy/default-policy.mjs"
+    "web-ai/policy/default-policy.mjs",
+    "web-ai/trace/redact.mjs",
+    "web-ai/trace/types.mjs",
+    "web-ai/eval/types.mjs",
+    "web-ai/cache-metrics.mjs",
+    "web-ai/churn-log.mjs"
   ],
   "exclude": [
     "node_modules",
