@@ -313,7 +313,7 @@ export function incrementRecoveryCount(sessionId) {
     const session = getSession(sessionId);
     if (!session) return null;
 
-    const current = Number(session.tabState?.recoveryCount) || 0;
+    const current = /** @type {number} */ (session.tabState?.recoveryCount || 0);
     return updateSessionTabState(sessionId, { recoveryCount: current + 1 });
 }
 

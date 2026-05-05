@@ -5,7 +5,20 @@ import { WebAiError } from '../errors.mjs';
 import { DEFAULT_WEB_AI_POLICY } from './default-policy.mjs';
 
 /**
- * @typedef {typeof DEFAULT_WEB_AI_POLICY} WebAiPolicy
+ * @typedef {{
+ *   version: 1,
+ *   allowedOrigins: string[],
+ *   deniedOrigins: string[],
+ *   allowDownloads: boolean,
+ *   allowUploads: string,
+ *   allowClipboardRead: boolean,
+ *   allowClipboardWrite: string,
+ *   allowEvaluate: boolean,
+ *   allowFileAccess: boolean,
+ *   allowCrossOriginNavigation: string,
+ *   destructiveFormPolicy: string,
+ *   promptInjectionBoundary: string,
+ * }} WebAiPolicy
  */
 
 const POLICY_KEYS = new Set(Object.keys(DEFAULT_WEB_AI_POLICY));
