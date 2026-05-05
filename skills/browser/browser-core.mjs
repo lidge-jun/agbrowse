@@ -9,8 +9,9 @@
  */
 
 /**
+ * @template [T=unknown]
  * @typedef {Object} CdpAxValue
- * @property {string} [value]
+ * @property {T} [value]
  */
 
 /**
@@ -18,8 +19,8 @@
  * @property {string} nodeId
  * @property {string} [parentId]
  * @property {boolean} [ignored]
- * @property {CdpAxValue} [role]
- * @property {CdpAxValue} [name]
+ * @property {CdpAxValue<string>} [role]
+ * @property {CdpAxValue<string>} [name]
  * @property {CdpAxValue} [value]
  */
 
@@ -29,7 +30,7 @@
  * @property {string} role
  * @property {string} name
  * @property {number} depth
- * @property {string} [value]
+ * @property {unknown} [value]
  */
 
 /**
@@ -38,7 +39,7 @@
  * @property {string} role
  * @property {string} [name]
  * @property {number} depth
- * @property {string} [value]
+ * @property {unknown} [value]
  * @property {number} occurrence
  */
 
@@ -105,7 +106,7 @@ export function parseCdpAxTree(axNodes) {
 /**
  * @template {{ role: string, name?: string }} T
  * @param {T[]} nodes
- * @returns {Array<T & { occurrence: number }>}
+ * @returns {Array<Omit<T, 'occurrence'> & { occurrence: number }>}
  */
 export function annotateNodeOccurrences(nodes) {
     /** @type {Map<string, number>} */

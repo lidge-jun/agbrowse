@@ -3,9 +3,9 @@
 VERDICT-B per-file `// @ts-check`. Pure-function leaf (no internal imports, no node built-ins). 65 lines.
 
 ## Annotations
-- 6 typedefs: `AriaYamlNode`, `CdpAxValue`, `CdpAxNode`, `ParsedAxNode`, `AnnotatedAxNode`, `HttpRequestRecord`.
+- 6 typedefs: `AriaYamlNode`, generic `CdpAxValue<T=unknown>`, `CdpAxNode`, `ParsedAxNode`, `AnnotatedAxNode`, `HttpRequestRecord`.
 - JSDoc on all 5 exported functions.
-- `annotateNodeOccurrences` typed as generic `<T extends { role, name? }>` returning `T & { occurrence: number }`.
+- `annotateNodeOccurrences` typed as generic `<T extends { role, name? }>` returning `Omit<T, 'occurrence'> & { occurrence: number }`.
 - Inline locals: `Map<string, number>`, `Set<string>`, `Record<string, number>` for module state widening.
 
 ## Runtime
