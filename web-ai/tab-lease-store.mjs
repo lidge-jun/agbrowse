@@ -1,8 +1,61 @@
+// @ts-check
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { closeTab, isTabAlive } from '../skills/browser/tab-manager.mjs';
 import { activeCommandTargetIds } from './active-command-store.mjs';
+
+/**
+ * @typedef {{
+ *   owner: string,
+ *   vendor: string,
+ *   sessionType: string,
+ *   origin: string,
+ *   browserProfileKey: string,
+ *   targetId: string,
+ *   sessionId: string|null,
+ *   url: string|null,
+ *   state: string,
+ *   leasedAt: string,
+ *   pooledAt: string|null,
+ *   finalizedAt: string|null,
+ *   poolExpiresAt: string|null,
+ *   leaseDisposition: string|null,
+ *   updatedAt: string,
+ *   leaseKey: string,
+ *   closePreviousState?: string,
+ *   cleanupReason?: string,
+ *   closeFailedAt?: string,
+ * }} Lease
+ *
+ * @typedef {{
+ *   owner?: string,
+ *   vendor?: string,
+ *   sessionType?: string,
+ *   origin?: string,
+ *   url?: string|null,
+ *   browserProfileKey?: string,
+ *   port?: string|number,
+ *   targetId?: string,
+ *   sessionId?: string|null,
+ *   state?: string,
+ *   leasedAt?: string,
+ *   pooledAt?: string|null,
+ *   finalizedAt?: string|null,
+ *   poolExpiresAt?: string|null,
+ *   leaseDisposition?: string|null,
+ *   updatedAt?: string,
+ *   leaseKey?: string,
+ *   ttlMs?: number,
+ *   maxPerKey?: number,
+ *   globalMax?: number,
+ *   completedSessions?: boolean,
+ *   now?: number,
+ * }} LeaseInput
+ *
+ * @typedef {{ targetId?: string, vendor?: string, owner?: string, state?: string }} ListLeasesFilter
+ * @typedef {{ version: number, leases: Lease[] }} StoreFile
+ */
 
 const STORE_VERSION = 1;
 const LOCK_RETRY_MS = 25;
@@ -24,6 +77,10 @@ function lockPath() {
     return `${storePath()}.lock`;
 }
 
+/**
+ * @param {string|number|undefined} value
+ * @returns {number}
+ */
 export function parseDuration(value) {
     const match = /^(\d+)\s*(ms|s|m|h)?$/i.exec(String(value || '').trim());
     if (!match) return 5 * 60_000;
@@ -33,6 +90,10 @@ export function parseDuration(value) {
     return n * factor;
 }
 
+/**
+ * @param {LeaseInput} [input]
+ * @returns {string}
+ */
 export function buildLeaseKey({ owner = 'web-ai', vendor = 'chatgpt', sessionType = 'send-poll', origin = '', url = '', browserProfileKey = '', port = '' } = {}) {
     return [
         owner,
@@ -43,17 +104,27 @@ export function buildLeaseKey({ owner = 'web-ai', vendor = 'chatgpt', sessionTyp
     ].join(':');
 }
 
+/**
+ * @param {string|null|undefined} url
+ * @returns {string}
+ */
 export function originFromUrl(url) {
     try {
-        return new URL(url).origin;
+        return new URL(/** @type {string} */ (url)).origin;
     } catch {
         return 'unknown-origin';
     }
 }
 
+/**
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
 export async function withLeaseLock(fn) {
     const path = lockPath();
     mkdirSync(dirname(path), { recursive: true });
+    /** @type {number|null} */
     let fd = null;
     let attempts = 0;
     while (attempts < LOCK_RETRY_LIMIT) {
@@ -64,7 +135,7 @@ export async function withLeaseLock(fn) {
             } catch { /* best-effort lock metadata */ }
             break;
         } catch (error) {
-            if (error?.code !== 'EEXIST') throw error;
+            if (/** @type {{ code?: string }} */ (error)?.code !== 'EEXIST') throw error;
             attempts += 1;
             if (isStaleLock(path)) {
                 try { unlinkSync(path); } catch { /* raced with releaser */ }
@@ -82,9 +153,12 @@ export async function withLeaseLock(fn) {
     }
 }
 
+/**
+ * @param {string} path
+ */
 function isStaleLock(path) {
     try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        const parsed = /** @type {{ acquiredAt?: string }} */ (JSON.parse(readFileSync(path, 'utf8')));
         const acquired = Date.parse(parsed?.acquiredAt || '');
         return !Number.isFinite(acquired) || Date.now() - acquired > STALE_LOCK_MS;
     } catch {
@@ -92,24 +166,31 @@ function isStaleLock(path) {
     }
 }
 
+/**
+ * @param {number} ms
+ */
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** @returns {StoreFile} */
 function readStore() {
     const path = storePath();
     if (!existsSync(path)) return { version: STORE_VERSION, leases: [] };
     try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        const parsed = /** @type {{ version?: unknown, leases?: unknown }} */ (JSON.parse(readFileSync(path, 'utf8')));
         return {
             version: Number(parsed?.version) || STORE_VERSION,
-            leases: Array.isArray(parsed?.leases) ? parsed.leases.filter(lease => lease?.targetId) : [],
+            leases: Array.isArray(parsed?.leases) ? /** @type {Lease[]} */ (parsed.leases.filter((/** @type {{ targetId?: string }} */ lease) => lease?.targetId)) : [],
         };
     } catch {
         return { version: STORE_VERSION, leases: [] };
     }
 }
 
+/**
+ * @param {{ leases: Lease[] }} store
+ */
 function writeStore(store) {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true });
@@ -118,6 +199,10 @@ function writeStore(store) {
     renameSync(tmp, path);
 }
 
+/**
+ * @param {ListLeasesFilter} [filter]
+ * @returns {Promise<Lease[]>}
+ */
 export async function listLeases(filter = {}) {
     return withLeaseLock(async () => {
         let leases = readStore().leases;
@@ -129,6 +214,10 @@ export async function listLeases(filter = {}) {
     });
 }
 
+/**
+ * @param {LeaseInput} [input]
+ * @returns {Promise<Lease>}
+ */
 export async function recordActiveLease(input = {}) {
     const now = new Date().toISOString();
     return withLeaseLock(async () => {
@@ -146,10 +235,18 @@ export async function recordActiveLease(input = {}) {
     });
 }
 
+/**
+ * @param {number} port
+ * @param {LeaseInput} [input]
+ * @returns {Promise<{ targetId: string, url: string|null, lease: Lease }|null>}
+ */
 export async function checkoutPooledLease(port, input = {}) {
     const now = Date.now();
+    /** @type {Lease[]} */
     const toClose = [];
+    /** @type {Set<string>} */
     const deadIds = new Set();
+    /** @type {Lease|null} */
     let selected = null;
     return withLeaseLock(async () => {
         const store = readStore();
@@ -176,13 +273,19 @@ export async function checkoutPooledLease(port, input = {}) {
             .filter(row => !deadIds.has(scopedTargetKey(row)))
             .map(row => closingIds.has(scopedTargetKey(row)) ? { ...row, state: 'closing', closePreviousState: row.state, updatedAt: new Date().toISOString() } : row);
         writeStore(store);
-        return selected ? { targetId: selected.targetId, url: selected.url, lease: selected } : null;
+        const sel = /** @type {Lease|null} */ (selected);
+        return sel ? { targetId: sel.targetId, url: sel.url, lease: sel } : null;
     }).then(async result => {
         await closeLeasesAndUpdateStore(port, uniqueByIdentity(toClose));
         return result;
     });
 }
 
+/**
+ * @param {number} port
+ * @param {LeaseInput} [input]
+ * @returns {Promise<{ pooled: boolean, closed: number, closedTabs: Lease[], skipped?: { reason: string, current: Lease|null } }>}
+ */
 export async function releaseCompletedLease(port, input = {}) {
     const now = new Date();
     const pooledAt = now.toISOString();
@@ -197,7 +300,9 @@ export async function releaseCompletedLease(port, input = {}) {
         leaseDisposition: maxPerKey > 0 ? 'pooled' : 'close',
         updatedAt: pooledAt,
     });
+    /** @type {Lease[]} */
     const toClose = [];
+    /** @type {{ reason: string, current: Lease|null }|null} */
     let skipped = null;
     await withLeaseLock(async () => {
         const store = readStore();
@@ -227,13 +332,20 @@ export async function releaseCompletedLease(port, input = {}) {
     return { pooled: maxPerKey > 0 && !closedTabs.some(row => row.targetId === lease.targetId), closed: closedTabs.length, closedTabs };
 }
 
+/**
+ * @param {number} port
+ * @param {LeaseInput} [input]
+ * @returns {Promise<{ closed: number, closedTabs: Lease[] }>}
+ */
 export async function cleanupLeasedTabs(port, input = {}) {
     const nowMs = input.now || Date.now();
+    /** @type {Lease[]} */
     const toClose = [];
     const browserProfileKey = String(input.browserProfileKey || port || process.env.CDP_PORT || '9222');
     const activeTargets = await activeCommandTargetIds({ browserProfileKey });
     await withLeaseLock(async () => {
         const store = readStore();
+        /** @type {string[]} */
         const dead = [];
         for (const lease of store.leases) {
             if (lease.browserProfileKey !== browserProfileKey) continue;
@@ -257,6 +369,10 @@ export async function cleanupLeasedTabs(port, input = {}) {
     return { closed: closedTabs.length, closedTabs };
 }
 
+/**
+ * @param {string|undefined} targetId
+ * @param {LeaseInput} [scope]
+ */
 export async function removeLease(targetId, scope = {}) {
     if (!targetId) return;
     await withLeaseLock(async () => {
@@ -267,8 +383,10 @@ export async function removeLease(targetId, scope = {}) {
     });
 }
 
+/** @returns {Promise<Record<string, number>>} */
 export async function poolStats() {
     const leases = await listLeases();
+    /** @type {Record<string, number>} */
     const stats = {};
     for (const lease of leases.filter(row => row.state === 'pooled')) {
         stats[lease.leaseKey] = (stats[lease.leaseKey] || 0) + 1;
@@ -276,15 +394,20 @@ export async function poolStats() {
     return stats;
 }
 
+/**
+ * @param {LeaseInput} [input]
+ * @returns {Lease}
+ */
 function normalizeLease(input = {}) {
     const origin = input.origin || originFromUrl(input.url);
+    /** @type {Lease} */
     const lease = {
         owner: input.owner || 'web-ai',
         vendor: input.vendor || 'chatgpt',
         sessionType: input.sessionType || 'send-poll',
         origin,
         browserProfileKey: input.browserProfileKey || String(input.port || process.env.CDP_PORT || '9222'),
-        targetId: input.targetId,
+        targetId: /** @type {string} */ (input.targetId),
         sessionId: input.sessionId || null,
         url: input.url || null,
         state: input.state || 'active-session',
@@ -294,28 +417,50 @@ function normalizeLease(input = {}) {
         poolExpiresAt: input.poolExpiresAt || null,
         leaseDisposition: input.leaseDisposition || null,
         updatedAt: input.updatedAt || new Date().toISOString(),
+        leaseKey: '',
     };
     lease.leaseKey = input.leaseKey || buildLeaseKey(lease);
     return lease;
 }
 
+/**
+ * @param {Partial<Lease>} lease
+ */
 function scopedTargetKey(lease) {
     return [lease.owner || '', lease.vendor || '', lease.sessionType || '', lease.origin || '', lease.browserProfileKey || '', lease.targetId || ''].join(':');
 }
 
+/**
+ * @param {Partial<Lease>|null|undefined} a
+ * @param {Partial<Lease>|null|undefined} b
+ */
 function sameTargetScope(a, b) {
-    return a?.targetId && b?.targetId && scopedTargetKey(a) === scopedTargetKey(b);
+    return Boolean(a?.targetId && b?.targetId && scopedTargetKey(a) === scopedTargetKey(b));
 }
 
+/**
+ * @param {Partial<Lease>|null|undefined} a
+ * @param {Partial<Lease>|null|undefined} b
+ */
 function sameSessionScope(a, b) {
-    return a?.sessionId && b?.sessionId && a.sessionId === b.sessionId && a.owner === b.owner && a.vendor === b.vendor && a.sessionType === b.sessionType && a.browserProfileKey === b.browserProfileKey;
+    return Boolean(a?.sessionId && b?.sessionId && a.sessionId === b.sessionId && a.owner === b.owner && a.vendor === b.vendor && a.sessionType === b.sessionType && a.browserProfileKey === b.browserProfileKey);
 }
 
+/**
+ * @param {Partial<Lease>|null|undefined} a
+ * @param {Partial<Lease>|null|undefined} b
+ */
 function sameBrowserProfile(a, b) {
     return a?.owner === b?.owner && a?.vendor === b?.vendor && a?.sessionType === b?.sessionType && a?.browserProfileKey === b?.browserProfileKey;
 }
 
+/**
+ * @param {Lease[]} leases
+ * @param {{ nowMs: number, maxPerKey: number, globalMax: number }} options
+ * @returns {Lease[]}
+ */
 function selectOverflowAndExpired(leases, { nowMs, maxPerKey, globalMax }) {
+    /** @type {Lease[]} */
     const selected = [];
     const pooled = leases.filter(lease => lease.state === 'pooled');
     for (const lease of pooled) {
@@ -323,10 +468,11 @@ function selectOverflowAndExpired(leases, { nowMs, maxPerKey, globalMax }) {
         if (Number.isFinite(expires) && nowMs >= expires) selected.push({ ...lease, cleanupReason: 'pool-expired' });
     }
     const selectedIds = new Set(selected.map(lease => lease.targetId));
+    /** @type {Map<string, Lease[]>} */
     const byKey = new Map();
     for (const lease of pooled.filter(lease => !selectedIds.has(lease.targetId))) {
         if (!byKey.has(lease.leaseKey)) byKey.set(lease.leaseKey, []);
-        byKey.get(lease.leaseKey).push(lease);
+        /** @type {Lease[]} */ (byKey.get(lease.leaseKey)).push(lease);
     }
     for (const list of byKey.values()) {
         const ordered = list.slice().sort((a, b) => Date.parse(b.pooledAt || '') - Date.parse(a.pooledAt || ''));
@@ -343,7 +489,12 @@ function selectOverflowAndExpired(leases, { nowMs, maxPerKey, globalMax }) {
     return selected;
 }
 
+/**
+ * @param {Lease[]} leases
+ * @returns {Lease[]}
+ */
 function uniqueByIdentity(leases) {
+    /** @type {Set<string>} */
     const seen = new Set();
     return leases.filter(lease => {
         const key = scopedTargetKey(lease);
@@ -353,8 +504,15 @@ function uniqueByIdentity(leases) {
     });
 }
 
+/**
+ * @param {number} port
+ * @param {Lease[]} leases
+ * @returns {Promise<Lease[]>}
+ */
 async function closeLeasesAndUpdateStore(port, leases) {
+    /** @type {Lease[]} */
     const closed = [];
+    /** @type {Lease[]} */
     const failed = [];
     for (const lease of leases) {
         try {
