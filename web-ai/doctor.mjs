@@ -133,13 +133,12 @@ export async function runDoctor(deps, options = {}) {
                 }),
             );
         } catch (err) {
-            const e = /** @type {any} */ (err);
-            warnings.push(`snapshot-failed:${e?.errorCode || e?.message || String(err)}`);
+            warnings.push(`snapshot-failed:${(/** @type {any} */ (err))?.errorCode || (/** @type {any} */ (err))?.message || String(err)}`);
             snapshotSummary = {
                 enabled: false,
                 contentSafe: true,
-                errorCode: e?.errorCode || 'snapshot.failed',
-                retryHint: e?.retryHint || 're-run-without-snapshot',
+                errorCode: (/** @type {any} */ (err))?.errorCode || 'snapshot.failed',
+                retryHint: (/** @type {any} */ (err))?.retryHint || 're-run-without-snapshot',
             };
         }
     }
@@ -153,7 +152,7 @@ export async function runDoctor(deps, options = {}) {
         features,
         ...(snapshotSummary ? { snapshot: snapshotSummary } : {}),
         ...(semanticTargets ? { semanticTargets } : {}),
-        lastSession: lastSession ? summarizeSessionForDoctor(lastSession, options) : null,
+        lastSession: lastSession ? (/** @type {any} */ (summarizeSessionForDoctor))(lastSession, options) : null,
         warnings,
     };
 
@@ -181,9 +180,8 @@ function redactUrl(url) {
 
 /**
  * @param {any} session
- * @param {Record<string, any>} [_options]
  */
-function summarizeSessionForDoctor(session, _options) {
+function summarizeSessionForDoctor(session) {
     return {
         sessionId: session.sessionId,
         status: session.status,
