@@ -23,7 +23,12 @@
     "web-ai/eval/metrics.mjs",
     "web-ai/eval/fixtures.mjs",
     "web-ai/policy/content-boundary.mjs",
-    "web-ai/browser-tool-schema.mjs"
+    "web-ai/browser-tool-schema.mjs",
+    "web-ai/errors.mjs",
+    "web-ai/policy/schema.mjs",
+    "web-ai/session-store.mjs",
+    "web-ai/session.mjs",
+    "web-ai/trace-persistence.mjs"
   ],
   "exclude": [
     "node_modules",
