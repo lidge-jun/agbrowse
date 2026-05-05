@@ -20,7 +20,7 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | --- | --- | --- |
 | `ready` | deterministic tests와 docs가 모두 뒷받침한다 | CLI primitive, session store, offline eval fixture, policy/trace schema |
 | `beta` | 구현은 있으나 live provider UI와 계정 상태에 영향받는다 | ChatGPT/Gemini/Grok live send/poll/query |
-| `experimental` | optional adapter, benchmark, hosted/cloud claim 전 단계다 | external CDP, benchmark trajectory, broader MCP production claim |
+| `experimental` | optional adapter, benchmark score, hosted/cloud claim 전 단계다 | external CDP는 deferred, benchmark score는 deferred, broader MCP production claim은 deferred |
 
 ## Public Claim Gate
 
@@ -29,8 +29,8 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | Local web-AI production | Phase 11, 12, 13, 14, 16, 17 요구가 문서와 테스트에 반영됨 |
 | General browser-agent CLI | Phase 15 primitive parity test 통과 |
 | Production MCP bridge | Phase 18 protocol, stale-ref, policy, schema test 통과 |
-| Hosted/cloud operation | Phase 19 external-CDP 또는 별도 provider adapter gate 통과 |
-| Benchmark comparison | Phase 20 trajectory와 고정 model/planner/environment 명시 |
+| Hosted/cloud operation | Pending. Phase 19 external-CDP 또는 별도 provider adapter gate 통과 전까지 금지 |
+| Benchmark comparison | Pending. Phase 20 trajectory bundle은 있어도 고정 model/planner/environment/task set 전까지 점수 주장 금지 |
 
 ## Release Checklist
 
@@ -42,6 +42,10 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 - [ ] `npm run test:eval`
 - [ ] `npm run test:contract-drift`
 - [ ] `npm run test:trace-policy`
+- [ ] `npm run test:mcp`
+- [ ] `npm run test:source-audit`
+- [ ] `npm run test:release-gates`
+- [ ] `npm run benchmark:trajectory -- --help`
 - [ ] `npm pack --dry-run`
 - [ ] `npm publish --dry-run --access public` 또는 preview면 `--tag preview`
 
@@ -56,6 +60,10 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | `npm run test:eval-fixtures` | offline fixture runner | fixture config와 JSON result 확인 |
 | `npm run test:contract-drift` | contract audit unit test | provider contract drift 차단 |
 | `npm run test:trace-policy` | trace와 policy tests | evidence와 mutation guard 확인 |
+| `npm run test:mcp` | MCP protocol/schema/policy tests | Phase 18 ready claim이 실제 tool surface와 일치하는지 확인 |
+| `npm run test:source-audit` | answer artifact + source audit tests | Phase 17 research/source claim 차단 |
+| `npm run test:release-gates` | structure drift + count checks | Phase status, command, release claim drift 차단 |
+| `npm run benchmark:trajectory` | offline trajectory bundle writer | score가 아니라 sanitized trajectory artifact 생성만 허용 |
 | `npm run release` | latest release script | clean tree, install, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `npm run release:preview` | preview release script | preview version, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `bash structure/verify-counts.sh` | structure count verifier | source map line/file counts drift 차단 |
@@ -72,4 +80,5 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 
 ## 변경 기록
 
+- 2026-05-05: MCP/source-audit/release-gate named scripts를 release path에 추가해 public claim gate가 `npm test` 안에 묻히지 않게 했다.
 - 2026-05-05: Phase 21 release gate 요구를 현재 npm scripts, package dry-run, support label 기준으로 정리했다.

@@ -45,16 +45,23 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Structure docs drift
-        run: npm run docs:drift
+      - name: MCP claim gate
+        run: npm run test:mcp
 
-      - name: Structure counts
-        run: npm run docs:counts
+      - name: Source audit claim gate
+        run: npm run test:source-audit
+
+      - name: Trace and policy claim gate
+        run: npm run test:trace-policy
+
+      - name: Structure docs drift
+        run: npm run test:release-gates
 
       - name: Fixture evals
         run: |
           npm run test:eval-fixtures
           npm run eval:web-ai:fixtures
+          npm run benchmark:trajectory -- --help
 
       - name: Git diff whitespace check
         run: git diff --check

@@ -53,14 +53,17 @@ npm audit --audit-level=high
 
 echo "Running tests..."
 npm test
+npm run test:mcp
+npm run test:source-audit
+npm run test:trace-policy
 
 echo "Running structure documentation gates..."
-npm run docs:drift
-npm run docs:counts
+npm run test:release-gates
 
 echo "Running fixture evals..."
 npm run test:eval-fixtures
 npm run eval:web-ai:fixtures
+npm run benchmark:trajectory -- --help >/dev/null
 
 echo "Checking diff whitespace..."
 git diff --check

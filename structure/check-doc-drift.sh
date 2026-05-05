@@ -32,8 +32,14 @@ const requiredFiles = [
   'structure/commands.md',
   'structure/runtime_contracts.md',
   'structure/release_gates.md',
+  'structure/phase_status.md',
   'structure/verify-counts.sh',
   'structure/_legacy/.gitkeep',
+  'docs/production-readiness.md',
+  'docs/comparison.md',
+  'docs/benchmarks.md',
+  'benchmarks/agbrowse/trajectory.mjs',
+  'benchmarks/agbrowse/run-task.mjs',
 ];
 
 for (const file of requiredFiles) {
@@ -44,8 +50,12 @@ for (const file of requiredFiles) {
 const commandsDoc = read('structure/commands.md');
 const runtimeDoc = read('structure/runtime_contracts.md');
 const releaseDoc = read('structure/release_gates.md');
+const phaseStatusDoc = read('structure/phase_status.md');
 const indexDoc = read('structure/INDEX.md');
 const readme = read('README.md');
+const productionDoc = read('docs/production-readiness.md');
+const comparisonDoc = read('docs/comparison.md');
+const benchmarksDoc = read('docs/benchmarks.md');
 const pkg = JSON.parse(read('package.json'));
 
 const rootCommands = [
@@ -91,7 +101,9 @@ for (const tool of mcpTools) {
 
 const expectedScripts = [
   'test', 'test:unit', 'test:integration', 'test:eval',
-  'test:contract-drift', 'test:trace-policy', 'release', 'release:preview',
+  'test:contract-drift', 'test:trace-policy', 'test:mcp',
+  'test:source-audit', 'test:release-gates', 'benchmark:trajectory',
+  'release', 'release:preview',
 ];
 
 for (const scriptName of expectedScripts) {
@@ -106,13 +118,42 @@ for (const scriptName of expectedScripts) {
 
 if (Array.isArray(pkg.files) && pkg.files.includes('structure/')) pass('package files include structure/');
 else fail('package files missing structure/');
+if (Array.isArray(pkg.files) && pkg.files.includes('docs/')) pass('package files include docs/');
+else fail('package files missing docs/');
+if (Array.isArray(pkg.files) && pkg.files.includes('benchmarks/')) pass('package files include benchmarks/');
+else fail('package files missing benchmarks/');
 
 if (readme.includes('structure/INDEX.md')) pass('README links structure/INDEX.md');
 else fail('README missing structure/INDEX.md link');
 
-for (const linked of ['str_func.md', 'commands.md', 'runtime_contracts.md', 'release_gates.md', 'check-doc-drift.sh', 'verify-counts.sh']) {
+for (const label of ['Ready surfaces', 'Beta surfaces', 'Experimental or deferred surfaces']) {
+  if (readme.includes(label)) pass(`README includes ${label}`);
+  else fail(`README missing ${label}`);
+}
+
+for (const docCheck of [
+  [productionDoc, 'Ready', 'production-readiness.md labels ready surfaces'],
+  [productionDoc, 'Beta', 'production-readiness.md labels beta surfaces'],
+  [comparisonDoc, 'Comparison Rules', 'comparison.md has comparison rules'],
+  [benchmarksDoc, 'Claim Boundary', 'benchmarks.md has claim boundary'],
+]) {
+  if (docCheck[0].includes(docCheck[1])) pass(docCheck[2]);
+  else fail(docCheck[2]);
+}
+
+for (const linked of ['str_func.md', 'commands.md', 'runtime_contracts.md', 'release_gates.md', 'phase_status.md', 'check-doc-drift.sh', 'verify-counts.sh']) {
   if (indexDoc.includes(linked)) pass(`INDEX links ${linked}`);
   else fail(`INDEX missing ${linked}`);
+}
+
+for (const statusNeedle of ['18 MCP/AI SDK', '19 remote CDP adapters', '20 benchmark trajectory', '21 release gates']) {
+  if (phaseStatusDoc.includes(statusNeedle)) pass(`phase_status.md tracks ${statusNeedle}`);
+  else fail(`phase_status.md missing ${statusNeedle}`);
+}
+
+for (const forbiddenClaim of ['No stealth', 'No leaderboard score', 'No production MCP claim beyond']) {
+  if (phaseStatusDoc.includes(forbiddenClaim)) pass(`phase_status.md blocks ${forbiddenClaim}`);
+  else fail(`phase_status.md missing forbidden claim guard: ${forbiddenClaim}`);
 }
 
 for (const phase of [

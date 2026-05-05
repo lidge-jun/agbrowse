@@ -14,6 +14,8 @@
     "bin/",
     "skills/",
     "web-ai/",
+    "benchmarks/",
+    "docs/",
     "structure/",
     "devlog/",
     "vitest.config.mjs"
@@ -46,6 +48,10 @@
     "docs:counts": "bash structure/verify-counts.sh",
     "eval:web-ai:fixtures": "node scripts/run-web-ai-eval.mjs --config test/fixtures/provider-dom/parallel-eval.json --concurrency 4 --json",
     "test:trace-policy": "vitest run test/unit/web-ai-trace*.test.mjs test/unit/web-ai-policy.test.mjs test/unit/content-boundary.test.mjs test/integration/web-ai-policy-cli.test.mjs test/integration/web-ai-policy-mcp.test.mjs test/integration/web-ai-trace-fixture.test.mjs",
+    "test:mcp": "vitest run test/integration/web-ai-mcp-server.test.mjs test/integration/web-ai-policy-mcp.test.mjs test/unit/browser-tool-schema.test.mjs test/unit/web-ai-tool-schema.test.mjs",
+    "test:source-audit": "vitest run test/unit/web-ai-source-audit*.test.mjs test/unit/web-ai-answer-artifact.test.mjs",
+    "test:release-gates": "bash structure/check-doc-drift.sh && bash structure/verify-counts.sh",
+    "benchmark:trajectory": "node benchmarks/agbrowse/run-task.mjs",
     "release": "bash scripts/release.sh",
     "release:preview": "bash scripts/release-preview.sh"
   },

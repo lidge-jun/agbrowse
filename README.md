@@ -59,10 +59,11 @@ Agent rule: observe before acting. Use `status`, `tabs`, `snapshot
 This repository is packaged as a standalone skill/runtime.
 
 Architecture and release-claim source of truth live in
-[`structure/INDEX.md`](structure/INDEX.md). Update that folder when CLI,
-web-ai, MCP, eval, or release-gate behavior changes.
+[`structure/INDEX.md`](structure/INDEX.md) and the Phase 11+ truth table lives
+in [`structure/phase_status.md`](structure/phase_status.md). Update that folder
+when CLI, web-ai, MCP, eval, or release-gate behavior changes.
 
-What is considered ready:
+Ready surfaces:
 
 - `agbrowse` CLI bin
 - persistent Chrome profile under `BROWSER_AGENT_HOME`
@@ -71,7 +72,25 @@ What is considered ready:
 - active tab persistence via CDP target id
 - browser primitive tests
 - web-ai contract tests
-- ChatGPT, Gemini, and Grok core web-ai flows
+- source-audit and answer-artifact gates for research workflows
+- narrow MCP bridge surface: `web_ai_*`, `browser_snapshot`, and
+  `browser_click_ref`
+- offline DOM churn eval fixtures
+- trace and safety-policy schemas
+- benchmark trajectory schema and offline bundle writer
+
+Beta surfaces:
+
+- ChatGPT, Gemini, and Grok live web-ai send/poll/query flows
+- provider model and reasoning-effort selection
+- provider source/citation quality checks
+
+Experimental or deferred surfaces:
+
+- hosted/cloud browser operation
+- remote `external-cdp` provider mode
+- broader MCP production bridge beyond the listed tools
+- leaderboard or competitor benchmark score claims
 
 What remains intentionally out of scope for the standalone runtime:
 
@@ -687,6 +706,11 @@ npm run release:preview -- 0.2.0
 The default script verifies the package, pushes a git tag, then runs
 `npm publish --access public`. If the npm account requires browser-based
 authentication, npm will print the auth URL during that publish step.
+
+The release path includes named claim gates for MCP, source audit, trace/policy,
+structure drift, fixture evals, package dry-run, and high-severity dependency
+audit. Use `npm run test:mcp`, `npm run test:source-audit`, and
+`npm run test:release-gates` when checking those surfaces directly.
 
 For npm trusted publishing through GitHub Actions, configure npm's trusted
 publisher for:

@@ -10,6 +10,9 @@ describe('browser MCP tool schema', () => {
             expect(tool.inputSchema.additionalProperties).toBe(false);
         }
         expect(BROWSER_TOOLS.browser_click_ref.inputSchema.required).toEqual(['snapshotId', 'ref']);
+        expect(BROWSER_TOOLS.browser_click_ref.inputSchema.properties.policy.additionalProperties).toBe(false);
+        expect(Object.keys(BROWSER_TOOLS.browser_click_ref.inputSchema.properties.policy.properties))
+            .toContain('deniedOrigins');
         expect(isKnownBrowserTool('browser_snapshot')).toBe(true);
         expect(isKnownBrowserTool('web_ai_snapshot')).toBe(false);
     });

@@ -7,7 +7,21 @@ const objectSchema = (properties, required = []) => ({
 
 const policySchema = {
     type: 'object',
-    additionalProperties: true,
+    additionalProperties: false,
+    properties: {
+        version: { type: 'number', enum: [1] },
+        allowedOrigins: { type: 'array', items: { type: 'string' } },
+        deniedOrigins: { type: 'array', items: { type: 'string' } },
+        allowDownloads: { type: 'boolean' },
+        allowUploads: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['explicit-only'] }] },
+        allowClipboardRead: { type: 'boolean' },
+        allowClipboardWrite: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['explicit-only'] }] },
+        allowEvaluate: { type: 'boolean' },
+        allowFileAccess: { type: 'boolean' },
+        allowCrossOriginNavigation: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['confirm'] }] },
+        destructiveFormPolicy: { type: 'string', enum: ['deny'] },
+        promptInjectionBoundary: { type: 'string', enum: ['strict'] },
+    },
 };
 
 export const BROWSER_TOOLS = {
