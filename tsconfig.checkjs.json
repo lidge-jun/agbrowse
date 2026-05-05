@@ -43,7 +43,9 @@
     "web-ai/context-pack/renderer.mjs",
     "web-ai/context-pack/file-selector.mjs",
     "web-ai/context-pack/builder.mjs",
-    "web-ai/context-pack/index.mjs"
+    "web-ai/context-pack/index.mjs",
+    "web-ai/action-cache.mjs",
+    "web-ai/question.mjs"
   ],
   "exclude": [
     "node_modules",
