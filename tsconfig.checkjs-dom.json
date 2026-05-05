@@ -21,7 +21,8 @@
     "web-ai/action-intent.mjs",
     "web-ai/target-resolver.mjs",
     "web-ai/doctor.mjs",
-    "web-ai/grok-live.mjs"
+    "web-ai/grok-live.mjs",
+    "web-ai/chatgpt.mjs"
   ],
   "exclude": [
     "node_modules",
