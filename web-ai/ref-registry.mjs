@@ -1,5 +1,26 @@
+// @ts-check
 import { WebAiError } from './errors.mjs';
 
+/**
+ * @typedef {{
+ *   snapshotId: string|null,
+ *   axHash: string|null,
+ *   domHash: string|null,
+ *   refs: Record<string, unknown>,
+ *   createdAt: number,
+ *   stale: boolean,
+ *   invalidatedAt: number|null,
+ * }} RefRegistry
+ */
+
+/**
+ * @typedef {{ snapshotId?: string, axHash?: string, domHash?: string, refs?: Record<string, unknown> }} SnapshotInput
+ */
+
+/**
+ * @param {SnapshotInput|null|undefined} snapshot
+ * @returns {RefRegistry}
+ */
 export function createRefRegistry(snapshot) {
     return {
         snapshotId: snapshot?.snapshotId || null,
@@ -12,6 +33,13 @@ export function createRefRegistry(snapshot) {
     };
 }
 
+/**
+ * @param {unknown} page
+ * @param {RefRegistry|null|undefined} registry
+ * @param {string} ref
+ * @param {{ expectedSnapshotId?: string|null, currentDomHash?: string|null, currentAxHash?: string|null, allowStale?: boolean }} [options]
+ * @returns {Promise<unknown>}
+ */
 export async function resolveRef(page, registry, ref, {
     expectedSnapshotId = null,
     currentDomHash = null,
@@ -36,6 +64,11 @@ export async function resolveRef(page, registry, ref, {
     return entry;
 }
 
+/**
+ * @param {RefRegistry|null|undefined} registry
+ * @param {{ domHash?: string|null, axHash?: string|null }} [args]
+ * @returns {boolean}
+ */
 export function invalidateRefsOnDomChange(registry, { domHash = null, axHash = null } = {}) {
     if (!registry) return false;
     const changed = (domHash && registry.domHash && domHash !== registry.domHash)
@@ -49,6 +82,11 @@ export function invalidateRefsOnDomChange(registry, { domHash = null, axHash = n
     return true;
 }
 
+/**
+ * @param {RefRegistry|null|undefined} registry
+ * @param {{ expectedSnapshotId?: string|null, currentDomHash?: string|null, currentAxHash?: string|null }} [args]
+ * @returns {boolean}
+ */
 export function isRegistryStale(registry, {
     expectedSnapshotId = null,
     currentDomHash = null,
@@ -61,6 +99,10 @@ export function isRegistryStale(registry, {
     return false;
 }
 
+/**
+ * @param {RefRegistry|null|undefined} registry
+ * @param {{ expectedSnapshotId?: string|null, currentDomHash?: string|null, currentAxHash?: string|null, ref?: string }} [context]
+ */
 function assertRegistryFresh(registry, context = {}) {
     if (!isRegistryStale(registry, context)) return;
     throw new WebAiError({
@@ -79,6 +121,10 @@ function assertRegistryFresh(registry, context = {}) {
     });
 }
 
+/**
+ * @param {unknown} ref
+ * @returns {string}
+ */
 function normalizeRef(ref) {
     const value = String(ref || '').trim();
     if (!value) return value;

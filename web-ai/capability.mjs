@@ -1,3 +1,4 @@
+// @ts-check
 // Phase 3 capability runtime.
 //
 // IDs use cli-jaw's hyphenated convention so the two repos can converge
@@ -15,12 +16,30 @@
 // prompts or mutate model selection. Probes that open menus must close
 // them before resolving.
 
+/**
+ * @typedef {{ state: string, evidence: unknown, next: string }} CapabilityProbeResult
+ * @typedef {{ capabilityId: string, probeFn: (deps: unknown, input: Record<string, unknown>) => Promise<CapabilityProbeResult> }} CapabilityDef
+ * @typedef {{ capabilityId: string, state: string, evidence: unknown, next: string }} CapabilityRow
+ */
+
+/**
+ * @param {string} capabilityId
+ * @param {CapabilityDef['probeFn']} probeFn
+ * @returns {CapabilityDef}
+ */
 export function defineCapability(capabilityId, probeFn) {
     if (typeof probeFn !== 'function') throw new Error(`capability ${capabilityId} requires a probe function`);
     return { capabilityId, probeFn };
 }
 
+/**
+ * @param {unknown} deps
+ * @param {CapabilityDef[]} capabilities
+ * @param {{ probe?: string, [k: string]: unknown }} [input]
+ * @returns {Promise<CapabilityRow[]>}
+ */
 export async function runCapabilities(deps, capabilities, input = {}) {
+    /** @type {CapabilityRow[]} */
     const rows = [];
     for (const cap of capabilities) {
         if (input.probe && input.probe !== cap.capabilityId) continue;
@@ -28,10 +47,11 @@ export async function runCapabilities(deps, capabilities, input = {}) {
             const probeResult = await cap.probeFn(deps, input);
             rows.push({ capabilityId: cap.capabilityId, ...normalizeRow(probeResult) });
         } catch (err) {
+            const e = /** @type {{ message?: string }} */ (err);
             rows.push({
                 capabilityId: cap.capabilityId,
                 state: 'unknown',
-                evidence: { error: err?.message || String(err) },
+                evidence: { error: e?.message || String(err) },
                 next: 're-snapshot',
             });
         }
@@ -39,14 +59,22 @@ export async function runCapabilities(deps, capabilities, input = {}) {
     return rows;
 }
 
+/**
+ * @param {CapabilityRow[]} rows
+ * @returns {string}
+ */
 export function worstCapabilityState(rows) {
     if (!Array.isArray(rows) || rows.length === 0) return 'unknown';
-    if (rows.some(r => r.state === 'fail')) return 'fail';
-    if (rows.some(r => r.state === 'warn')) return 'warn';
-    if (rows.every(r => r.state === 'ok')) return 'ok';
+    if (rows.some((r) => r.state === 'fail')) return 'fail';
+    if (rows.some((r) => r.state === 'warn')) return 'warn';
+    if (rows.every((r) => r.state === 'ok')) return 'ok';
     return 'unknown';
 }
 
+/**
+ * @param {Partial<CapabilityProbeResult>} [probeResult]
+ * @returns {{ state: string, evidence: unknown, next: string }}
+ */
 function normalizeRow(probeResult = {}) {
     return {
         state: probeResult.state || 'unknown',
@@ -55,6 +83,10 @@ function normalizeRow(probeResult = {}) {
     };
 }
 
+/**
+ * @param {{ url?: () => string }|null|undefined} page
+ * @param {Set<string>} expectedHosts
+ */
 export async function probeHostMatches(page, expectedHosts) {
     try {
         const url = page?.url?.() || '';
@@ -66,6 +98,11 @@ export async function probeHostMatches(page, expectedHosts) {
     }
 }
 
+/**
+ * @param {any} page
+ * @param {string[]} selectors
+ * @param {{ timeoutMs?: number, okNext?: string, failState?: string, failNext?: string }} [options]
+ */
 export async function probeFirstVisibleSelector(page, selectors, options = {}) {
     const timeoutMs = options.timeoutMs ?? 1500;
     const deadline = Date.now() + timeoutMs;

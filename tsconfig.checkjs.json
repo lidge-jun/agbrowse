@@ -28,7 +28,15 @@
     "web-ai/policy/schema.mjs",
     "web-ai/session-store.mjs",
     "web-ai/session.mjs",
-    "web-ai/trace-persistence.mjs"
+    "web-ai/trace-persistence.mjs",
+    "web-ai/mcp-state.mjs",
+    "web-ai/policy/enforce.mjs",
+    "web-ai/trace/writer.mjs",
+    "web-ai/action-trace.mjs",
+    "web-ai/capability.mjs",
+    "web-ai/answer-artifact.mjs",
+    "web-ai/ref-registry.mjs",
+    "web-ai/tool-schema.mjs"
   ],
   "exclude": [
     "node_modules",

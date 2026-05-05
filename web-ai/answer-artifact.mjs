@@ -1,5 +1,41 @@
+// @ts-check
+
+/**
+ * @typedef {{
+ *   provider?: string,
+ *   sessionId?: string|null,
+ *   conversationUrl?: string|null,
+ *   capturedBy?: string,
+ *   captureMethod?: string,
+ *   markdown?: string,
+ *   text?: string,
+ *   exactnessScore?: number|string,
+ *   responseStableMs?: number|string|null,
+ *   warnings?: unknown[],
+ *   [extra: string]: unknown,
+ * }} AnswerArtifactInput
+ */
+
+/**
+ * @typedef {{
+ *   provider: string,
+ *   sessionId: string|null,
+ *   conversationUrl: string|null,
+ *   capturedBy: string,
+ *   markdown: string,
+ *   text: string,
+ *   exactnessScore: number,
+ *   responseStableMs: number|null,
+ *   warnings: string[],
+ * }} AnswerArtifact
+ */
+
 const CAPTURE_METHODS = new Set(['copy-button', 'dom-fallback', 'clipboard', 'manual', 'unknown']);
 
+/**
+ * @param {AnswerArtifactInput} [input]
+ * @returns {AnswerArtifact}
+ */
 export function createAnswerArtifact(input = {}) {
     const capturedBy = normalizeCaptureMethod(input.capturedBy || input.captureMethod);
     const markdown = normalizeText(input.markdown);
@@ -22,6 +58,11 @@ export function createAnswerArtifact(input = {}) {
     };
 }
 
+/**
+ * @param {Record<string, any>} [result]
+ * @param {Record<string, any>} [context]
+ * @returns {AnswerArtifact}
+ */
 export function artifactFromPollResult(result = {}, context = {}) {
     const capturedBy = result.capturedBy
         || result.captureMethod
@@ -40,7 +81,13 @@ export function artifactFromPollResult(result = {}, context = {}) {
     });
 }
 
-export function withAnswerArtifact(result = {}, context = {}) {
+/**
+ * @template {Record<string, any>} R
+ * @param {R} [result]
+ * @param {Record<string, any>} [context]
+ * @returns {R & { answerArtifact?: AnswerArtifact }}
+ */
+export function withAnswerArtifact(result = /** @type {R} */ ({}), context = {}) {
     if (result.answerArtifact) return result;
     if (!result.answerText && !result.markdown && !result.answerMarkdown && !result.text) return result;
     return {
@@ -49,6 +96,9 @@ export function withAnswerArtifact(result = {}, context = {}) {
     };
 }
 
+/**
+ * @param {AnswerArtifactInput} [artifact]
+ */
 export function summarizeAnswerArtifact(artifact = {}) {
     const normalized = createAnswerArtifact(artifact);
     return {
@@ -62,15 +112,27 @@ export function summarizeAnswerArtifact(artifact = {}) {
     };
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
 function normalizeCaptureMethod(value) {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     return CAPTURE_METHODS.has(normalized) ? normalized : 'unknown';
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
 function normalizeText(value) {
     return typeof value === 'string' ? value : '';
 }
 
+/**
+ * @param {{ capturedBy: string, markdown: string, text: string }} args
+ * @returns {number}
+ */
 function estimateExactnessScore({ capturedBy, markdown, text }) {
     if (!markdown && !text) return 0;
     if (capturedBy === 'copy-button' || capturedBy === 'clipboard') return 1;
@@ -79,6 +141,10 @@ function estimateExactnessScore({ capturedBy, markdown, text }) {
     return 0.5;
 }
 
+/**
+ * @param {number} value
+ * @returns {number}
+ */
 function clampScore(value) {
     if (!Number.isFinite(value)) return 0;
     return Math.max(0, Math.min(1, value));

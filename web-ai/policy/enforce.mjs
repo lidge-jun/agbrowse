@@ -1,11 +1,39 @@
+// @ts-check
 import { loadPolicy, normalizePolicy, policyError } from './schema.mjs';
 
+/**
+ * @typedef {import('./schema.mjs').WebAiPolicy} WebAiPolicy
+ */
+
+/**
+ * @typedef {{
+ *   url?: string,
+ *   upload?: boolean,
+ *   explicitUpload?: boolean,
+ *   clipboardRead?: boolean,
+ *   evaluate?: boolean,
+ *   fileAccess?: boolean,
+ *   unsafeAllow?: string[],
+ *   [extra: string]: unknown,
+ * }} PolicyAction
+ */
+
+/**
+ * @param {{ policyPath?: string|null }} [input]
+ * @param {PolicyAction} [action]
+ * @returns {Promise<WebAiPolicy>}
+ */
 export async function loadAndEnforcePolicy(input = {}, action = {}) {
     const policy = await loadPolicy(input.policyPath);
     enforcePolicy(policy, action);
     return policy;
 }
 
+/**
+ * @param {unknown} [policyInput]
+ * @param {PolicyAction} [action]
+ * @returns {{ ok: true, policy: WebAiPolicy }}
+ */
 export function enforcePolicy(policyInput = {}, action = {}) {
     const policy = normalizePolicy(policyInput);
     const origin = originOf(action.url);
@@ -36,6 +64,10 @@ export function enforcePolicy(policyInput = {}, action = {}) {
     return { ok: true, policy };
 }
 
+/**
+ * @param {string|null|undefined} url
+ * @returns {string|null}
+ */
 function originOf(url) {
     try {
         return url ? new URL(url).origin : null;
