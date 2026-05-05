@@ -14,7 +14,8 @@
     "web-ai/copy-markdown.mjs",
     "web-ai/ax-snapshot.mjs",
     "web-ai/chatgpt-model.mjs",
-    "web-ai/chatgpt-composer.mjs"
+    "web-ai/chatgpt-composer.mjs",
+    "web-ai/vendor-editor-contract.mjs"
   ],
   "exclude": [
     "node_modules",

@@ -1,3 +1,4 @@
+// @ts-check
 import {
     INPUT_SELECTORS as CHATGPT_INPUT_SELECTORS,
     SEND_BUTTON_SELECTORS as CHATGPT_SEND_BUTTON_SELECTORS,
@@ -10,6 +11,49 @@ import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } fr
 import { CHATGPT_MODEL_SELECTOR_BUTTONS } from './chatgpt-model.mjs';
 import { UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_BUTTON_SELECTORS } from './chatgpt-attachments.mjs';
 
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('./chatgpt-composer.mjs').ComposerOptions} ComposerOptions */
+/** @typedef {import('./chatgpt-composer.mjs').SubmitResult} SubmitResult */
+
+/**
+ * @typedef {Object} EditorAdapterBaseline
+ * @property {number} turnsCount
+ */
+
+/**
+ * @typedef {Object} EditorAdapter
+ * @property {'chatgpt'} vendor
+ * @property {() => Promise<void>} waitForReady
+ * @property {() => Promise<EditorAdapterBaseline>} getCommitBaseline
+ * @property {(text: string) => Promise<void>} insertPrompt
+ * @property {(submitOptions?: ComposerOptions) => Promise<SubmitResult>} submitPrompt
+ * @property {(prompt: string, baseline?: Partial<EditorAdapterBaseline>) => Promise<{ turnsCount: number }>} verifyPromptCommitted
+ */
+
+/**
+ * @typedef {'chatgpt' | 'gemini' | 'grok'} VendorName
+ */
+
+/**
+ * @typedef {Object} SemanticTarget
+ * @property {readonly string[]} roles
+ * @property {readonly RegExp[]} [names]
+ * @property {readonly RegExp[]} [excludeNames]
+ * @property {readonly string[]} cssFallbacks
+ * @property {boolean} [required]
+ */
+
+/**
+ * @typedef {Object} EditorContract
+ * @property {VendorName} vendor
+ * @property {Readonly<Record<string, SemanticTarget>>} semanticTargets
+ */
+
+/**
+ * @param {Page} page
+ * @param {ComposerOptions} [options]
+ * @returns {EditorAdapter}
+ */
 export function createChatGptEditorAdapter(page, options = {}) {
     return {
         vendor: 'chatgpt',
@@ -107,10 +151,18 @@ export const EDITOR_CONTRACT_BY_VENDOR = Object.freeze({
     grok: GROK_EDITOR_CONTRACT,
 });
 
+/**
+ * @param {VendorName} [vendor]
+ * @returns {EditorContract}
+ */
 export function editorContractForVendor(vendor = 'chatgpt') {
     return EDITOR_CONTRACT_BY_VENDOR[vendor] || CHATGPT_EDITOR_CONTRACT;
 }
 
+/**
+ * @param {VendorName} [vendor]
+ * @returns {Readonly<Record<string, SemanticTarget>>}
+ */
 export function semanticTargetsForVendor(vendor = 'chatgpt') {
     return editorContractForVendor(vendor).semanticTargets;
 }
