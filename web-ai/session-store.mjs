@@ -1,7 +1,43 @@
+// @ts-check
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+
+/**
+ * @typedef {{
+ *   sessionId: string,
+ *   vendor: string|null,
+ *   createdAt: string,
+ *   updatedAt: string,
+ *   deadlineAt: string|null,
+ *   targetId: string|null,
+ *   tabId: string|null,
+ *   tabState?: { createdAt?: string, lastActiveAt?: string, recoveryCount?: number, closeCount?: number, [extra: string]: unknown },
+ *   originalUrl: string|null,
+ *   conversationUrl: string|null,
+ *   promptHash: string,
+ *   envelopeSummary?: Record<string, unknown>,
+ *   status: string,
+ *   answer: unknown,
+ *   lastError: unknown,
+ *   warnings: unknown[],
+ *   lastDomHash: string|null,
+ *   lastAxHash: string|null,
+ *   lastStreamingState?: string,
+ *   lastResponseCharCount?: number,
+ *   trace: unknown[],
+ *   [extra: string]: unknown,
+ * }} WebAiSession
+ */
+
+/**
+ * @typedef {{
+ *   version: number,
+ *   sessions: WebAiSession[],
+ *   [extra: string]: unknown,
+ * }} WebAiSessionStore
+ */
 
 export const SESSION_STORE_VERSION = 1;
 
@@ -22,10 +58,18 @@ function lockPath() {
     return `${storePath()}.lock`;
 }
 
+/**
+ * @param {number} [now]
+ * @returns {string}
+ */
 export function generateSessionId(now = Date.now()) {
     return encodeTime(now) + encodeRandom();
 }
 
+/**
+ * @param {number|string} ms
+ * @returns {string}
+ */
 function encodeTime(ms) {
     let t = Math.max(0, Math.floor(Number(ms) || 0));
     const out = new Array(10);
@@ -36,6 +80,7 @@ function encodeTime(ms) {
     return out.join('');
 }
 
+/** @returns {string} */
 function encodeRandom() {
     const bytes = randomBytes(10);
     let bits = 0n;
@@ -48,6 +93,7 @@ function encodeRandom() {
     return out;
 }
 
+/** @returns {WebAiSessionStore} */
 export function readSessionStore() {
     const path = storePath();
     if (!existsSync(path)) return { version: SESSION_STORE_VERSION, sessions: [] };
@@ -62,10 +108,14 @@ export function readSessionStore() {
     }
 }
 
+/** @returns {WebAiSessionStore} */
 function readSessionStoreLocked() {
     return withStoreLock(() => readSessionStore());
 }
 
+/**
+ * @param {WebAiSessionStore} store
+ */
 export function writeSessionStore(store) {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true });
@@ -74,6 +124,11 @@ export function writeSessionStore(store) {
     renameSync(tmp, path);
 }
 
+/**
+ * @template T
+ * @param {() => T} fn
+ * @returns {T}
+ */
 export function withStoreLock(fn) {
     const path = lockPath();
     mkdirSync(dirname(path), { recursive: true });
@@ -91,7 +146,8 @@ export function withStoreLock(fn) {
                 try { unlinkSync(path); } catch { /* already gone */ }
             }
         } catch (err) {
-            if (err?.code !== 'EEXIST') throw err;
+            const e = /** @type {NodeJS.ErrnoException} */ (err);
+            if (e?.code !== 'EEXIST') throw err;
             attempts += 1;
             const stale = isStaleLock(path);
             if (stale) {
@@ -104,6 +160,10 @@ export function withStoreLock(fn) {
     throw new Error(`web-ai session store: failed to acquire lock at ${path} after ${LOCK_RETRY_LIMIT} attempts`);
 }
 
+/**
+ * @param {string} path
+ * @returns {boolean}
+ */
 function isStaleLock(path) {
     try {
         const raw = readFileSync(path, 'utf8');
@@ -116,6 +176,7 @@ function isStaleLock(path) {
     }
 }
 
+/** @param {number} ms */
 function sleepBlockingMs(ms) {
     const end = Date.now() + ms;
     // Avoid spawning child processes / busy-wait via Atomics.wait on a shared buffer.
@@ -124,13 +185,24 @@ function sleepBlockingMs(ms) {
     Atomics.wait(view, 0, 0, Math.max(0, end - Date.now()));
 }
 
+/**
+ * @param {string} sessionId
+ * @returns {string}
+ */
 function sessionCommandLockPath(sessionId) {
     return `${storePath()}.cmd.${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`;
 }
 
+/**
+ * @template T
+ * @param {string} sessionId
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
 export async function withSessionCommandLock(sessionId, fn) {
     const path = sessionCommandLockPath(sessionId);
     mkdirSync(dirname(path), { recursive: true });
+    /** @type {number|null} */
     let fd = null;
     let attempts = 0;
     while (attempts < LOCK_RETRY_LIMIT) {
@@ -141,7 +213,8 @@ export async function withSessionCommandLock(sessionId, fn) {
             } catch { /* best-effort metadata write */ }
             break;
         } catch (err) {
-            if (err?.code !== 'EEXIST') throw err;
+            const e = /** @type {NodeJS.ErrnoException} */ (err);
+            if (e?.code !== 'EEXIST') throw err;
             attempts += 1;
             const stale = isStaleLock(path);
             if (stale) {
@@ -162,6 +235,10 @@ export async function withSessionCommandLock(sessionId, fn) {
     }
 }
 
+/**
+ * @param {WebAiSession} session
+ * @returns {WebAiSession}
+ */
 export function insertSession(session) {
     return withStoreLock(() => {
         const store = readSessionStore();
@@ -171,10 +248,15 @@ export function insertSession(session) {
     });
 }
 
+/**
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & Record<string, unknown>} patch
+ * @returns {WebAiSession|null}
+ */
 export function patchSession(sessionId, patch) {
     return withStoreLock(() => {
         const store = readSessionStore();
-        const idx = store.sessions.findIndex(s => s.sessionId === sessionId);
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
         if (idx < 0) return null;
         store.sessions[idx] = { ...store.sessions[idx], ...patch };
         writeSessionStore(store);
@@ -182,24 +264,37 @@ export function patchSession(sessionId, patch) {
     });
 }
 
+/**
+ * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
+ * @returns {WebAiSession[]}
+ */
 export function listStoredSessions(filter = {}) {
     const store = readSessionStoreLocked();
     let rows = store.sessions;
-    if (filter.sessionId) rows = rows.filter(s => s.sessionId === filter.sessionId);
-    if (filter.vendor) rows = rows.filter(s => s.vendor === filter.vendor);
-    if (filter.status) rows = rows.filter(s => s.status === filter.status);
-    if (filter.active === true) rows = rows.filter(session => isSessionActive(session));
+    if (filter.sessionId) rows = rows.filter((s) => s.sessionId === filter.sessionId);
+    if (filter.vendor) rows = rows.filter((s) => s.vendor === filter.vendor);
+    if (filter.status) rows = rows.filter((s) => s.status === filter.status);
+    if (filter.active === true) rows = rows.filter((session) => isSessionActive(session));
     rows = rows.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
     if (typeof filter.limit === 'number' && filter.limit > 0) rows = rows.slice(-filter.limit);
     return rows;
 }
 
+/**
+ * @param {WebAiSession|null|undefined} session
+ * @param {number} [now]
+ * @returns {boolean}
+ */
 export function isSessionActive(session, now = Date.now()) {
-    if (!['sent', 'polling'].includes(session?.status)) return false;
+    if (!session || !['sent', 'polling'].includes(session.status)) return false;
     const deadline = Date.parse(session.deadlineAt || '');
     return !Number.isFinite(deadline) || deadline > now;
 }
 
+/**
+ * @param {{ olderThanMs?: number, before?: string, status?: string }} [opts]
+ * @returns {{ removed: number, remaining: number }}
+ */
 export function pruneSessions({ olderThanMs, before, status } = {}) {
     return withStoreLock(() => {
         const store = readSessionStore();
@@ -209,7 +304,7 @@ export function pruneSessions({ olderThanMs, before, status } = {}) {
                 ? Date.now() - olderThanMs
                 : null;
         const before_count = store.sessions.length;
-        store.sessions = store.sessions.filter(session => {
+        store.sessions = store.sessions.filter((session) => {
             const created = Date.parse(session.createdAt || '');
             if (status && session.status !== status) return true;
             if (cutoff !== null && Number.isFinite(created) && created < cutoff) return false;
@@ -221,6 +316,7 @@ export function pruneSessions({ olderThanMs, before, status } = {}) {
     });
 }
 
+/** @returns {Array<Record<string, unknown>>} */
 export function loadLegacyBaselines() {
     const path = join(home(), 'web-ai-baselines.json');
     if (!existsSync(path)) return [];
