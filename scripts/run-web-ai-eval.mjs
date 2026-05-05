@@ -1,8 +1,13 @@
 #!/usr/bin/env node
+// @ts-check
 import fs from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { runWebAiEval } from '../web-ai/eval-runner.mjs';
 
+/**
+ * @param {string[]} [argv]
+ * @returns {Promise<any>}
+ */
 export async function main(argv = process.argv.slice(2)) {
     const { values } = parseArgs({
         args: argv,
@@ -21,7 +26,7 @@ export async function main(argv = process.argv.slice(2)) {
         vendor: values.vendor,
         fixtures: values.fixtures,
         variants: values.variant,
-        concurrency: values.concurrency,
+        concurrency: /** @type {any} */ (values.concurrency),
     });
     if (values['update-golden']) {
         if ((values.vendor || 'chatgpt') !== 'chatgpt' || values.config) {
@@ -35,6 +40,9 @@ export async function main(argv = process.argv.slice(2)) {
     return result;
 }
 
+/**
+ * @param {any} result
+ */
 function printHuman(result) {
     console.log(`web-ai eval ${result.status}: ${result.summary.passCount}/${result.summary.total} fixtures passed`);
     for (const regression of result.regressions) {
