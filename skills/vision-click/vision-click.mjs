@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * vision-click.mjs — Vision-based coordinate click via Codex CLI
  *
@@ -42,6 +43,11 @@ const c = {
 //  Browser Script Helper
 // ═══════════════════════════════════════════════════
 
+/**
+ * @param {string[]} args
+ * @param {{browserScript?:string, port?:string|number}} [opts]
+ * @returns {string}
+ */
 function browserCmd(args, opts = {}) {
     const browserScript = opts.browserScript || DEFAULT_BROWSER_SCRIPT;
     const portArgs = opts.port ? ['--port', String(opts.port)] : [];
@@ -50,10 +56,10 @@ function browserCmd(args, opts = {}) {
         return execFileSync('node', allArgs, {
             encoding: 'utf-8',
             timeout: 30000,
-            env: { ...process.env, CDP_PORT: opts.port || DEFAULT_CDP_PORT },
+            env: /** @type {any} */ ({ ...process.env, CDP_PORT: opts.port || DEFAULT_CDP_PORT }),
         }).trim();
     } catch (e) {
-        throw new Error(`browser.mjs ${args[0]} failed: ${e.stderr || e.message}`);
+        throw new Error(`browser.mjs ${args[0]} failed: ${(/** @type {any} */ (e)).stderr || (/** @type {any} */ (e)).message}`);
     }
 }
 
@@ -67,6 +73,11 @@ function browserCmd(args, opts = {}) {
 //   {"type":"item.completed","item":{"id":"...","type":"agent_message","text":"{\"found\":true,\"x\":...,\"y\":...}"}}
 //   {"type":"turn.completed","usage":{...}}
 
+/**
+ * @param {string} screenshotPath
+ * @param {string} prompt
+ * @returns {{found:boolean, x:number, y:number, description?:string}}
+ */
 function codexVisionWithPrompt(screenshotPath, prompt) {
     const args = [
         'exec', '-i', screenshotPath, '--json',
@@ -84,7 +95,7 @@ function codexVisionWithPrompt(screenshotPath, prompt) {
             stdio: ['pipe', 'pipe', 'pipe'],
         });
     } catch (e) {
-        throw new Error(`codex exec failed: ${(e.stderr || e.message).slice(0, 300)}`);
+        throw new Error(`codex exec failed: ${((/** @type {any} */ (e)).stderr || (/** @type {any} */ (e)).message).slice(0, 300)}`);
     }
 
     // Parse NDJSON lines, scan from last to first for item.completed with coordinates
@@ -101,10 +112,21 @@ function codexVisionWithPrompt(screenshotPath, prompt) {
     throw new Error(`No coordinate JSON in codex NDJSON output (${lines.length} lines)`);
 }
 
+/**
+ * @param {string} screenshotPath
+ * @param {string} target
+ * @param {any} [options]
+ * @returns {{found:boolean, x:number, y:number, description?:string}}
+ */
 function codexVision(screenshotPath, target, options = {}) {
     return codexVisionWithPrompt(screenshotPath, buildCoordPrompt(target, options));
 }
 
+/**
+ * @param {any} [opts]
+ * @param {{x:number,y:number,width:number,height:number}|null} [clip]
+ * @returns {string[]}
+ */
 function screenshotJsonArgs(opts = {}, clip = null) {
     const args = ['screenshot', '--json'];
     const effectiveClip = clip || opts.clip;
@@ -114,6 +136,10 @@ function screenshotJsonArgs(opts = {}, clip = null) {
     return args;
 }
 
+/**
+ * @param {any} [opts]
+ * @returns {{width:number,height:number}|null}
+ */
 function prepareStableViewport(opts = {}) {
     if (!opts.prepareStable && !opts.viewport) return null;
     const viewport = opts.viewport || { width: 1440, height: 900 };
@@ -122,12 +148,23 @@ function prepareStableViewport(opts = {}) {
     return viewport;
 }
 
+/**
+ * @param {any} opts
+ * @param {{width:number,height:number}} viewport
+ * @returns {{x:number,y:number,width:number,height:number}|null}
+ */
 function resolveInitialClip(opts, viewport) {
     if (opts.clip) return opts.clip;
     if (opts.region) return resolveRegionClip(opts.region, viewport);
     return null;
 }
 
+/**
+ * @param {{x:number,y:number}} raw
+ * @param {number} dpr
+ * @param {{x:number,y:number,width:number,height:number}|null} [clip]
+ * @returns {{x:number,y:number}}
+ */
 function convertRawToCss(raw, dpr, clip = null) {
     const local = applyDprCorrection(raw.x, raw.y, dpr);
     if (!clip) return local;
@@ -137,6 +174,13 @@ function convertRawToCss(raw, dpr, clip = null) {
     };
 }
 
+/**
+ * @param {string} target
+ * @param {{dpr:number, viewport:{width:number,height:number}, clip:{x:number,y:number,width:number,height:number}|null}} capture
+ * @param {{x:number,y:number,description?:string}} initialResult
+ * @param {any} [opts]
+ * @returns {{raw:{x:number,y:number}, css:{x:number,y:number}, clip:{x:number,y:number,width:number,height:number}, description?:string}}
+ */
 function verifyCandidate(target, capture, initialResult, opts = {}) {
     const cssPoint = convertRawToCss({ x: initialResult.x, y: initialResult.y }, capture.dpr, capture.clip);
     const verifyClip = clipAroundPoint(cssPoint, capture.viewport, { width: 280, height: 200 });
@@ -177,6 +221,11 @@ function verifyCandidate(target, capture, initialResult, opts = {}) {
 //  Vision Click Pipeline
 // ═══════════════════════════════════════════════════
 
+/**
+ * @param {string} target
+ * @param {any} [opts]
+ * @returns {{success:boolean, reason?:string, clicked?:{x:number,y:number}, raw?:{x:number,y:number}, dpr?:number, description?:string, snap?:string|null, clip?:any, verified?:boolean}}
+ */
 function visionClick(target, opts = {}) {
     const stableViewport = prepareStableViewport(opts);
 
@@ -296,9 +345,9 @@ try {
     const result = visionClick(target, opts);
 
     if (result.success) {
-        console.log(`${c.green}🖱️ vision-clicked "${target}" at (${result.clicked.x}, ${result.clicked.y})${c.reset}`);
+        console.log(`${c.green}🖱️ vision-clicked "${target}" at (${(/** @type {any} */ (result)).clicked.x}, ${(/** @type {any} */ (result)).clicked.y})${c.reset}`);
         if (result.dpr !== 1) {
-            console.log(`${c.dim}   DPR=${result.dpr}, raw=(${result.raw.x}, ${result.raw.y})${c.reset}`);
+            console.log(`${c.dim}   DPR=${result.dpr}, raw=(${(/** @type {any} */ (result)).raw.x}, ${(/** @type {any} */ (result)).raw.y})${c.reset}`);
         }
         if (result.description) {
             console.log(`${c.dim}   description: ${result.description}${c.reset}`);
@@ -308,6 +357,6 @@ try {
         process.exitCode = 1;
     }
 } catch (e) {
-    console.error(`❌ ${e.message}`);
+    console.error(`❌ ${(/** @type {any} */ (e)).message}`);
     process.exitCode = 1;
 }
