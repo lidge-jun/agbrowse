@@ -71,8 +71,7 @@
     "scripts/run-web-ai-eval.mjs",
     "scripts/check-strict-baseline.mjs",
     "scripts/check-module-graph.mjs",
-    "skills/vision-click/vision-click.mjs",
-    "bin/agbrowse-vision-click.mjs"
+    "skills/vision-click/vision-click.mjs"
   ],
   "exclude": [
     "node_modules",
