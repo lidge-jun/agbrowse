@@ -3,8 +3,8 @@ import { makeRatioMetric } from './types.mjs';
 
 /**
  * @typedef {{
- *   value?: number,
- *   threshold?: number,
+ *   value?: unknown,
+ *   threshold?: unknown,
  *   [extra: string]: unknown,
  * }} EvalMetric
  */
@@ -66,13 +66,15 @@ export function collectMetricRegressions(result) {
     const regressions = [];
     for (const [name, metric] of Object.entries(result.metrics || {})) {
         if (!metric || typeof metric !== 'object') continue;
+        const value = /** @type {number} */ (metric.value);
+        const threshold = /** @type {number} */ (metric.threshold);
         if (name === 'snapshotTokenEstimate') {
-            if (typeof metric.value === 'number' && metric.value > DEFAULT_EVAL_THRESHOLDS.snapshotTokenEstimateMax) {
+            if (value > DEFAULT_EVAL_THRESHOLDS.snapshotTokenEstimateMax) {
                 regressions.push({
                     provider: result.provider,
                     variant: result.variant,
                     metric: name,
-                    value: metric.value,
+                    value,
                     threshold: DEFAULT_EVAL_THRESHOLDS.snapshotTokenEstimateMax,
                     fixturePath: result.fixturePath,
                 });

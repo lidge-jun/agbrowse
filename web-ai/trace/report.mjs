@@ -4,12 +4,13 @@ import { redactTraceValue } from './redact.mjs';
 
 /**
  * @typedef {{
- *   traceId?: string,
- *   command?: string,
- *   provider?: string,
- *   urlOrigin?: string,
- *   steps?: Array<{ type?: string, status?: string }>,
- *   errorEnvelope?: { errorCode?: string, message?: string },
+ *   traceId: string,
+ *   command: string,
+ *   provider: string|null,
+ *   urlOrigin: string|null,
+ *   steps: Array<{ type?: string, status?: string, [extra: string]: unknown }>,
+ *   errorEnvelope: { errorCode?: string, message?: string }|null,
+ *   [extra: string]: unknown,
  * }} TraceRecord
  */
 
