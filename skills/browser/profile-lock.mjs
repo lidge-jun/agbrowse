@@ -1,17 +1,38 @@
+// @ts-check
 import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, readFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 
+/**
+ * @typedef {Object} ProfileLock
+ * @property {number} pid
+ * @property {string} token
+ * @property {string} acquiredAt
+ * @property {string} [heartbeatAt]
+ */
+
+/**
+ * @typedef {ProfileLock & { path: string }} AcquiredProfileLock
+ */
+
 const DEFAULT_HOME = process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
 const LOCK_NAME = 'profile.lock';
 const STALE_AFTER_MS = 5 * 60 * 1000;
 
+/**
+ * @param {number|null|undefined} pid
+ * @returns {boolean}
+ */
 export function isPidAlive(pid) {
     if (!pid || typeof pid !== 'number') return false;
-    try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+    try { process.kill(pid, 0); return true; } catch (e) { return /** @type {{ code?: string }} */ (e).code === 'EPERM'; }
 }
 
+/**
+ * @param {string} [homeDir]
+ * @returns {AcquiredProfileLock}
+ */
 export function acquireProfileLock(homeDir = DEFAULT_HOME) {
     const lockPath = join(homeDir, LOCK_NAME);
     mkdirSync(homeDir, { recursive: true });
@@ -57,6 +78,10 @@ export function acquireProfileLock(homeDir = DEFAULT_HOME) {
     return { ...lock, path: lockPath };
 }
 
+/**
+ * @param {string} [homeDir]
+ * @param {string|null} [token]
+ */
 export function releaseProfileLock(homeDir = DEFAULT_HOME, token = null) {
     const lockPath = join(homeDir, LOCK_NAME);
     const lock = readProfileLock(homeDir);
@@ -66,12 +91,20 @@ export function releaseProfileLock(homeDir = DEFAULT_HOME, token = null) {
     try { unlinkSync(lockPath); } catch { /* already gone */ }
 }
 
+/**
+ * @param {string} [homeDir]
+ * @returns {ProfileLock|null}
+ */
 export function readProfileLock(homeDir = DEFAULT_HOME) {
     const lockPath = join(homeDir, LOCK_NAME);
     if (!existsSync(lockPath)) return null;
-    try { return JSON.parse(readFileSync(lockPath, 'utf8')); } catch { return null; }
+    try { return /** @type {ProfileLock} */ (JSON.parse(readFileSync(lockPath, 'utf8'))); } catch { return null; }
 }
 
+/**
+ * @param {ProfileLock|null|undefined} lock
+ * @returns {boolean}
+ */
 export function isStaleLock(lock) {
     if (!lock) return true;
     if (Number.isInteger(lock.pid) && lock.pid > 0) {
@@ -84,6 +117,11 @@ export function isStaleLock(lock) {
     return elapsed > STALE_AFTER_MS;
 }
 
+/**
+ * @param {string} homeDir
+ * @param {string} token
+ * @param {number} newPid
+ */
 export function updateLockPid(homeDir = DEFAULT_HOME, token, newPid) {
     const lockPath = join(homeDir, LOCK_NAME);
     const lock = readProfileLock(homeDir);
@@ -93,6 +131,10 @@ export function updateLockPid(homeDir = DEFAULT_HOME, token, newPid) {
     try { writeFileSync(lockPath, JSON.stringify(lock, null, 2)); } catch { /* race safe */ }
 }
 
+/**
+ * @param {string} [homeDir]
+ * @param {string|null} [token]
+ */
 export function updateHeartbeat(homeDir = DEFAULT_HOME, token = null) {
     const lockPath = join(homeDir, LOCK_NAME);
     const lock = readProfileLock(homeDir);
