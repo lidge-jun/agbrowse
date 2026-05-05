@@ -1,5 +1,52 @@
+// @ts-check
 import { findVisibleCandidate } from './browser-primitives.mjs';
 import { WebAiError } from './errors.mjs';
+
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+/** @typedef {import('playwright-core').CDPSession} CDPSession */
+
+/**
+ * @typedef {Object} ComposerTarget
+ * @property {string} selector
+ * @property {unknown} [resolution]
+ */
+
+/**
+ * @typedef {Object} SendTarget
+ * @property {string} selector
+ * @property {unknown} [resolution]
+ */
+
+/**
+ * @typedef {Object} ComposerCandidate
+ * @property {string} selector
+ * @property {Locator} locator
+ */
+
+/**
+ * @typedef {Object} ComposerState
+ * @property {string} editorText
+ * @property {string} fallbackValue
+ * @property {string} activeValue
+ */
+
+/**
+ * @typedef {Object} ComposerOptions
+ * @property {ComposerTarget} [composerTarget]
+ * @property {SendTarget} [sendTarget]
+ * @property {(text: string) => Promise<void> | void} [insertText]
+ * @property {() => Promise<CDPSession>} [getCdpSession]
+ * @property {number} [timeoutMs]
+ * @property {number} [baselineTurns]
+ */
+
+/**
+ * @typedef {Object} SubmitResult
+ * @property {'button' | 'enter'} method
+ * @property {string} [selector]
+ * @property {unknown} [resolution]
+ */
 
 export const INPUT_SELECTORS = [
     'textarea[data-id="prompt-textarea"]',
@@ -38,6 +85,11 @@ export const CONVERSATION_TURN_SELECTOR = [
 const INSERT_SETTLE_MS = 500;
 const DEFAULT_COMMIT_TIMEOUT_MS = 60_000;
 
+/**
+ * @param {Page} page
+ * @param {ComposerOptions} [options]
+ * @returns {Promise<ComposerCandidate>}
+ */
 export async function findComposerCandidate(page, options = {}) {
     if (options.composerTarget?.selector) {
         return {
@@ -57,6 +109,12 @@ export async function findComposerCandidate(page, options = {}) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @param {string} text
+ * @param {ComposerOptions} [options]
+ * @returns {Promise<void>}
+ */
 export async function insertPromptIntoComposer(page, text, options = {}) {
     const candidate = await findComposerCandidate(page, options);
     await focusComposerLikeUser(candidate.locator);
@@ -94,6 +152,11 @@ export async function insertPromptIntoComposer(page, text, options = {}) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @param {ComposerOptions} [options]
+ * @returns {Promise<SubmitResult>}
+ */
 export async function submitPromptFromComposer(page, options = {}) {
     if (options.sendTarget?.selector) {
         const clickedResolved = await clickResolvedSendButton(page, options.sendTarget);
@@ -111,6 +174,12 @@ export async function submitPromptFromComposer(page, options = {}) {
     return { method: 'enter' };
 }
 
+/**
+ * @param {Page} page
+ * @param {string} prompt
+ * @param {ComposerOptions} [options]
+ * @returns {Promise<{ turnsCount: number }>}
+ */
 export async function verifyPromptCommitted(page, prompt, options = {}) {
     const timeoutMs = Number(options.timeoutMs || DEFAULT_COMMIT_TIMEOUT_MS);
     const baselineTurns = Number.isFinite(Number(options.baselineTurns)) ? Number(options.baselineTurns) : -1;
@@ -143,13 +212,20 @@ export async function verifyPromptCommitted(page, prompt, options = {}) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<number>}
+ */
 export async function countConversationTurns(page) {
     return (await readConversationTurns(page)).length;
 }
 
+/**
+ * @param {Locator} locator
+ */
 async function focusComposerLikeUser(locator) {
     await locator.click().catch(() => undefined);
-    await locator.evaluate?.((node) => {
+    await locator.evaluate?.((/** @type {HTMLElement} */ node) => {
         const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
         for (const type of types) {
             const common = { bubbles: true, cancelable: true, view: window };
@@ -170,6 +246,11 @@ async function focusComposerLikeUser(locator) {
     }).catch(() => undefined);
 }
 
+/**
+ * @param {Page} page
+ * @param {string} text
+ * @param {ComposerOptions} [options]
+ */
 async function insertTextLikeProvider(page, text, options = {}) {
     if (typeof options.insertText === 'function') {
         await options.insertText(text);
@@ -187,13 +268,18 @@ async function insertTextLikeProvider(page, text, options = {}) {
     await page.keyboard.insertText(text);
 }
 
+/**
+ * @param {Page} page
+ * @param {Locator} locator
+ * @param {string} text
+ */
 async function writeComposerFallback(page, locator, text) {
     if (typeof page.evaluate === 'function') {
-        const wrote = await page.evaluate(({ selectors, value }) => {
-            const write = (node) => {
+        const wrote = await page.evaluate((/** @type {{ selectors: readonly string[], value: string }} */ { selectors, value }) => {
+            const write = (/** @type {Element | null} */ node) => {
                 if (!node) return false;
                 if ('value' in node) {
-                    node.value = value;
+                    /** @type {HTMLInputElement | HTMLTextAreaElement} */ (node).value = value;
                     node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: value }));
                     node.dispatchEvent(new Event('change', { bubbles: true }));
                     return true;
@@ -213,9 +299,9 @@ async function writeComposerFallback(page, locator, text) {
         }, { selectors: INPUT_SELECTORS, value: text }).catch(() => false);
         if (wrote) return;
     }
-    await locator.evaluate((node, value) => {
+    await locator.evaluate((/** @type {Element} */ node, /** @type {string} */ value) => {
         if ('value' in node) {
-            node.value = value;
+            /** @type {HTMLInputElement | HTMLTextAreaElement} */ (node).value = value;
             node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: value }));
             node.dispatchEvent(new Event('change', { bubbles: true }));
             return;
@@ -225,15 +311,20 @@ async function writeComposerFallback(page, locator, text) {
     }, text);
 }
 
+/**
+ * @param {Page} page
+ * @param {Locator} [fallbackLocator]
+ * @returns {Promise<ComposerState>}
+ */
 async function readComposerState(page, fallbackLocator) {
     if (typeof page.evaluate === 'function') {
-        const value = await page.evaluate((selectors) => {
-            const read = (node) => {
+        const value = await page.evaluate((/** @type {readonly string[]} */ selectors) => {
+            const read = (/** @type {Element | null} */ node) => {
                 if (!node) return '';
                 if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) return node.value || '';
-                return node.innerText || node.textContent || '';
+                return /** @type {HTMLElement} */ (node).innerText || node.textContent || '';
             };
-            const isVisible = (node) => {
+            const isVisible = (/** @type {Element | null} */ node) => {
                 if (!node || typeof node.getBoundingClientRect !== 'function') return false;
                 const rect = node.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -252,15 +343,19 @@ async function readComposerState(page, fallbackLocator) {
         const candidate = await findComposerCandidate(page);
         fallbackLocator = candidate.locator;
     }
-    const actual = await fallbackLocator.inputValue?.().catch(async () => fallbackLocator.innerText?.()).catch(() => '');
+    const actual = await (/** @type {Locator} */ (fallbackLocator)).inputValue?.().catch(async () => (/** @type {Locator} */ (fallbackLocator)).innerText?.()).catch(() => '');
     return { editorText: String(actual || ''), fallbackValue: '', activeValue: String(actual || '') };
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<boolean>}
+ */
 async function clickEnabledSendButton(page) {
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
-        const result = await page.evaluate(({ inputSelectors, sendSelectors }) => {
-            const dispatchClickSequence = (target) => {
+        const result = await page.evaluate((/** @type {{ inputSelectors: readonly string[], sendSelectors: readonly string[] }} */ { inputSelectors, sendSelectors }) => {
+            const dispatchClickSequence = (/** @type {EventTarget | null | undefined} */ target) => {
                 if (!target || !(target instanceof EventTarget)) return false;
                 for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
                     const common = { bubbles: true, cancelable: true, view: window };
@@ -271,7 +366,7 @@ async function clickEnabledSendButton(page) {
                 }
                 return true;
             };
-            const isVisible = (node) => {
+            const isVisible = (/** @type {Element | null | undefined} */ node) => {
                 if (!node || typeof node.getBoundingClientRect !== 'function') return false;
                 const rect = node.getBoundingClientRect();
                 if (rect.width <= 0 || rect.height <= 0) return false;
@@ -279,15 +374,15 @@ async function clickEnabledSendButton(page) {
                 return !style || (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0');
             };
             const promptNode = inputSelectors
-                .flatMap(selector => Array.from(document.querySelectorAll(selector)))
-                .find(isVisible) ?? inputSelectors.map(selector => document.querySelector(selector)).find(Boolean);
+                .flatMap((/** @type {string} */ selector) => Array.from(document.querySelectorAll(selector)))
+                .find(isVisible) ?? inputSelectors.map((/** @type {string} */ selector) => document.querySelector(selector)).find(Boolean);
             const root = promptNode?.closest?.('[data-testid*="composer"]') ??
                 promptNode?.closest?.('form') ??
                 promptNode?.parentElement ??
                 document;
             const candidates = [
-                ...sendSelectors.flatMap(selector => Array.from(root.querySelectorAll(selector))),
-                ...sendSelectors.flatMap(selector => Array.from(document.querySelectorAll(selector))),
+                ...sendSelectors.flatMap((/** @type {string} */ selector) => Array.from(root.querySelectorAll(selector))),
+                ...sendSelectors.flatMap((/** @type {string} */ selector) => Array.from(document.querySelectorAll(selector))),
             ];
             const seen = new Set();
             for (const button of candidates) {
@@ -313,6 +408,11 @@ async function clickEnabledSendButton(page) {
     return false;
 }
 
+/**
+ * @param {Page} page
+ * @param {SendTarget} target
+ * @returns {Promise<boolean>}
+ */
 async function clickResolvedSendButton(page, target) {
     const button = page.locator(target.selector).first();
     const visible = typeof button.isVisible === 'function'
@@ -335,6 +435,10 @@ async function clickResolvedSendButton(page, target) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<string[]>}
+ */
 async function readConversationTurns(page) {
     const locators = await page.locator(CONVERSATION_TURN_SELECTOR).all().catch(() => []);
     const turns = [];
@@ -345,19 +449,37 @@ async function readConversationTurns(page) {
     return turns;
 }
 
+/**
+ * @param {Page} page
+ * @param {string} selector
+ * @returns {Promise<boolean>}
+ */
 async function locatorExists(page, selector) {
     return (await page.locator(selector).first().count().catch(() => 0)) > 0;
 }
 
+/**
+ * @param {ComposerState} state
+ * @param {string} expected
+ * @returns {boolean}
+ */
 function hasInsertedText(state, expected) {
     const prefix = normalizePrompt(expected).slice(0, Math.min(normalizePrompt(expected).length, 120));
     return [state.editorText, state.fallbackValue, state.activeValue].some(value => normalizePrompt(value).includes(prefix));
 }
 
+/**
+ * @param {ComposerState} state
+ * @returns {number}
+ */
 function maxComposerLength(state) {
     return Math.max(String(state.editorText || '').length, String(state.fallbackValue || '').length, String(state.activeValue || '').length);
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
 function normalizePrompt(value) {
     return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }

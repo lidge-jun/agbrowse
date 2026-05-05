@@ -13,7 +13,8 @@
     "web-ai/browser-primitives.mjs",
     "web-ai/copy-markdown.mjs",
     "web-ai/ax-snapshot.mjs",
-    "web-ai/chatgpt-model.mjs"
+    "web-ai/chatgpt-model.mjs",
+    "web-ai/chatgpt-composer.mjs"
   ],
   "exclude": [
     "node_modules",
