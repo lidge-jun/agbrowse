@@ -5,7 +5,7 @@ Bring the session/error/policy core into per-file `// @ts-check` opt-in coverage
 
 ## Files added to `tsconfig.checkjs.json#include`
 1. `web-ai/errors.mjs` — `WebAiErrorInit` typedef + JSDoc on `WebAiError` class and `wrapError`/`providerError`/`contextError`/`toErrorJson`.
-2. `web-ai/policy/schema.mjs` — `WebAiPolicy` typedef via `typeof DEFAULT_WEB_AI_POLICY`, JSDoc on `loadPolicy`/`normalizePolicy`/`policyError`.
+2. `web-ai/policy/schema.mjs` — explicit `WebAiPolicy` typedef widening flexible policy fields (`allowUploads`/`allowClipboardWrite`/`allowCrossOriginNavigation`) to `boolean|string`, JSDoc on `loadPolicy`/`normalizePolicy`/`policyError`.
 3. `web-ai/session-store.mjs` — `WebAiSession` and `WebAiSessionStore` typedefs (producer of session shape), JSDoc on all 12 exports including generic `withStoreLock<T>` / `withSessionCommandLock<T>`.
 4. `web-ai/session.mjs` — `WebAiEnvelope` and `WebAiBaseline` typedefs, JSDoc on all 18 exports. Imports `WebAiSession` from session-store via `import('./session-store.mjs').WebAiSession`.
 5. `web-ai/trace-persistence.mjs` — `redactSensitive(unknown): unknown`, `appendTraceToSession(sessionId, steps: unknown[]|null|undefined): void`. `Record<string, unknown>` accumulator on the recursive object branch. (Deferred from P05.)
