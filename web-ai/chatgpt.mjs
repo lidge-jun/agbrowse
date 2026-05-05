@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { renderQuestionEnvelope, renderQuestionEnvelopeWithContext, normalizeEnvelope } from './question.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
 import { INPUT_SELECTORS as CHATGPT_COMPOSER_SELECTORS } from './chatgpt-composer.mjs';
@@ -50,6 +56,9 @@ const PLACEHOLDER_PATTERNS = [
     /^\s*$/,
 ];
 
+/**
+ * @param {any} input
+ */
 export async function renderWebAi(input = {}) {
     const envelope = normalizeEnvelope(input);
     const contextPack = await prepareContextForBrowser(input);
@@ -79,18 +88,18 @@ const CHATGPT_STOP_SELECTORS = [
 ];
 
 export const chatGptCapabilities = [
-    defineCapability('chatgpt-active-tab-verification', async (deps) => probeHostMatches(await deps.getPage(), CHATGPT_HOSTS)),
-    defineCapability('chatgpt-composer-visible', async (deps) => probeFirstVisibleSelector(await deps.getPage(), CHATGPT_COMPOSER_SELECTORS)),
-    defineCapability('chatgpt-model-alias-selectable', async (deps, input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, { effort: input.reasoningEffort })),
-    defineCapability('chatgpt-upload-surface-visible', async (deps, input) => {
+    defineCapability('chatgpt-active-tab-verification', async (/** @type {any} */ deps) => probeHostMatches(await deps.getPage(), CHATGPT_HOSTS)),
+    defineCapability('chatgpt-composer-visible', async (/** @type {any} */ deps) => probeFirstVisibleSelector(await deps.getPage(), CHATGPT_COMPOSER_SELECTORS)),
+    defineCapability('chatgpt-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, { effort: input.reasoningEffort })),
+    defineCapability('chatgpt-upload-surface-visible', async (/** @type {any} */ deps, /** @type {any} */ input) => {
         if (!input.filePath && input.inlineOnly !== false) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), CHATGPT_UPLOAD_SELECTORS, { failNext: 'inline-only' });
     }),
-    defineCapability('chatgpt-copy-button-present', async (deps, input) => {
+    defineCapability('chatgpt-copy-button-present', async (/** @type {any} */ deps, /** @type {any} */ input) => {
         if (!input.allowCopyMarkdownFallback) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), CHATGPT_COPY_SELECTORS.copyButtonSelectors, { timeoutMs: 500, failNext: 'send', failState: 'warn' });
     }),
-    defineCapability('chatgpt-response-streaming', async (deps) => {
+    defineCapability('chatgpt-response-streaming', async (/** @type {any} */ deps) => {
         const page = await deps.getPage();
         for (const sel of CHATGPT_STOP_SELECTORS) {
             if (await page.locator(sel).first().isVisible().catch(() => false)) {
@@ -101,6 +110,10 @@ export const chatGptCapabilities = [
     }),
 ];
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function statusWebAi(deps, input = {}) {
     // Run capability probes first so chatgpt-active-tab-verification can report
     // a fail row instead of throwing before any rows are collected. The strict
@@ -119,6 +132,10 @@ export async function statusWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function sendWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
     if (input.url) {
@@ -162,7 +179,7 @@ export async function sendWebAi(deps, input = {}) {
     });
 
     const editorOptions = {
-        insertText: async (text) => {
+        insertText: async (/** @type {any} */ text) => {
             const cdp = await deps.getCdpSession?.();
             if (!cdp) throw new Error('CDP session unavailable for Input.insertText');
             try {
@@ -180,11 +197,13 @@ export async function sendWebAi(deps, input = {}) {
         const composerResolution = await resolveChatGptComposerTarget(page, traceCtx);
         const adapter = createChatGptEditorAdapter(page, {
             ...editorOptions,
-            composerTarget: composerResolution.target,
+            composerTarget: /** @type {any} */ (composerResolution.target),
         });
         const commitBaseline = await adapter.getCommitBaseline();
         await adapter.insertPrompt(rendered.composerText);
+        /** @type {any[]} */
         let attachmentWarnings = [];
+        /** @type {any[]} */
         let usedFallbacks = [];
         const contextAttachmentPath = contextPack?.attachments?.[0]?.path;
         if (contextAttachmentPath && input.filePath) {
@@ -200,7 +219,7 @@ export async function sendWebAi(deps, input = {}) {
         if (uploadPath) {
             const uploadResolution = await resolveOptionalChatGptUploadTarget(page, traceCtx);
             const upload = await attachLocalFileLive(page, fileInfoFromPath(uploadPath), {
-                uploadTarget: uploadResolution?.target || null,
+                uploadTarget: /** @type {any} */ (uploadResolution?.target || null),
             });
             if (!upload.ok) throw new WebAiError({
                 errorCode: 'provider.attachment-evidence-missing',
@@ -215,7 +234,7 @@ export async function sendWebAi(deps, input = {}) {
         }
         const sendResolution = await resolveOptionalChatGptSendTarget(page, traceCtx);
         await adapter.submitPrompt({
-            sendTarget: sendResolution?.target || null,
+            sendTarget: /** @type {any} */ (sendResolution?.target || null),
         });
         await adapter.verifyPromptCommitted(rendered.composerText, commitBaseline);
         if (uploadPath) {
@@ -259,6 +278,10 @@ export async function sendWebAi(deps, input = {}) {
     }
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function pollWebAi(deps, input = {}) {
     const vendor = input.vendor || 'chatgpt';
     const timeout = Math.max(1, Number(input.timeout || 1200));
@@ -304,7 +327,7 @@ export async function pollWebAi(deps, input = {}) {
                     if (input.allowCopyMarkdownFallback === true) {
                         const copyResolution = await resolveOptionalChatGptCopyTarget(page, copyTraceCtx);
                         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
-                            copyTarget: copyResolution?.target || null,
+                            copyTarget: /** @type {any} */ (copyResolution?.target || null),
                         });
                         traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
                         const copiedText = preferCopiedText(latest, copied);
@@ -312,11 +335,11 @@ export async function pollWebAi(deps, input = {}) {
                             answerText = cleanAssistantText(copiedText);
                             usedFallbacks.push('copy-markdown');
                         } else {
-                            warnings.push(`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`);
+                            warnings.push(`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`);
                         }
                     }
                     if (session) {
-                        await finalizeProviderTab(deps, { vendor, session, page, answerText, warnings });
+                        await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings });
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -346,14 +369,14 @@ export async function pollWebAi(deps, input = {}) {
     if (input.allowCopyMarkdownFallback === true && stableText) {
         const copyResolution = await resolveOptionalChatGptCopyTarget(page, copyTraceCtx);
         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
-            copyTarget: copyResolution?.target || null,
+            copyTarget: /** @type {any} */ (copyResolution?.target || null),
         });
         const traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
             if (session) {
-                await finalizeProviderTab(deps, { vendor, session, page, answerText });
+                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -377,7 +400,7 @@ export async function pollWebAi(deps, input = {}) {
             ...(session ? { sessionId: session.sessionId } : {}),
             baseline,
             ...(traceSummary ? { traceSummary } : {}),
-            warnings: [`copy-markdown-fallback-unavailable:${copied.status || 'unknown'}`],
+            warnings: [`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`],
             usedFallbacks: [],
             error: 'timed out waiting for answer',
         };
@@ -386,6 +409,9 @@ export async function pollWebAi(deps, input = {}) {
     return { ok: false, vendor, status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for answer' };
 }
 
+/**
+ * @param {any} page
+ */
 async function isStreaming(page) {
     for (const selector of ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]']) {
         const first = page.locator(selector).first();
@@ -394,6 +420,10 @@ async function isStreaming(page) {
     return false;
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function queryWebAi(deps, input = {}) {
     const sent = await sendWebAi(deps, input);
     const result = await pollWebAi(deps, {
@@ -411,12 +441,19 @@ export async function queryWebAi(deps, input = {}) {
     };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function stopWebAi(deps, input = {}) {
     const page = await requireChatGptPage(deps);
     await page.keyboard.press('Escape');
     return { ok: true, vendor: input.vendor || 'chatgpt', status: 'blocked', url: page.url(), warnings: ['sent Escape to stop generation'] };
 }
 
+/**
+ * @param {any} deps
+ */
 async function requireChatGptPage(deps) {
     const page = await deps.getPage();
     const url = page.url();
@@ -446,13 +483,17 @@ async function requireChatGptPage(deps) {
     return page;
 }
 
+/**
+ * @param {any} page
+ * @param {any} traceCtx
+ */
 async function resolveChatGptComposerTarget(page, traceCtx = null) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'composer.fill',
     });
     recordResolverTrace(traceCtx, result, 'composer.fill');
-    if (result.ok && result.target?.selector) return result;
+    if (result.ok && (/** @type {any} */ (result.target))?.selector) return result;
     throw new WebAiError({
         errorCode: 'provider.composer-not-visible',
         stage: 'composer-prereq',
@@ -468,38 +509,53 @@ async function resolveChatGptComposerTarget(page, traceCtx = null) {
     });
 }
 
+/**
+ * @param {any} page
+ * @param {any} traceCtx
+ */
 async function resolveOptionalChatGptSendTarget(page, traceCtx = null) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'send.click',
     });
     recordResolverTrace(traceCtx, result, 'send.click');
-    if (result.ok && result.target?.selector) return result;
+    if (result.ok && (/** @type {any} */ (result.target))?.selector) return result;
     return result;
 }
 
+/**
+ * @param {any} page
+ * @param {any} traceCtx
+ */
 async function resolveOptionalChatGptUploadTarget(page, traceCtx = null) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'upload.attach',
     });
     recordResolverTrace(traceCtx, result, 'upload.attach');
-    if (result.ok && result.target?.selector) return result;
+    if (result.ok && (/** @type {any} */ (result.target))?.selector) return result;
     return result;
 }
 
+/**
+ * @param {any} page
+ * @param {any} traceCtx
+ */
 async function resolveOptionalChatGptCopyTarget(page, traceCtx = null) {
     const result = await resolveTargetForIntent(page, {
         provider: 'chatgpt',
         intentId: 'copy.lastResponse',
     });
     recordResolverTrace(traceCtx, result, 'copy.lastResponse');
-    if (result.ok && result.target?.selector) return result;
+    if (result.ok && (/** @type {any} */ (result.target))?.selector) return result;
     return result;
 }
 
+/**
+ * @param {any} attempts
+ */
 function summarizeResolverAttempts(attempts = []) {
-    return attempts.map(attempt => ({
+    return attempts.map((/** @type {any} */ attempt) => ({
         source: attempt.source || null,
         selector: attempt.selector || null,
         ref: attempt.ref || null,
@@ -512,6 +568,11 @@ function summarizeResolverAttempts(attempts = []) {
     }));
 }
 
+/**
+ * @param {any} traceCtx
+ * @param {any} result
+ * @param {any} fallbackIntentId
+ */
 function recordResolverTrace(traceCtx, result, fallbackIntentId) {
     if (!traceCtx || !result) return;
     recordTraceStep(traceCtx, {
@@ -520,7 +581,7 @@ function recordResolverTrace(traceCtx, result, fallbackIntentId) {
         intentId: result.intent?.intentId || fallbackIntentId,
         operation: result.intent?.operation || null,
         status: result.ok ? 'ok' : 'unresolved',
-        target: scrubResolverTarget(result.target),
+        target: /** @type {any} */ (scrubResolverTarget(result.target)),
         confidence: result.confidence ?? null,
         resolutionSource: result.resolutionSource || null,
         errorCode: result.errorCode || null,
@@ -528,6 +589,9 @@ function recordResolverTrace(traceCtx, result, fallbackIntentId) {
     });
 }
 
+/**
+ * @param {any} target
+ */
 function scrubResolverTarget(target) {
     if (!target) return null;
     return {
@@ -539,23 +603,38 @@ function scrubResolverTarget(target) {
     };
 }
 
+/**
+ * @param {any} sessionId
+ * @param {any} traceCtx
+ */
 function persistResolverTrace(sessionId, traceCtx) {
     const steps = getSessionTrace(traceCtx);
     if (!steps.length) return null;
     appendTraceToSession(sessionId, steps);
     const session = getSession(sessionId);
-    return summarizeTraceSteps(sessionId, session?.trace?.length ? session.trace : steps);
+    return summarizeTraceSteps(sessionId, /** @type {any} */ (session?.trace?.length ? session.trace : steps));
 }
 
+/**
+ * @param {any} session
+ * @param {any} traceCtx
+ */
 function persistResolverTraceForSession(session, traceCtx) {
     if (!session?.sessionId || !traceCtx) return null;
     return persistResolverTrace(session.sessionId, traceCtx);
 }
 
+/**
+ * @param {any} page
+ */
 async function countAssistantMessages(page) {
     return (await readAssistantMessages(page)).length;
 }
 
+/**
+ * @param {any} page
+ * @param {any} timeoutMs
+ */
 async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
     const deadline = Date.now() + timeoutMs;
     let previous = -1;
@@ -570,8 +649,11 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
     }
 }
 
+/**
+ * @param {any} page
+ */
 async function readAssistantMessages(page) {
-    const evaluated = await page.evaluate((selectors) => {
+    const evaluated = await page.evaluate((/** @type {any} */ selectors) => {
         for (const selector of selectors) {
             const texts = Array.from(document.querySelectorAll(selector))
                 .map(el => String(el.innerText || el.textContent || '').trim())
@@ -594,19 +676,28 @@ async function readAssistantMessages(page) {
     return messages;
 }
 
+/**
+ * @param {any} text
+ */
 function isFinalAnswer(text) {
     return !PLACEHOLDER_PATTERNS.some(pattern => pattern.test(text));
 }
 
+/**
+ * @param {any} text
+ */
 function cleanAssistantText(text) {
     return String(text || '')
         .replace(/^Thought for\s+\d+s\s*/i, '')
         .trim();
 }
 
+/**
+ * @param {any} contextPack
+ */
 function summarizeContextPack(contextPack) {
     return {
-        files: contextPack.files.map(file => ({
+        files: contextPack.files.map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
