@@ -89,7 +89,7 @@ export function buildContextRenderResult(input = {}, files = [], excluded = [], 
         excluded,
         composerText,
         attachmentText,
-        attachments: [],
+        attachments: /** @type {{path:string,displayPath:string,sizeBytes:number}[]} */ ([]),
         warnings,
     };
 }

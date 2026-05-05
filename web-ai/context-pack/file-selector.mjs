@@ -1,11 +1,26 @@
+// @ts-check
 import { promises as fs } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import fg from 'fast-glob';
 import { DEFAULT_EXCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from './constants.mjs';
 import { estimateTokens } from './token-estimator.mjs';
 import { languageFromPath } from './renderer.mjs';
 import { WebAiError } from '../errors.mjs';
 
+/**
+ * @typedef {{
+ *   contextFromFiles?: any,
+ *   contextExclude?: string[],
+ *   contextFile?: string,
+ *   cwd?: string,
+ *   maxFileSize?: number,
+ *   strict?: boolean,
+ * }} FileSelectorInput
+ */
+
+/**
+ * @param {FileSelectorInput} [input]
+ */
 export async function buildContextPack(input = {}) {
     const cwd = resolve(input.cwd || process.cwd());
     const patterns = await collectPatterns(input);
@@ -35,6 +50,9 @@ export async function buildContextPack(input = {}) {
     return { files, excluded, warnings };
 }
 
+/**
+ * @param {FileSelectorInput} [input]
+ */
 export async function collectPatterns(input = {}) {
     const include = normalizeList(input.contextFromFiles);
     const exclude = [];
@@ -55,6 +73,11 @@ export async function collectPatterns(input = {}) {
     return { include: unique(include), exclude: unique(exclude) };
 }
 
+/**
+ * @param {string[]} [includePatterns]
+ * @param {string[]} [excludePatterns]
+ * @param {string} [cwd]
+ */
 export async function expandContextPaths(includePatterns = [], excludePatterns = [], cwd = process.cwd()) {
     const literals = [];
     const globs = [];
@@ -107,6 +130,17 @@ export async function expandContextPaths(includePatterns = [], excludePatterns =
         .sort((a, b) => toPosix(relative(cwd, a)).localeCompare(toPosix(relative(cwd, b))));
 }
 
+/**
+ * @typedef {{ ok: true, file: { path: string, relativePath: string, sizeBytes: number, estimatedTokens: number, language: string, content: string } } | { ok: false, excluded: { path: string, relativePath: string, reason: string, sizeBytes?: number } }} ReadContextFileResult
+ */
+
+/**
+ * @param {string} path
+ * @param {string} [cwd]
+ * @param {number} [maxFileSize]
+ * @param {boolean} [strict]
+ * @returns {Promise<ReadContextFileResult>}
+ */
 export async function readContextFile(path, cwd = process.cwd(), maxFileSize = DEFAULT_MAX_FILE_SIZE_BYTES, strict = false) {
     const stat = await fs.lstat(path);
     const relativePath = toPosix(relative(cwd, path));
@@ -144,8 +178,11 @@ export async function readContextFile(path, cwd = process.cwd(), maxFileSize = D
     };
 }
 
+/** @param {string} content */
 function parseContextFile(content) {
+    /** @type {string[]} */
     const include = [];
+    /** @type {string[]} */
     const exclude = [];
     const trimmed = String(content || '').trim();
     if (!trimmed) return { include, exclude };
@@ -164,10 +201,18 @@ function parseContextFile(content) {
     return { include, exclude };
 }
 
+/**
+ * @param {string} path
+ * @param {string} relativePath
+ * @param {string} reason
+ * @param {number} [sizeBytes]
+ * @returns {{ ok: false, excluded: { path: string, relativePath: string, reason: string, sizeBytes?: number } }}
+ */
 function excluded(path, relativePath, reason, sizeBytes) {
     return { ok: false, excluded: { path, relativePath, reason, ...(sizeBytes ? { sizeBytes } : {}) } };
 }
 
+/** @param {unknown} value */
 function normalizeList(value) {
     if (!value) return [];
     return (Array.isArray(value) ? value : [value])
@@ -176,6 +221,7 @@ function normalizeList(value) {
         .filter(Boolean);
 }
 
+/** @param {string[]} values */
 function unique(values) {
     return [...new Set(values)];
 }
@@ -188,6 +234,7 @@ function toPosix(value = '') {
     return String(value).split(sep).join('/');
 }
 
+/** @param {Buffer} buffer */
 function isBinaryLike(buffer) {
     if (buffer.includes(0)) return true;
     const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString('utf8');

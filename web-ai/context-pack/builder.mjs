@@ -1,3 +1,4 @@
+// @ts-check
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -6,8 +7,27 @@ import { buildContextPack } from './file-selector.mjs';
 import { buildContextRenderResult } from './renderer.mjs';
 import { WebAiError } from '../errors.mjs';
 
+/**
+ * @typedef {{
+ *   contextFromFiles?: any,
+ *   contextExclude?: string[],
+ *   contextFile?: string,
+ *   cwd?: string,
+ *   maxFileSize?: number,
+ *   strict?: boolean,
+ *   inlineCharLimit?: number,
+ *   prompt?: string,
+ *   vendor?: string,
+ *   model?: string,
+ *   contextTransport?: string,
+ *   inlineOnly?: boolean,
+ *   maxInput?: number,
+ * }} BuilderInput
+ */
+
 const PACKAGE_DIR = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-context-packages');
 
+/** @param {BuilderInput} [input] */
 export async function buildContextPackageResult(input = {}) {
     const selected = await buildContextPack(input);
     const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
@@ -17,6 +37,7 @@ export async function buildContextPackageResult(input = {}) {
     return result;
 }
 
+/** @param {BuilderInput} [input] */
 export async function buildInlineContextOrFail(input = {}) {
     if (!hasContextPackaging(input)) return null;
     const result = await buildContextPackageResult({ ...input, strict: true });
@@ -30,6 +51,7 @@ export async function buildInlineContextOrFail(input = {}) {
     return result;
 }
 
+/** @param {BuilderInput} [input] */
 export async function prepareContextForBrowser(input = {}) {
     if (!hasContextPackaging(input)) return null;
     const result = await buildContextPackageResult({ ...input, strict: true });
@@ -61,6 +83,9 @@ export async function prepareContextForBrowser(input = {}) {
     return result;
 }
 
+/**
+ * @param {{ contextFile?: string, contextFromFiles?: any }} [input]
+ */
 export function hasContextPackaging(input = {}) {
     return Boolean(
         input.contextFile ||
@@ -68,6 +93,7 @@ export function hasContextPackaging(input = {}) {
     );
 }
 
+/** @param {{ estimatedTokens: number, maxInputTokens: number }} budget */
 function overBudgetError(budget) {
     return new WebAiError({
         errorCode: 'context.over-budget',
@@ -78,6 +104,10 @@ function overBudgetError(budget) {
     });
 }
 
+/**
+ * @param {number} length
+ * @param {number} limit
+ */
 function inlineLimitError(length, limit) {
     return new WebAiError({
         errorCode: 'context.over-budget',
