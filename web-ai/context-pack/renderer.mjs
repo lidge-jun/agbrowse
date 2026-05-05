@@ -1,7 +1,34 @@
+// @ts-check
 import { extname } from 'node:path';
 import { buildBudgetReport } from './token-estimator.mjs';
 import { WebAiError } from '../errors.mjs';
 
+/**
+ * @typedef {{
+ *   relativePath: string,
+ *   sizeBytes: number,
+ *   estimatedTokens: number,
+ *   language?: string,
+ *   content: string,
+ *   path?: string,
+ * }} ContextFile
+ *
+ * @typedef {{
+ *   prompt?: string,
+ *   vendor?: string,
+ *   model?: string,
+ *   contextTransport?: string,
+ *   inlineOnly?: boolean,
+ *   maxInput?: number,
+ *   inlineCharLimit?: number,
+ * }} ContextRenderInput
+ */
+
+/**
+ * @param {ContextRenderInput} [input]
+ * @param {ContextFile[]} [files]
+ * @returns {string}
+ */
 export function renderContextComposerText(input = {}, files = []) {
     const prompt = String(input.prompt || '').trim();
     if (!prompt) throw new WebAiError({
@@ -15,6 +42,10 @@ export function renderContextComposerText(input = {}, files = []) {
     return [attachmentText, '[USER REQUEST]', prompt].join('\n').trim();
 }
 
+/**
+ * @param {ContextFile[]} [files]
+ * @returns {string}
+ */
 export function renderContextAttachmentText(files = []) {
     const blocks = [
         '[CONTEXT PACKAGE]',
@@ -35,6 +66,12 @@ export function renderContextAttachmentText(files = []) {
     return blocks.join('\n').trim();
 }
 
+/**
+ * @param {ContextRenderInput} [input]
+ * @param {ContextFile[]} [files]
+ * @param {Array<Record<string, unknown>>} [excluded]
+ * @param {string[]} [warnings]
+ */
 export function buildContextRenderResult(input = {}, files = [], excluded = [], warnings = []) {
     const transport = resolveContextTransport(input);
     const inlineComposerText = renderContextComposerText(input, files);
@@ -57,6 +94,10 @@ export function buildContextRenderResult(input = {}, files = [], excluded = [], 
     };
 }
 
+/**
+ * @param {ContextRenderInput} [input]
+ * @returns {string}
+ */
 export function resolveContextTransport(input = {}) {
     const requested = String(input.contextTransport || '').trim().toLowerCase();
     if (requested === 'inline' || requested === 'upload' || requested === 'auto') {
@@ -66,6 +107,10 @@ export function resolveContextTransport(input = {}) {
     return 'upload';
 }
 
+/**
+ * @param {string} [filePath]
+ * @returns {string}
+ */
 export function languageFromPath(filePath = '') {
     const ext = extname(filePath).replace(/^\./, '').toLowerCase();
     if (!ext) return 'text';

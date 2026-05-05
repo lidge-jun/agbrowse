@@ -1,3 +1,4 @@
+// @ts-check
 export const CONTEXT_PACKAGE_REFERENCE = {
     package: 'agbrowse',
     version: '0.1.3',

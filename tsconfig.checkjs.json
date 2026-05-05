@@ -36,7 +36,11 @@
     "web-ai/capability.mjs",
     "web-ai/answer-artifact.mjs",
     "web-ai/ref-registry.mjs",
-    "web-ai/tool-schema.mjs"
+    "web-ai/tool-schema.mjs",
+    "web-ai/context-pack/constants.mjs",
+    "web-ai/context-pack/token-estimator.mjs",
+    "web-ai/context-pack/report.mjs",
+    "web-ai/context-pack/renderer.mjs"
   ],
   "exclude": [
     "node_modules",
