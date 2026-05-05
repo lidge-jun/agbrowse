@@ -62,7 +62,8 @@
     "skills/browser/skill-install.mjs",
     "web-ai/tab-recovery.mjs",
     "skills/browser/tab-lifecycle.mjs",
-    "scripts/smoke-bins.mjs"
+    "scripts/smoke-bins.mjs",
+    "vitest.config.mjs"
   ],
   "exclude": [
     "node_modules",
