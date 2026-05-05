@@ -1,10 +1,83 @@
+// @ts-check
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
 export const TRAJECTORY_VERSION = 1;
 
-export function createTrajectory(input = {}) {
+/**
+ * @typedef {Object} TrajectoryInput
+ * @property {string} taskId
+ * @property {string} [startedAt]
+ * @property {string|null} [gitCommit]
+ * @property {string} [model]
+ * @property {string} [planner]
+ * @property {string} [driver]
+ * @property {string} [browserEnvironment]
+ * @property {number|string} [maxSteps]
+ * @property {string|null} [tracePath]
+ */
+
+/**
+ * @typedef {Object} TrajectoryStep
+ * @property {number} index
+ * @property {string} type
+ * @property {string} command
+ * @property {string} status
+ * @property {string|null} startedAt
+ * @property {string|null} completedAt
+ * @property {string} observationHash
+ * @property {string|null} traceId
+ * @property {string|null} errorCode
+ * @property {string|null} notes
+ */
+
+/**
+ * @typedef {Object} TrajectoryStepInput
+ * @property {string} command
+ * @property {string} [type]
+ * @property {string} [status]
+ * @property {string|null} [startedAt]
+ * @property {string|null} [completedAt]
+ * @property {string} [observationHash]
+ * @property {string} [observation]
+ * @property {string|null} [traceId]
+ * @property {string|null} [errorCode]
+ * @property {string|null} [notes]
+ */
+
+/**
+ * @typedef {Object} Trajectory
+ * @property {number} trajectoryVersion
+ * @property {string} taskId
+ * @property {string|null} gitCommit
+ * @property {string} model
+ * @property {string} planner
+ * @property {string} driver
+ * @property {string} browserEnvironment
+ * @property {number} maxSteps
+ * @property {TrajectoryStep[]} steps
+ * @property {string} finalAnswer
+ * @property {string} [finalAnswerHash]
+ * @property {string|null} verdict
+ * @property {string|null} tracePath
+ * @property {string} startedAt
+ * @property {string|null} completedAt
+ * @property {string[]} warnings
+ */
+
+/**
+ * @typedef {Object} FinalizeInput
+ * @property {string} [finalAnswer]
+ * @property {string|null} [verdict]
+ * @property {string} [completedAt]
+ */
+
+/**
+ * @param {TrajectoryInput} input
+ * @returns {Trajectory}
+ */
+export function createTrajectory(input = /** @type {any} */ ({})) {
     const now = input.startedAt || new Date().toISOString();
     return {
         trajectoryVersion: TRAJECTORY_VERSION,
@@ -25,7 +98,12 @@ export function createTrajectory(input = {}) {
     };
 }
 
-export function appendTrajectoryStep(trajectory, step = {}) {
+/**
+ * @param {Trajectory} trajectory
+ * @param {TrajectoryStepInput} step
+ * @returns {Trajectory}
+ */
+export function appendTrajectoryStep(trajectory, step = /** @type {any} */ ({})) {
     assertTrajectory(trajectory);
     const index = trajectory.steps.length + 1;
     trajectory.steps.push({
@@ -46,7 +124,12 @@ export function appendTrajectoryStep(trajectory, step = {}) {
     return trajectory;
 }
 
-export function finalizeTrajectory(trajectory, input = {}) {
+/**
+ * @param {Trajectory} trajectory
+ * @param {FinalizeInput} input
+ * @returns {Trajectory}
+ */
+export function finalizeTrajectory(trajectory, input = /** @type {any} */ ({})) {
     assertTrajectory(trajectory);
     trajectory.finalAnswer = input.finalAnswer || '';
     trajectory.finalAnswerHash = hashText(trajectory.finalAnswer);
@@ -55,6 +138,11 @@ export function finalizeTrajectory(trajectory, input = {}) {
     return trajectory;
 }
 
+/**
+ * @param {Trajectory} trajectory
+ * @param {string} outputDir
+ * @returns {Promise<{ ok: true, path: string }>}
+ */
 export async function writeTrajectoryBundle(trajectory, outputDir) {
     assertTrajectory(trajectory);
     const dir = path.resolve(outputDir || '.');
@@ -64,12 +152,20 @@ export async function writeTrajectoryBundle(trajectory, outputDir) {
     return { ok: true, path: file };
 }
 
+/**
+ * @param {unknown} value
+ * @returns {asserts value is Trajectory}
+ */
 function assertTrajectory(value) {
-    if (!value || value.trajectoryVersion !== TRAJECTORY_VERSION || !Array.isArray(value.steps)) {
+    if (!value || (/** @type {any} */ (value)).trajectoryVersion !== TRAJECTORY_VERSION || !Array.isArray((/** @type {any} */ (value)).steps)) {
         throw new Error('invalid trajectory object');
     }
 }
 
+/**
+ * @param {number|string|undefined|null} value
+ * @returns {number}
+ */
 function normalizeMaxSteps(value) {
     const parsed = value === undefined || value === null ? 20 : Number(value);
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
@@ -78,12 +174,21 @@ function normalizeMaxSteps(value) {
     return parsed;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {string}
+ */
 function requireString(value, field) {
     const normalized = String(value || '').trim();
     if (!normalized) throw new Error(`${field} is required`);
     return normalized;
 }
 
+/**
+ * @param {string} value
+ * @returns {string}
+ */
 function hashText(value) {
     return `sha256:${createHash('sha256').update(String(value || '')).digest('hex')}`;
 }
