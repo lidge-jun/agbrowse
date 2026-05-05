@@ -1,8 +1,47 @@
+// @ts-check
 import { updateSession } from './session.mjs';
 import { poolTab } from './tab-pool.mjs';
 
 const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
 
+/**
+ * @typedef {Object} FinalizeDeps
+ * @property {() => number} [getPort]
+ */
+
+/**
+ * @typedef {Object} FinalizeSession
+ * @property {string} [sessionId]
+ * @property {string} [targetId]
+ * @property {string} [vendor]
+ * @property {string} [conversationUrl]
+ * @property {string} [originalUrl]
+ */
+
+/**
+ * @typedef {Object} FinalizePage
+ * @property {() => string} [url]
+ */
+
+/**
+ * @typedef {Object} FinalizeOptions
+ * @property {string} [vendor]
+ * @property {FinalizeSession} [session]
+ * @property {FinalizePage} [page]
+ * @property {string} [answerText]
+ * @property {string} [status]
+ * @property {unknown[]} [warnings]
+ */
+
+/**
+ * @typedef {{ finalized: false, reason: string } | { finalized: true, pool: unknown }} FinalizeResult
+ */
+
+/**
+ * @param {FinalizeDeps} [deps]
+ * @param {FinalizeOptions} [options]
+ * @returns {Promise<FinalizeResult>}
+ */
 export async function finalizeProviderTab(deps, {
     vendor,
     session,
