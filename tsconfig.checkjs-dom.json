@@ -9,7 +9,8 @@
   "include": [
     "types/**/*.d.ts",
     "web-ai/dom-hash.mjs",
-    "web-ai/copy-markdown.mjs"
+    "web-ai/copy-markdown.mjs",
+    "web-ai/ax-snapshot.mjs"
   ],
   "exclude": [
     "node_modules",
