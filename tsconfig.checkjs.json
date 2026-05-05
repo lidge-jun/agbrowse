@@ -69,7 +69,8 @@
     "scripts/render-trace-report.mjs",
     "skills/vision-click/vision-core.mjs",
     "scripts/run-web-ai-eval.mjs",
-    "scripts/check-strict-baseline.mjs"
+    "scripts/check-strict-baseline.mjs",
+    "scripts/check-module-graph.mjs"
   ],
   "exclude": [
     "node_modules",

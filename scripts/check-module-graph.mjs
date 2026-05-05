@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * P03 — module-graph builder for the agbrowse strict migration.
  *
@@ -33,12 +34,16 @@ const SKIP = new Set([
     '_legacy',
 ]);
 
+/**
+ * @param {string} dir
+ * @returns {Promise<string[]>}
+ */
 async function listMjs(dir) {
     /** @type {string[]} */
     const out = [];
     const stack = [dir];
     while (stack.length > 0) {
-        const cur = stack.pop();
+        const cur = /** @type {string} */ (stack.pop());
         let entries;
         try {
             entries = await readdir(cur, { withFileTypes: true });
@@ -58,6 +63,10 @@ async function listMjs(dir) {
     return out;
 }
 
+/**
+ * @param {string} p
+ * @returns {string}
+ */
 function toRel(p) {
     return relative(root, p).split(/[\\/]/).join('/');
 }
@@ -79,6 +88,10 @@ const SPEC_RES = [
     /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+/**
+ * @param {string} src
+ * @returns {string[]}
+ */
 function extractRelImports(src) {
     /** @type {Set<string>} */
     const out = new Set();
@@ -92,6 +105,12 @@ function extractRelImports(src) {
     return [...out];
 }
 
+/**
+ * @param {string} fromAbs
+ * @param {string} spec
+ * @param {Set<string>} fileSet
+ * @returns {string|null}
+ */
 function resolveRelative(fromAbs, spec, fileSet) {
     const base = normalize(resolve(dirname(fromAbs), spec));
     for (const ext of ['', '.mjs', '/index.mjs']) {
