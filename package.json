@@ -59,7 +59,8 @@
     "pack:dry": "npm pack --dry-run --json",
     "smoke:bins": "node scripts/smoke-bins.mjs",
     "check:module-graph": "node scripts/check-module-graph.mjs",
-    "typecheck:checkjs": "tsc --noEmit -p tsconfig.checkjs.json"
+    "typecheck:checkjs": "tsc --noEmit -p tsconfig.checkjs.json",
+    "typecheck:checkjs-dom": "tsc --noEmit -p tsconfig.checkjs-dom.json"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
