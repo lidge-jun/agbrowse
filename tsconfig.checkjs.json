@@ -48,7 +48,8 @@
     "web-ai/question.mjs",
     "web-ai/source-audit.mjs",
     "web-ai/grok-model.mjs",
-    "web-ai/gemini-model.mjs"
+    "web-ai/gemini-model.mjs",
+    "web-ai/eval-runner.mjs"
   ],
   "exclude": [
     "node_modules",

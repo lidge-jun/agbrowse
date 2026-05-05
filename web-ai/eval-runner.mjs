@@ -1,3 +1,4 @@
+// @ts-check
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -7,8 +8,30 @@ import { DEFAULT_EVAL_RUN_VARIANTS, EVAL_SCHEMA_VERSION, createEvalError, makeRa
 import { EVAL_TARGET_INTENTS, probeEvalTargetIntentFromHtml } from './eval/provider-targets.mjs';
 import { assertScrubbedSafe } from './eval/scrub-dom.mjs';
 
+/**
+ * @typedef {{
+ *   id?: string,
+ *   vendor?: string,
+ *   variant?: string,
+ *   fixturePath?: string,
+ *   scrub?: string[],
+ *   mustContain?: string[],
+ *   mustNotContain?: string[],
+ * }} EvalFixture
+ *
+ * @typedef {{
+ *   vendor?: string|null,
+ *   variants?: string[],
+ *   fixtures?: string,
+ *   config?: string|null,
+ *   concurrency?: number|null,
+ *   maxFixtureConcurrency?: number|null,
+ * }} EvalRunOptions
+ */
+
 const NETWORK_PATTERN = /\b(?:https?:|wss?:|ftp:|file:\/\/)|<(?:script|img|link|iframe|source)\b[^>]*(?:src|href)=["'](?:https?:|\/\/|file:\/\/)/i;
 
+/** @param {EvalRunOptions} [options] */
 export async function runWebAiEval(options = {}) {
     const startedAt = new Date().toISOString();
     const vendor = options.config ? null : normalizeEvalVendor(options.vendor || 'chatgpt');
@@ -19,7 +42,7 @@ export async function runWebAiEval(options = {}) {
         ? config.fixtures
         : await discoverProviderFixtures({
             fixtureDir,
-            vendor,
+            vendor: /** @type {string|undefined} */ (vendor),
             variants: options.variants || DEFAULT_EVAL_RUN_VARIANTS,
         });
     const results = await runBounded(fixtures.map((fixture, index) => ({ fixture, index })), concurrency, async ({ fixture, index }) => {
@@ -54,6 +77,10 @@ export async function runWebAiEval(options = {}) {
     return payload;
 }
 
+/**
+ * @param {EvalFixture} fixture
+ * @param {{ fixtureDir?: string, index?: number }} [opts]
+ */
 export async function runOneFixture(fixture, { fixtureDir = 'test/fixtures/provider-dom', index = 0 } = {}) {
     const provider = normalizeEvalVendor(fixture.vendor);
     const fixturePath = path.resolve(fixture.fixturePath || path.join(fixtureDir, `${provider}-${fixture.variant || 'baseline'}.html`));
@@ -97,7 +124,7 @@ export async function runOneFixture(fixture, { fixtureDir = 'test/fixtures/provi
             probes,
         })));
     }
-    const status = errors.length === 0 ? 'pass' : 'fail';
+    const status = /** @type {'pass'|'fail'} */ (errors.length === 0 ? 'pass' : 'fail');
     const text = htmlToText(html);
     return {
         inputIndex: index,
@@ -120,8 +147,16 @@ export async function runOneFixture(fixture, { fixtureDir = 'test/fixtures/provi
     };
 }
 
+/**
+ * @template T, R
+ * @param {T[]} items
+ * @param {number|null|undefined} limit
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @returns {Promise<R[]>}
+ */
 export async function runBounded(items, limit, worker) {
     const concurrency = parseFixtureConcurrency(limit);
+    /** @type {R[]} */
     const results = new Array(items.length);
     let cursor = 0;
     async function loop() {
@@ -135,6 +170,7 @@ export async function runBounded(items, limit, worker) {
     return results;
 }
 
+/** @param {string} html */
 export function rejectNetworkFixtureHtml(html) {
     if (NETWORK_PATTERN.test(html)) {
         throw createEvalError('eval.network-blocked', 'fixture-safety', 'fixture contains external network-capable markup');
@@ -142,11 +178,13 @@ export function rejectNetworkFixtureHtml(html) {
     return true;
 }
 
+/** @param {string} filePath */
 function inferVariant(filePath) {
     const base = path.basename(filePath, '.html');
     return base.split('-').slice(1).join('-') || 'baseline';
 }
 
+/** @param {string} html */
 function htmlToText(html) {
     return String(html)
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -156,14 +194,20 @@ function htmlToText(html) {
         .trim();
 }
 
+/** @param {string} text */
 function estimateTokens(text) {
     return Math.ceil(String(text || '').length / 4);
 }
 
+/**
+ * @param {string} startedAt
+ * @param {EvalFixture[]} fixtures
+ */
 function makeRunId(startedAt, fixtures) {
     return crypto.createHash('sha256').update(`${startedAt}:${fixtures.map((fixture) => fixture.id || fixture.fixturePath).join('|')}`).digest('hex').slice(0, 16);
 }
 
+/** @returns {Promise<string|null>} */
 async function currentGitCommit() {
     try {
         const head = await fs.readFile('.git/HEAD', 'utf8');
