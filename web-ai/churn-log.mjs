@@ -10,7 +10,7 @@ const DEFAULT_COMPACT_LIMIT = 500;
 /**
  * @typedef {{
  *   key: string,
- *   vendor: string,
+ *   vendor: string|undefined,
  *   feature: string,
  *   domHash: string,
  *   previousHash: string|null,
@@ -108,7 +108,7 @@ function changedFeatureRecords(report, priorRecords) {
         if (last && last.domHash === f.domHash) continue;
         changed.push({
             key,
-            vendor: String(report.vendor),
+            vendor: report.vendor,
             feature: f.feature,
             domHash: f.domHash,
             previousHash: last?.domHash || null,

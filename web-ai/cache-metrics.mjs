@@ -24,8 +24,8 @@ const METRICS_FILE = 'web-ai-metrics.jsonl';
  *   falseHeals: number,
  *   avgDurationMs: number,
  *   p95DurationMs: number,
- *   cacheHitRate?: number,
- *   selfHealRate?: number,
+ *   cacheHitRate: number,
+ *   selfHealRate: number,
  * }} CacheMetricsReport
  */
 
@@ -60,43 +60,52 @@ export function reportCacheMetricsFromEvents(homeDir) {
         .map((l) => /** @type {CacheEvent} */ (JSON.parse(l)))
         .filter((e) => typeof e.ts === 'string' && e.ts > new Date(Date.now() - 7 * 86400000).toISOString());
 
-    /** @type {CacheMetricsReport} */
-    const report = {
-        totalLookups: 0,
-        cacheHitsValid: 0,
-        cacheHitsRejected: 0,
-        cacheMisses: 0,
-        resolutionSources: {},
-        falseHeals: 0,
-        avgDurationMs: 0,
-        p95DurationMs: 0,
-    };
+    let totalLookups = 0;
+    let cacheHitsValid = 0;
+    let cacheHitsRejected = 0;
+    let cacheMisses = 0;
+    /** @type {Record<string, number>} */
+    const resolutionSources = {};
+    let falseHeals = 0;
 
     /** @type {number[]} */
     const durations = [];
     for (const ev of events) {
-        if (ev.type === 'lookup') report.totalLookups++;
-        if (ev.type === 'cache-hit-valid') report.cacheHitsValid++;
-        if (ev.type === 'cache-hit-rejected') report.cacheHitsRejected++;
-        if (ev.type === 'cache-miss') report.cacheMisses++;
+        if (ev.type === 'lookup') totalLookups++;
+        if (ev.type === 'cache-hit-valid') cacheHitsValid++;
+        if (ev.type === 'cache-hit-rejected') cacheHitsRejected++;
+        if (ev.type === 'cache-miss') cacheMisses++;
         if (ev.type === 'resolved' && typeof ev.source === 'string') {
-            report.resolutionSources[ev.source] = (report.resolutionSources[ev.source] || 0) + 1;
+            resolutionSources[ev.source] = (resolutionSources[ev.source] || 0) + 1;
         }
-        if (ev.type === 'false-heal') report.falseHeals++;
+        if (ev.type === 'false-heal') falseHeals++;
         if (typeof ev.durationMs === 'number') durations.push(ev.durationMs);
     }
 
+    let avgDurationMs = 0;
+    let p95DurationMs = 0;
     if (durations.length) {
-        report.avgDurationMs = durations.reduce((a, b) => a + b, 0) / durations.length;
+        avgDurationMs = durations.reduce((a, b) => a + b, 0) / durations.length;
         const sorted = [...durations].sort((a, b) => a - b);
-        report.p95DurationMs = sorted[Math.ceil(sorted.length * 0.95) - 1] || sorted[sorted.length - 1];
+        p95DurationMs = sorted[Math.ceil(sorted.length * 0.95) - 1] || sorted[sorted.length - 1];
     }
 
-    report.cacheHitRate = report.totalLookups > 0 ? report.cacheHitsValid / report.totalLookups : 0;
-    const totalResolved = Object.values(report.resolutionSources).reduce((a, b) => a + b, 0);
-    report.selfHealRate = totalResolved > 0 ? (totalResolved - report.cacheHitsValid) / totalResolved : 0;
+    const cacheHitRate = totalLookups > 0 ? cacheHitsValid / totalLookups : 0;
+    const totalResolved = Object.values(resolutionSources).reduce((a, b) => a + b, 0);
+    const selfHealRate = totalResolved > 0 ? (totalResolved - cacheHitsValid) / totalResolved : 0;
 
-    return report;
+    return {
+        totalLookups,
+        cacheHitsValid,
+        cacheHitsRejected,
+        cacheMisses,
+        resolutionSources,
+        falseHeals,
+        avgDurationMs,
+        p95DurationMs,
+        cacheHitRate,
+        selfHealRate,
+    };
 }
 
 /**
