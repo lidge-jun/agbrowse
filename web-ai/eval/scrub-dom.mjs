@@ -1,3 +1,4 @@
+// @ts-check
 import { createEvalError } from './types.mjs';
 
 const UNSAFE_PATTERNS = [
@@ -11,6 +12,11 @@ const UNSAFE_PATTERNS = [
     { name: 'prompt-answer-marker', pattern: /\b(?:USER_PROMPT|ASSISTANT_ANSWER|SECRET_[A-Z0-9_]+)\b/ },
 ];
 
+/**
+ * @param {string} html
+ * @param {{ forbiddenText?: string[] }} [options]
+ * @returns {string}
+ */
 export function scrubProviderDom(html, { forbiddenText = [] } = {}) {
     let scrubbed = String(html || '');
     scrubbed = scrubbed.replace(UNSAFE_PATTERNS[0].pattern, '[redacted-email]');
@@ -25,7 +31,13 @@ export function scrubProviderDom(html, { forbiddenText = [] } = {}) {
     return scrubbed;
 }
 
+/**
+ * @param {string} html
+ * @param {{ forbiddenText?: string[] }} [options]
+ * @returns {true}
+ */
 export function assertScrubbedSafe(html, { forbiddenText = [] } = {}) {
+    /** @type {string[]} */
     const issues = [];
     for (const entry of UNSAFE_PATTERNS) {
         if (entry.pattern.test(html)) issues.push(entry.name);

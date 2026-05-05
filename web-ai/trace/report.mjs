@@ -1,14 +1,34 @@
+// @ts-check
 import fs from 'node:fs/promises';
 import { redactTraceValue } from './redact.mjs';
 
+/**
+ * @typedef {{
+ *   traceId?: string,
+ *   command?: string,
+ *   provider?: string,
+ *   urlOrigin?: string,
+ *   steps?: Array<{ type?: string, status?: string }>,
+ *   errorEnvelope?: { errorCode?: string, message?: string },
+ * }} TraceRecord
+ */
+
+/**
+ * @param {string} tracePath
+ * @returns {Promise<string>}
+ */
 export async function renderTraceReport(tracePath) {
     const raw = await fs.readFile(tracePath, 'utf8');
-    const records = raw.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const records = raw.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
     return renderTraceRecords(records);
 }
 
+/**
+ * @param {TraceRecord[]} [records]
+ * @returns {string}
+ */
 export function renderTraceRecords(records = []) {
-    const safeRecords = redactTraceValue(records);
+    const safeRecords = /** @type {TraceRecord[]} */ (redactTraceValue(records));
     const lines = ['# agbrowse trace report', ''];
     for (const record of safeRecords) {
         lines.push(`## ${record.traceId}`);

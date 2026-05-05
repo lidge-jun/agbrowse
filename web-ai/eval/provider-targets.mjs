@@ -1,3 +1,21 @@
+// @ts-check
+
+/**
+ * @typedef {'composer.fill' | 'upload.open' | 'send.click' | 'copy.click'} EvalTargetIntent
+ */
+
+/**
+ * @typedef {{
+ *   status: 'resolved' | 'ambiguous' | 'missing' | 'unsupported',
+ *   refId: string|null,
+ *   selector: string|null,
+ *   confidence: number,
+ *   evidence: { provider: string, intent: string, variant: string, matches?: number },
+ *   error: string|null,
+ * }} EvalTargetProbeResult
+ */
+
+/** @type {EvalTargetIntent[]} */
 export const EVAL_TARGET_INTENTS = [
     'composer.fill',
     'upload.open',
@@ -5,8 +23,13 @@ export const EVAL_TARGET_INTENTS = [
     'copy.click',
 ];
 
-export function probeEvalTargetIntentFromHtml(html, { provider = 'chatgpt', intent, variant = 'baseline' } = {}) {
-    if (!EVAL_TARGET_INTENTS.includes(intent)) {
+/**
+ * @param {string} html
+ * @param {{ provider?: string, intent?: string, variant?: string }} [options]
+ * @returns {EvalTargetProbeResult}
+ */
+export function probeEvalTargetIntentFromHtml(html, { provider = 'chatgpt', intent = '', variant = 'baseline' } = {}) {
+    if (!EVAL_TARGET_INTENTS.includes(/** @type {EvalTargetIntent} */ (intent))) {
         return {
             status: 'unsupported',
             refId: null,
@@ -51,6 +74,11 @@ export function probeEvalTargetIntentFromHtml(html, { provider = 'chatgpt', inte
     };
 }
 
+/**
+ * @param {string | { content?: () => Promise<string> }} pageOrHtml
+ * @param {{ provider?: string, intent?: string, variant?: string }} [options]
+ * @returns {Promise<EvalTargetProbeResult>}
+ */
 export async function probeEvalTargetIntent(pageOrHtml, options = {}) {
     if (typeof pageOrHtml === 'string') return probeEvalTargetIntentFromHtml(pageOrHtml, options);
     const html = typeof pageOrHtml?.content === 'function'
@@ -59,6 +87,10 @@ export async function probeEvalTargetIntent(pageOrHtml, options = {}) {
     return probeEvalTargetIntentFromHtml(html, options);
 }
 
+/**
+ * @param {string} value
+ * @returns {string}
+ */
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

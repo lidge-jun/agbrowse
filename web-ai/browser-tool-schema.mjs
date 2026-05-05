@@ -1,3 +1,9 @@
+// @ts-check
+
+/**
+ * @param {Record<string, unknown>} properties
+ * @param {string[]} [required]
+ */
 const objectSchema = (properties, required = []) => ({
     type: 'object',
     properties,
@@ -24,6 +30,7 @@ const policySchema = {
     },
 };
 
+/** @type {Record<string, { description: string, inputSchema: ReturnType<typeof objectSchema> }>} */
 export const BROWSER_TOOLS = {
     browser_snapshot: {
         description: 'Return compact accessibility snapshot for the active browser tab.',
@@ -47,6 +54,10 @@ export const BROWSER_TOOLS = {
     },
 };
 
+/**
+ * @param {string} toolName
+ * @returns {boolean}
+ */
 export function isKnownBrowserTool(toolName) {
     return Boolean(BROWSER_TOOLS[toolName]);
 }

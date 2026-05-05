@@ -16,7 +16,14 @@
     "web-ai/eval/types.mjs",
     "web-ai/cache-metrics.mjs",
     "web-ai/churn-log.mjs",
-    "web-ai/observe-targets.mjs"
+    "web-ai/observe-targets.mjs",
+    "web-ai/trace/report.mjs",
+    "web-ai/eval/scrub-dom.mjs",
+    "web-ai/eval/provider-targets.mjs",
+    "web-ai/eval/metrics.mjs",
+    "web-ai/eval/fixtures.mjs",
+    "web-ai/policy/content-boundary.mjs",
+    "web-ai/browser-tool-schema.mjs"
   ],
   "exclude": [
     "node_modules",

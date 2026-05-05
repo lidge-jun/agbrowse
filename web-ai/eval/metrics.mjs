@@ -1,4 +1,39 @@
+// @ts-check
 import { makeRatioMetric } from './types.mjs';
+
+/**
+ * @typedef {{
+ *   value?: number,
+ *   threshold?: number,
+ *   [extra: string]: unknown,
+ * }} EvalMetric
+ */
+
+/**
+ * @typedef {{
+ *   status: 'pass' | 'fail',
+ *   provider?: string,
+ *   variant?: string,
+ *   fixturePath?: string,
+ *   metrics?: Record<string, EvalMetric>,
+ * }} EvalResult
+ */
+
+/**
+ * @typedef {{
+ *   provider?: string,
+ *   variant?: string,
+ *   metric: string,
+ *   value: number,
+ *   threshold: number,
+ *   golden?: number,
+ *   fixturePath?: string,
+ * }} EvalRegression
+ */
+
+/**
+ * @typedef {{ results?: EvalResult[] }} EvalRun
+ */
 
 export const DEFAULT_EVAL_THRESHOLDS = Object.freeze({
     knownFixturePassRate: 0.95,
@@ -8,6 +43,9 @@ export const DEFAULT_EVAL_THRESHOLDS = Object.freeze({
     snapshotTokenEstimateMax: 500,
 });
 
+/**
+ * @param {EvalResult[]} [results]
+ */
 export function summarizeEvalResults(results = []) {
     const passCount = results.filter((result) => result.status === 'pass').length;
     const failCount = results.filter((result) => result.status === 'fail').length;
@@ -19,12 +57,17 @@ export function summarizeEvalResults(results = []) {
     };
 }
 
+/**
+ * @param {EvalResult} result
+ * @returns {EvalRegression[]}
+ */
 export function collectMetricRegressions(result) {
+    /** @type {EvalRegression[]} */
     const regressions = [];
     for (const [name, metric] of Object.entries(result.metrics || {})) {
         if (!metric || typeof metric !== 'object') continue;
         if (name === 'snapshotTokenEstimate') {
-            if (metric.value > DEFAULT_EVAL_THRESHOLDS.snapshotTokenEstimateMax) {
+            if (typeof metric.value === 'number' && metric.value > DEFAULT_EVAL_THRESHOLDS.snapshotTokenEstimateMax) {
                 regressions.push({
                     provider: result.provider,
                     variant: result.variant,
@@ -50,7 +93,13 @@ export function collectMetricRegressions(result) {
     return regressions;
 }
 
+/**
+ * @param {EvalRun|null|undefined} golden
+ * @param {EvalRun|null|undefined} current
+ * @returns {EvalRegression[]}
+ */
 export function compareEvalRuns(golden, current) {
+    /** @type {EvalRegression[]} */
     const regressions = [];
     const goldenByKey = new Map((golden?.results || []).map((result) => [`${result.provider}:${result.variant}`, result]));
     for (const result of current?.results || []) {
