@@ -1,3 +1,4 @@
+// @ts-check
 import { observeProviderTargets, rankTargetCandidates } from './observe-targets.mjs';
 import { semanticTargetsForVendor } from './vendor-editor-contract.mjs';
 import { isRegistryStale, resolveRef } from './ref-registry.mjs';
@@ -5,9 +6,68 @@ import { WebAiError } from './errors.mjs';
 import { CACHE_SCHEMA_VERSION, VALIDATION_REASONS, VALIDATION_THRESHOLD, RESOLUTION_SOURCES } from './constants.mjs';
 import { createHash } from 'node:crypto';
 
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+/** @typedef {import('./vendor-editor-contract.mjs').VendorName} VendorName */
+/** @typedef {import('./vendor-editor-contract.mjs').SemanticTarget} SemanticTarget */
+
+/**
+ * @typedef {Object} ResolvedTarget
+ * @property {string} [selector]
+ * @property {string} [ref]
+ * @property {string} [role]
+ * @property {string} [name]
+ * @property {string} [nameHash]
+ * @property {string} [source]
+ * @property {string} [resolution]
+ * @property {string | number} [schemaVersion]
+ * @property {string} [contractVersion]
+ * @property {string} [framePath]
+ * @property {string} [browserConfigHash]
+ * @property {number} [count]
+ * @property {number} [confidence]
+ */
+
+/**
+ * @typedef {Object} ValidationResult
+ * @property {boolean} ok
+ * @property {string} [reason]
+ * @property {string} [resolvedVia]
+ * @property {number} [confidence]
+ * @property {number} [count]
+ */
+
+/**
+ * @typedef {Object} ValidateOptions
+ * @property {SemanticTarget | null} [semanticTarget]
+ * @property {string} [actionKind]
+ * @property {unknown} [registry]
+ * @property {string | null} [contractVersion]
+ * @property {string | null} [framePath]
+ * @property {string | null} [browserConfigHash]
+ */
+
+/**
+ * @typedef {Object} ResolveCtx
+ * @property {VendorName} provider
+ * @property {string} intent
+ * @property {string} [actionKind]
+ * @property {{ refs?: unknown } | null} [snapshot]
+ * @property {unknown} [registry]
+ * @property {{ get?: (key: any) => any } | null} [cache]
+ * @property {string | null} [fingerprint]
+ * @property {string | null} [feature]
+ * @property {SemanticTarget | null} [semanticTargetOverride]
+ * @property {readonly string[] | null} [selectors]
+ * @property {string | null} [contractVersion]
+ * @property {string | null} [framePath]
+ * @property {string | null} [browserConfigHash]
+ */
+
 // Preserve backward-compatible alias for existing consumers
 export { RESOLUTION_SOURCES as ResolutionSource } from './constants.mjs';
 
+/** @type {Readonly<Record<string, string>>} */
 const INTENT_FEATURE = Object.freeze({
     'composer.fill': 'composer',
     'composer.click': 'composer',
@@ -22,11 +82,20 @@ const INTENT_FEATURE = Object.freeze({
     'stop.click': 'streamingIndicator',
 });
 
+/**
+ * @param {string} intent
+ * @param {string | null} [featureOverride]
+ * @returns {string | null}
+ */
 export function resolveIntentFeature(intent, featureOverride = null) {
     if (featureOverride) return featureOverride;
     return INTENT_FEATURE[intent] || null;
 }
 
+/**
+ * @param {Page} page
+ * @param {ResolveCtx} ctx
+ */
 export async function resolveActionTarget(page, ctx) {
     const {
         provider,
@@ -83,7 +152,7 @@ export async function resolveActionTarget(page, ctx) {
 
     const ranked = rankTargetCandidates(candidates, {
         expectedRole: semanticTarget?.roles?.[0] || null,
-        expectedNames: semanticTarget?.names || [],
+        expectedNames: /** @type {RegExp[]} */ (/** @type {unknown} */ (semanticTarget?.names || [])),
     });
 
     for (const candidate of ranked) {
@@ -119,6 +188,10 @@ export async function resolveActionTarget(page, ctx) {
     };
 }
 
+/**
+ * @param {Page} page
+ * @param {{ provider: VendorName, feature: string | null, semanticTarget: SemanticTarget | null, snapshot: { refs?: unknown } | null, registry: unknown, selectors?: readonly string[] }} options
+ */
 async function collectTargetCandidates(page, {
     provider,
     feature,
@@ -127,14 +200,15 @@ async function collectTargetCandidates(page, {
     registry,
     selectors = [],
 }) {
+    /** @type {any[]} */
     const candidates = [];
 
-    if (snapshot?.refs && (!registry || !isRegistryStale(registry))) {
+    if (snapshot?.refs && (!registry || !isRegistryStale(/** @type {any} */ (registry)))) {
         const featureMap = semanticTargetsForVendor(provider);
         const observed = await observeProviderTargets(page, {
             provider,
             featureMap,
-            snapshot,
+            snapshot: /** @type {any} */ (snapshot),
         });
         if (feature && observed[feature]) {
             for (const c of observed[feature]) {
@@ -159,6 +233,12 @@ async function collectTargetCandidates(page, {
     return candidates;
 }
 
+/**
+ * @param {Page} page
+ * @param {ResolvedTarget} target
+ * @param {ValidateOptions} [options]
+ * @returns {Promise<ValidationResult>}
+ */
 export async function validateResolvedTarget(page, target, {
     semanticTarget = null,
     actionKind = 'click',
@@ -183,11 +263,11 @@ export async function validateResolvedTarget(page, target, {
     let selector = target?.selector;
 
     if (target?.ref && registry) {
-        if (isRegistryStale(registry)) {
+        if (isRegistryStale(/** @type {any} */ (registry))) {
             return { ok: false, reason: VALIDATION_REASONS.REF_STALE };
         }
         try {
-            const entry = await resolveRef(page, registry, target.ref, { allowStale: false });
+            const entry = /** @type {any} */ (await resolveRef(page, /** @type {any} */ (registry), target.ref, { allowStale: false }));
             if (entry.selector) selector = entry.selector;
         } catch {
             return { ok: false, reason: VALIDATION_REASONS.REF_INVALID };
@@ -196,7 +276,7 @@ export async function validateResolvedTarget(page, target, {
 
     if (!selector) {
         if (target?.ref && target.role && target.name) {
-            const roleLocator = page.getByRole(target.role, { name: new RegExp(escapeForRegExp(target.name), 'i') });
+            const roleLocator = page.getByRole(/** @type {any} */ (target.role), { name: new RegExp(escapeForRegExp(target.name), 'i') });
             const roleCount = await roleLocator.count().catch(() => 0);
             if (roleCount === 0) return { ok: false, reason: VALIDATION_REASONS.NOT_FOUND };
             if (roleCount > 1) return { ok: false, reason: VALIDATION_REASONS.AMBIGUOUS_SELECTOR, count: roleCount };
@@ -247,18 +327,24 @@ export async function validateResolvedTarget(page, target, {
     return { ok: true, confidence: 1.0 };
 }
 
+/**
+ * @param {Page} page
+ * @param {Locator} locator
+ * @param {{ target: ResolvedTarget, semanticTarget: SemanticTarget | null, actionKind: string }} options
+ * @returns {Promise<ValidationResult>}
+ */
 async function runValidationContract(page, locator, { target, semanticTarget, actionKind }) {
     try {
-        const info = await locator.evaluate((node) => {
+        const info = await locator.evaluate((/** @type {HTMLElement} */ node) => {
             const explicitRole = node.getAttribute('role');
             const tag = node.tagName.toLowerCase();
             const isEditable = node.isContentEditable || node.contentEditable === 'true';
             const implicitRole = explicitRole
                 || (tag === 'textarea' ? 'textbox'
-                    : (tag === 'input' && (!node.type || node.type === 'text') ? 'textbox'
+                    : (tag === 'input' && (!(/** @type {HTMLInputElement} */ (node)).type || (/** @type {HTMLInputElement} */ (node)).type === 'text') ? 'textbox'
                         : (isEditable ? 'textbox'
                             : (tag === 'button' ? 'button'
-                                : (tag === 'a' && node.href ? 'link' : tag)))));
+                                : (tag === 'a' && (/** @type {HTMLAnchorElement} */ (node)).href ? 'link' : tag)))));
             const label = node.getAttribute('aria-label') || '';
             const labelledById = node.getAttribute('aria-labelledby') || '';
             let labelText = label;
@@ -326,6 +412,11 @@ async function runValidationContract(page, locator, { target, semanticTarget, ac
     }
 }
 
+/**
+ * @param {RegExp | string | null | undefined} pattern
+ * @param {unknown} value
+ * @returns {boolean}
+ */
 function patternMatches(pattern, value) {
     if (!pattern) return false;
     const text = String(value || '');
@@ -336,10 +427,20 @@ function patternMatches(pattern, value) {
     return text.toLowerCase().includes(String(pattern).toLowerCase());
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
 function hashField(value) {
     return `sha256:${createHash('sha256').update(String(value)).digest('hex').slice(0, 12)}`;
 }
 
+/**
+ * @param {Page} page
+ * @param {ResolvedTarget} target
+ * @param {{ registry?: unknown }} [options]
+ * @returns {Promise<Locator>}
+ */
 export async function locatorForResolvedTarget(page, target, { registry } = {}) {
     if (target.selector) {
         return page.locator(target.selector).first();
@@ -355,10 +456,10 @@ export async function locatorForResolvedTarget(page, target, { registry } = {}) 
                 evidence: { ref: target.ref },
             });
         }
-        const resolved = await resolveRef(page, registry, target.ref, { allowStale: false });
+        const resolved = /** @type {any} */ (await resolveRef(page, /** @type {any} */ (registry), target.ref, { allowStale: false }));
         if (resolved.selector) return page.locator(resolved.selector).first();
         if (resolved.role && resolved.name) {
-            return page.getByRole(resolved.role, { name: new RegExp(escapeForRegExp(resolved.name), 'i') }).first();
+            return page.getByRole(/** @type {any} */ (resolved.role), { name: new RegExp(escapeForRegExp(resolved.name), 'i') }).first();
         }
         throw new WebAiError({
             errorCode: 'internal.unhandled',
@@ -378,6 +479,10 @@ export async function locatorForResolvedTarget(page, target, { registry } = {}) 
     });
 }
 
+/**
+ * @param {string} str
+ * @returns {string}
+ */
 function escapeForRegExp(str) {
     return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
