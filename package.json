@@ -57,7 +57,8 @@
     "typecheck": "tsc --noEmit",
     "check:strict-baseline": "node scripts/check-strict-baseline.mjs",
     "pack:dry": "npm pack --dry-run --json",
-    "smoke:bins": "node scripts/smoke-bins.mjs"
+    "smoke:bins": "node scripts/smoke-bins.mjs",
+    "check:module-graph": "node scripts/check-module-graph.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
