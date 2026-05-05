@@ -9,6 +9,7 @@
   "include": [
     "types/**/*.d.ts",
     "web-ai/dom-hash.mjs",
+    "web-ai/post-action-assert.mjs",
     "web-ai/copy-markdown.mjs",
     "web-ai/ax-snapshot.mjs"
   ],
