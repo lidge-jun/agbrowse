@@ -18,7 +18,8 @@
     "web-ai/vendor-editor-contract.mjs",
     "web-ai/contract-audit.mjs",
     "web-ai/self-heal.mjs",
-    "web-ai/action-intent.mjs"
+    "web-ai/action-intent.mjs",
+    "web-ai/target-resolver.mjs"
   ],
   "exclude": [
     "node_modules",
