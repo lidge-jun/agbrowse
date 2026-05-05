@@ -435,7 +435,7 @@ function scopedTargetKey(lease) {
  * @param {Partial<Lease>|null|undefined} b
  */
 function sameTargetScope(a, b) {
-    return Boolean(a?.targetId && b?.targetId && scopedTargetKey(a) === scopedTargetKey(b));
+    return a?.targetId && b?.targetId && scopedTargetKey(a) === scopedTargetKey(b);
 }
 
 /**
@@ -443,7 +443,7 @@ function sameTargetScope(a, b) {
  * @param {Partial<Lease>|null|undefined} b
  */
 function sameSessionScope(a, b) {
-    return Boolean(a?.sessionId && b?.sessionId && a.sessionId === b.sessionId && a.owner === b.owner && a.vendor === b.vendor && a.sessionType === b.sessionType && a.browserProfileKey === b.browserProfileKey);
+    return a?.sessionId && b?.sessionId && a.sessionId === b.sessionId && a.owner === b.owner && a.vendor === b.vendor && a.sessionType === b.sessionType && a.browserProfileKey === b.browserProfileKey;
 }
 
 /**
