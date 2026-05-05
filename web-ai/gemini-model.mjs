@@ -1,5 +1,26 @@
+// @ts-check
+/// <reference types="playwright-core" />
 import { WebAiError } from './errors.mjs';
 
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+/** @typedef {'fast'|'thinking'|'pro'} GeminiModelChoice */
+/**
+ * @typedef {{
+ *   requested: string,
+ *   selected: string|null,
+ *   alreadySelected: boolean,
+ *   usedFallbacks: string[],
+ * }} GeminiModelSelectResult
+ *
+ * @typedef {{
+ *   state: 'ok'|'warn'|'fail'|'unknown',
+ *   evidence: Record<string, unknown>,
+ *   next: 'send'|'model-fallback',
+ * }} GeminiModelProbe
+ */
+
+/** @type {Record<string, string>} */
 export const GEMINI_MODEL_ALIASES = {
     fast: 'fast',
     flash: 'fast',
@@ -12,6 +33,7 @@ export const GEMINI_MODEL_ALIASES = {
     '3.1-pro': 'pro',
 };
 
+/** @type {Set<string>} */
 export const GEMINI_DEEP_THINK_ALIASES = new Set([
     'deepthink',
     'deep-think',
@@ -27,23 +49,37 @@ const MODE_BUTTONS = [
     'button[aria-label*="mode picker" i]',
 ];
 
+/** @type {Record<string, { testId: string, labels: string[] }>} */
 const MODE_OPTIONS = {
     fast: { testId: 'bard-mode-option-fast', labels: ['Fast'] },
     thinking: { testId: 'bard-mode-option-thinking', labels: ['Thinking'] },
     pro: { testId: 'bard-mode-option-pro', labels: ['Pro'] },
 };
 
+/**
+ * @param {unknown} model
+ * @returns {string|null}
+ */
 export function normalizeGeminiModelChoice(model) {
     const key = String(model || '').trim().toLowerCase();
     if (!key) return null;
     return GEMINI_MODEL_ALIASES[key] || null;
 }
 
+/**
+ * @param {unknown} model
+ * @returns {boolean}
+ */
 export function isGeminiDeepThinkChoice(model) {
     const key = String(model || '').trim().toLowerCase();
     return GEMINI_DEEP_THINK_ALIASES.has(key);
 }
 
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @returns {Promise<GeminiModelSelectResult|null>}
+ */
 export async function selectGeminiModel(page, model) {
     if (isGeminiDeepThinkChoice(model)) return null;
     const requested = normalizeGeminiModelChoice(model);
@@ -51,7 +87,7 @@ export async function selectGeminiModel(page, model) {
         if (model) throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'gemini', retryHint: 'model-fallback', message: `unsupported Gemini model selection: ${model}`, evidence: { model } });
         return null;
     }
-    const usedFallbacks = [];
+    /** @type {string[]} */ const usedFallbacks = [];
     const before = await readGeminiModel(page);
     if (before === requested) return { requested, selected: before, alreadySelected: true, usedFallbacks };
     await openGeminiModelMenu(page, usedFallbacks);
@@ -64,6 +100,10 @@ export async function selectGeminiModel(page, model) {
     return { requested, selected: after, alreadySelected: false, usedFallbacks };
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} usedFallbacks
+ */
 async function openGeminiModelMenu(page, usedFallbacks) {
     const modeItems = page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"]').filter({ hasText: /^Fast\b|^Thinking\b|^Pro\b/i });
     if (await modeItems.first().isVisible().catch(() => false)) return;
@@ -95,6 +135,11 @@ async function openGeminiModelMenu(page, usedFallbacks) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @param {string} choice
+ * @returns {Promise<Locator|null>}
+ */
 async function findGeminiModelOption(page, choice) {
     const option = MODE_OPTIONS[choice];
     const deadline = Date.now() + 5_000;
@@ -115,6 +160,11 @@ async function findGeminiModelOption(page, choice) {
     return null;
 }
 
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @returns {Promise<GeminiModelProbe>}
+ */
 export async function geminiModelCapabilityProbe(page, model) {
     if (isGeminiDeepThinkChoice(model)) {
         return { state: 'unknown', evidence: { requested: model, tool: 'deepthink' }, next: 'send' };
@@ -124,7 +174,7 @@ export async function geminiModelCapabilityProbe(page, model) {
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     const active = await readGeminiModel(page).catch(() => null);
     if (active === requested) return { state: 'ok', evidence: { active, requested, selectable: true }, next: 'send' };
-    const usedFallbacks = [];
+    /** @type {string[]} */ const usedFallbacks = [];
     try {
         await openGeminiModelMenu(page, usedFallbacks);
     } catch {
@@ -137,6 +187,7 @@ export async function geminiModelCapabilityProbe(page, model) {
         : { state: 'fail', evidence: { active, requested, selectable: false, usedFallbacks }, next: 'model-fallback' };
 }
 
+/** @param {Page} page */
 async function closeGeminiModelMenu(page) {
     for (let i = 0; i < 3; i += 1) {
         const menuVisible = await page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"]')
@@ -147,6 +198,10 @@ async function closeGeminiModelMenu(page) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<string|null>}
+ */
 async function readGeminiModel(page) {
     for (const selector of MODE_BUTTONS) {
         const loc = page.locator(selector).first();

@@ -1,5 +1,26 @@
+// @ts-check
+/// <reference types="playwright-core" />
 import { WebAiError } from './errors.mjs';
 
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+/** @typedef {'auto'|'fast'|'expert'|'grok-4.3'|'heavy'} GrokModelChoice */
+/**
+ * @typedef {{
+ *   requested: string,
+ *   selected: string|null,
+ *   alreadySelected: boolean,
+ *   usedFallbacks: string[],
+ * }} GrokModelSelectResult
+ *
+ * @typedef {{
+ *   state: 'ok'|'warn'|'fail'|'unknown',
+ *   evidence: Record<string, unknown>,
+ *   next: 'send'|'model-fallback',
+ * }} GrokModelProbe
+ */
+
+/** @type {Record<string, string>} */
 export const GROK_MODEL_ALIASES = {
     auto: 'auto',
     automatic: 'auto',
@@ -20,6 +41,7 @@ const MODEL_BUTTONS = [
     'button[aria-label*="Model select" i]',
 ];
 
+/** @type {Record<string, string[]>} */
 const MODEL_OPTIONS = {
     auto: ['Auto'],
     fast: ['Fast'],
@@ -28,19 +50,28 @@ const MODEL_OPTIONS = {
     heavy: ['Heavy'],
 };
 
+/**
+ * @param {unknown} model
+ * @returns {string|null}
+ */
 export function normalizeGrokModelChoice(model) {
     const key = String(model || '').trim().toLowerCase();
     if (!key) return null;
     return GROK_MODEL_ALIASES[key] || null;
 }
 
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @returns {Promise<GrokModelSelectResult|null>}
+ */
 export async function selectGrokModel(page, model) {
     const requested = normalizeGrokModelChoice(model);
     if (!requested) {
         if (model) throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'grok', retryHint: 'model-fallback', message: `unsupported Grok model selection: ${model}`, evidence: { model } });
         return null;
     }
-    const usedFallbacks = [];
+    /** @type {string[]} */ const usedFallbacks = [];
     const before = await readGrokModel(page);
     if (before === requested) return { requested, selected: before, alreadySelected: true, usedFallbacks };
     await openGrokModelMenu(page, usedFallbacks);
@@ -53,6 +84,10 @@ export async function selectGrokModel(page, model) {
     return { requested, selected: after, alreadySelected: false, usedFallbacks };
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} usedFallbacks
+ */
 async function openGrokModelMenu(page, usedFallbacks) {
     const modelItems = page.locator('[role="menuitem"]').filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b/i });
     if (await modelItems.first().isVisible().catch(() => false)) return;
@@ -84,6 +119,11 @@ async function openGrokModelMenu(page, usedFallbacks) {
     });
 }
 
+/**
+ * @param {Page} page
+ * @param {string} choice
+ * @returns {Promise<Locator|null>}
+ */
 async function findGrokModelOption(page, choice) {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -101,13 +141,18 @@ async function findGrokModelOption(page, choice) {
     return null;
 }
 
+/**
+ * @param {Page} page
+ * @param {unknown} model
+ * @returns {Promise<GrokModelProbe>}
+ */
 export async function grokModelCapabilityProbe(page, model) {
     const requested = normalizeGrokModelChoice(model);
     if (!model) return { state: 'unknown', evidence: { requested: null }, next: 'send' };
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     const active = await readGrokModel(page).catch(() => null);
     if (active === requested) return { state: 'ok', evidence: { active, requested, selectable: true }, next: 'send' };
-    const usedFallbacks = [];
+    /** @type {string[]} */ const usedFallbacks = [];
     try {
         await openGrokModelMenu(page, usedFallbacks);
     } catch {
@@ -120,6 +165,7 @@ export async function grokModelCapabilityProbe(page, model) {
         : { state: 'fail', evidence: { active, requested, selectable: false, usedFallbacks }, next: 'model-fallback' };
 }
 
+/** @param {Page} page */
 async function closeGrokModelMenu(page) {
     for (let i = 0; i < 3; i += 1) {
         const menuVisible = await page.locator('[role="menuitem"]')
@@ -130,6 +176,10 @@ async function closeGrokModelMenu(page) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<string|null>}
+ */
 async function readGrokModel(page) {
     for (const selector of MODEL_BUTTONS) {
         const loc = page.locator(selector).first();
@@ -139,6 +189,7 @@ async function readGrokModel(page) {
     return null;
 }
 
+/** @param {string} value */
 function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

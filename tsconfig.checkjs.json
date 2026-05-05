@@ -45,11 +45,13 @@
     "web-ai/context-pack/builder.mjs",
     "web-ai/context-pack/index.mjs",
     "web-ai/action-cache.mjs",
-    "web-ai/question.mjs"
+    "web-ai/question.mjs",
+    "web-ai/source-audit.mjs",
+    "web-ai/grok-model.mjs",
+    "web-ai/gemini-model.mjs"
   ],
   "exclude": [
     "node_modules",
     "dist"
   ]
 }
-
