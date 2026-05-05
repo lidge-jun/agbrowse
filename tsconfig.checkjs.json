@@ -49,7 +49,8 @@
     "web-ai/source-audit.mjs",
     "web-ai/grok-model.mjs",
     "web-ai/gemini-model.mjs",
-    "web-ai/eval-runner.mjs"
+    "web-ai/eval-runner.mjs",
+    "web-ai/active-command-store.mjs"
   ],
   "exclude": [
     "node_modules",
