@@ -58,7 +58,8 @@
     "skills/browser/profile-lock.mjs",
     "skills/browser/browser-core.mjs",
     "skills/browser/tab-monitor.mjs",
-    "web-ai/tab-finalizer.mjs"
+    "web-ai/tab-finalizer.mjs",
+    "skills/browser/skill-install.mjs"
   ],
   "exclude": [
     "node_modules",
