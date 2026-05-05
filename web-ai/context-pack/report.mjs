@@ -20,7 +20,7 @@
  *   ok: boolean,
  *   status: string,
  *   vendor: string,
- *   model: string,
+ *   model?: string,
  *   budget: {
  *     status: string,
  *     estimatedTokens: number,

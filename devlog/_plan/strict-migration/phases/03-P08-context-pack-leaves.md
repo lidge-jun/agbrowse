@@ -10,7 +10,7 @@ Extend `tsconfig.checkjs.json` to cover the leaf modules of the `web-ai/context-
 |------|-------|-------|
 | `web-ai/context-pack/constants.mjs` | 39 | constant exports only; trivial `// @ts-check` |
 | `web-ai/context-pack/token-estimator.mjs` | 42 | `BudgetInput`/`BudgetReport` typedefs; `Record<string, Record<string, number>>` cast on `DEFAULT_MODEL_INPUT_BUDGETS` to allow vendor/model lookups |
-| `web-ai/context-pack/report.mjs` | 70 | `ContextDryRunResult`/`ContextFileRow`/`ContextAttachment`/`ReportOptions` typedefs; renderer return type `string` (with `|| ''` fallback when transport text undefined) |
+| `web-ai/context-pack/report.mjs` | 70 | `ContextDryRunResult`/`ContextFileRow`/`ContextAttachment`/`ReportOptions` typedefs; `model?: string` and renderer return type `string|undefined` to preserve original ternary's undefined-edge runtime |
 | `web-ai/context-pack/renderer.mjs` | 79 | `ContextRenderInput`/`ContextFile` typedefs; existing imports of `WebAiError`/`buildBudgetReport` already type-checked |
 
 Total checked .mjs files in tsconfig.checkjs.json: 30 → **34** (verified by `--listFiles`).
