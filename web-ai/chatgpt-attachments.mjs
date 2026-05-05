@@ -1,12 +1,78 @@
+// @ts-check
+/// <reference types="playwright-core" />
 import { basename } from 'node:path';
 import { statSync } from 'node:fs';
+
+/** @typedef {import('playwright-core').Page} Page */
+/** @typedef {import('playwright-core').Locator} Locator */
+
+/**
+ * @typedef {Object} AttachmentFile
+ * @property {string} path
+ * @property {string} basename
+ * @property {number} sizeBytes
+ */
+
+/**
+ * @typedef {Object} PreflightOk
+ * @property {true} ok
+ * @property {string[]} softWarnings
+ * @property {string} basename
+ * @property {number} sizeBytes
+ * @property {string} extension
+ */
+
+/**
+ * @typedef {Object} PreflightFail
+ * @property {false} ok
+ * @property {string} rejectedReason
+ * @property {string[]} softWarnings
+ * @property {string} basename
+ * @property {number} sizeBytes
+ * @property {string} extension
+ */
+
+/** @typedef {PreflightOk | PreflightFail} PreflightResult */
+
+/**
+ * @typedef {Object} AttachmentSuccess
+ * @property {true} ok
+ * @property {string} stage
+ * @property {boolean} [chipVisible]
+ * @property {number} [fileCount]
+ * @property {string[]} usedFallbacks
+ * @property {string[]} warnings
+ */
+
+/**
+ * @typedef {Object} AttachmentFailure
+ * @property {false} ok
+ * @property {string} stage
+ * @property {string} error
+ * @property {string[]} usedFallbacks
+ */
+
+/** @typedef {AttachmentSuccess | AttachmentFailure} AttachmentResult */
+
+/**
+ * @typedef {Object} AttachmentTarget
+ * @property {string} [selector]
+ */
+
+/**
+ * @typedef {Object} AttachLocalFileOptions
+ * @property {AttachmentTarget|null} [uploadTarget]
+ */
 
 const HARD_LIMIT_BYTES = 512 * 1024 * 1024;
 const IMAGE_LIMIT_BYTES = 20 * 1024 * 1024;
 const SOFT_SPREADSHEET_BYTES = 50 * 1024 * 1024;
 
+/** @type {Set<string>} */
 const UNSUPPORTED_EXTENSIONS = new Set(['.gdoc', '.gsheet', '.gslides']);
+/** @type {Set<string>} */
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']);
+/** @type {Set<string>} */
 const SPREADSHEET_EXTENSIONS = new Set(['.csv', '.tsv', '.xls', '.xlsx']);
 
 export const UPLOAD_BUTTON_SELECTORS = [
@@ -45,14 +111,23 @@ const UPLOAD_PROGRESS_SELECTORS = [
     '[data-testid*="upload-progress" i]',
 ];
 
+/**
+ * @param {string} filePath
+ * @returns {AttachmentFile}
+ */
 export function fileInfoFromPath(filePath) {
     const stat = statSync(filePath);
     if (!stat.isFile()) throw new Error(`not a regular file: ${filePath}`);
     return { path: filePath, basename: basename(filePath), sizeBytes: stat.size };
 }
 
+/**
+ * @param {AttachmentFile} file
+ * @returns {PreflightResult}
+ */
 export function preflightAttachment(file) {
     const extension = extractExtension(file.basename);
+    /** @type {string[]} */
     const softWarnings = [];
     if (UNSUPPORTED_EXTENSIONS.has(extension)) {
         return { ok: false, rejectedReason: `unsupported extension: ${extension}`, softWarnings, basename: file.basename, sizeBytes: file.sizeBytes, extension };
@@ -69,8 +144,16 @@ export function preflightAttachment(file) {
     return { ok: true, softWarnings, basename: file.basename, sizeBytes: file.sizeBytes, extension };
 }
 
+/**
+ * @param {Page} page
+ * @param {AttachmentFile} file
+ * @param {AttachLocalFileOptions} [options]
+ * @returns {Promise<AttachmentResult>}
+ */
 export async function attachLocalFileLive(page, file, options = {}) {
+    /** @type {string[]} */
     const usedFallbacks = [];
+    /** @type {string[]} */
     const warnings = [];
     const preflight = preflightAttachment(file);
     if (!preflight.ok) {
@@ -89,7 +172,7 @@ export async function attachLocalFileLive(page, file, options = {}) {
     try {
         await page.locator(inputSel).first().setInputFiles(file.path, { timeout: 10_000 });
     } catch (e) {
-        return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${e.message}`, usedFallbacks };
+        return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${/** @type {{message?: string}} */ (e)?.message}`, usedFallbacks };
     }
     const accepted = await waitForAttachmentAcceptedLive(page, { timeoutMs: 45_000 });
     if (!accepted.ok) return accepted;
@@ -103,6 +186,11 @@ export async function attachLocalFileLive(page, file, options = {}) {
     };
 }
 
+/**
+ * @param {Page} page
+ * @param {{ timeoutMs?: number }} [opts]
+ * @returns {Promise<AttachmentResult>}
+ */
 export async function waitForAttachmentAcceptedLive(page, opts = {}) {
     const deadline = Date.now() + (opts.timeoutMs || 45_000);
     while (Date.now() < deadline) {
@@ -122,6 +210,11 @@ export async function waitForAttachmentAcceptedLive(page, opts = {}) {
     return { ok: false, stage: 'attachment-upload', error: 'attachment never showed visible chip', usedFallbacks: [] };
 }
 
+/**
+ * @param {Page} page
+ * @param {AttachmentFile|null} [expectedFile]
+ * @returns {Promise<AttachmentResult>}
+ */
 export async function verifySentTurnAttachmentLive(page, expectedFile = null) {
     const turn = page.locator('[data-turn="user"], [data-message-author-role="user"]').last();
     if ((await turn.count().catch(() => 0)) === 0) {
@@ -141,6 +234,12 @@ export async function verifySentTurnAttachmentLive(page, expectedFile = null) {
     return { ok: true, stage: 'attachment-verified', chipVisible: true, fileCount: evidence, usedFallbacks: [], warnings: [] };
 }
 
+/**
+ * @param {Page} page
+ * @param {string[]} usedFallbacks
+ * @param {AttachmentTarget|null} [uploadTarget]
+ * @returns {Promise<void>}
+ */
 async function openUploadSurface(page, usedFallbacks, uploadTarget = null) {
     if (uploadTarget?.selector) {
         const clicked = await clickUploadButton(page, uploadTarget.selector);
@@ -157,11 +256,16 @@ async function openUploadSurface(page, usedFallbacks, uploadTarget = null) {
             await page.waitForTimeout(500);
             return;
         } catch (e) {
-            usedFallbacks.push(`upload-button-click-failed:${sel}:${e.message}`);
+            usedFallbacks.push(`upload-button-click-failed:${sel}:${/** @type {{message?: string}} */ (e)?.message}`);
         }
     }
 }
 
+/**
+ * @param {Page} page
+ * @param {string} selector
+ * @returns {Promise<boolean>}
+ */
 async function clickUploadButton(page, selector) {
     const loc = page.locator(selector).first();
     const visible = await loc.isVisible().catch(() => false);
@@ -177,6 +281,10 @@ async function clickUploadButton(page, selector) {
     }
 }
 
+/**
+ * @param {Page} page
+ * @returns {Promise<string|null>}
+ */
 async function findFirstFileInput(page) {
     for (const sel of FILE_INPUT_SELECTORS) {
         if ((await page.locator(sel).count().catch(() => 0)) > 0) return sel;
@@ -184,11 +292,19 @@ async function findFirstFileInput(page) {
     return null;
 }
 
+/**
+ * @param {string} name
+ * @returns {string}
+ */
 function extractExtension(name) {
     const idx = name.lastIndexOf('.');
     return idx < 0 ? '' : name.slice(idx).toLowerCase();
 }
 
+/**
+ * @param {string} name
+ * @returns {string}
+ */
 function stripExtension(name) {
     const idx = name.lastIndexOf('.');
     return idx < 0 ? name : name.slice(0, idx);
