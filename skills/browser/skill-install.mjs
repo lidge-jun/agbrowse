@@ -1,3 +1,4 @@
+// @ts-check
 import { parseArgs } from 'node:util';
 import {
     cpSync,
@@ -12,6 +13,7 @@ import {
 import { join, resolve } from 'node:path';
 
 export const INSTALLABLE_SKILLS = Object.freeze(['browser', 'web-ai', 'vision-click']);
+/** @type {Readonly<Record<string, string>>} */
 export const SKILL_DESCRIPTIONS = Object.freeze({
     browser: 'Chrome/CDP browser control: navigate, inspect, click, type, screenshot, logs, and network.',
     'web-ai': 'Browser web-ai workflow for ChatGPT, Gemini, and Grok: send, poll, upload files, and capture answers.',
@@ -97,6 +99,25 @@ export const INSTALL_SKILLS_USAGE = [
     '  The installer never guesses a target path; --target is always required.',
 ].join('\n');
 
+/**
+ * @typedef {Object} ParsedInstallHelp
+ * @property {true} help
+ * @property {boolean | undefined} json
+ */
+
+/**
+ * @typedef {Object} ParsedInstallOptions
+ * @property {string} targetRoot
+ * @property {boolean} link
+ * @property {boolean} force
+ * @property {boolean | undefined} json
+ * @property {undefined} [help]
+ */
+
+/**
+ * @param {string[]} [args]
+ * @returns {ParsedInstallHelp | ParsedInstallOptions}
+ */
 export function parseInstallSkillsArgs(args = []) {
     const { values } = parseArgs({
         args,
@@ -126,6 +147,32 @@ export function parseInstallSkillsArgs(args = []) {
     };
 }
 
+/**
+ * @typedef {Object} InstallBundledSkillsOptions
+ * @property {string} sourceRoot
+ * @property {string} targetRoot
+ * @property {boolean} [link]
+ * @property {boolean} [force]
+ */
+
+/**
+ * @typedef {Object} InstalledSkillEntry
+ * @property {string} name
+ * @property {'linked' | 'copied'} action
+ * @property {string} path
+ */
+
+/**
+ * @typedef {Object} InstallBundledSkillsResult
+ * @property {string} targetRoot
+ * @property {'link' | 'copy'} mode
+ * @property {InstalledSkillEntry[]} installed
+ */
+
+/**
+ * @param {InstallBundledSkillsOptions} options
+ * @returns {InstallBundledSkillsResult}
+ */
 export function installBundledSkills(options) {
     const sourceRoot = resolve(options.sourceRoot);
     const targetRoot = resolve(options.targetRoot);
@@ -138,6 +185,7 @@ export function installBundledSkills(options) {
 
     mkdirSync(targetRoot, { recursive: true });
 
+    /** @type {InstalledSkillEntry[]} */
     const installed = [];
     for (const name of INSTALLABLE_SKILLS) {
         const source = join(sourceRoot, name);
@@ -175,13 +223,18 @@ export function installBundledSkills(options) {
     };
 }
 
+/**
+ * @param {string[]} [args]
+ * @param {{ sourceRoot?: string }} [options]
+ * @returns {{ help: true, usage: string, json: boolean | undefined } | (InstallBundledSkillsResult & { json: boolean | undefined })}
+ */
 export function runInstallSkillsCli(args = [], options = {}) {
     const parsed = parseInstallSkillsArgs(args);
     if (parsed.help) {
         return { help: true, usage: INSTALL_SKILLS_USAGE, json: parsed.json };
     }
     const result = installBundledSkills({
-        sourceRoot: options.sourceRoot,
+        sourceRoot: /** @type {string} */ (options.sourceRoot),
         targetRoot: parsed.targetRoot,
         link: parsed.link,
         force: parsed.force,
@@ -189,10 +242,26 @@ export function runInstallSkillsCli(args = [], options = {}) {
     return { ...result, json: parsed.json };
 }
 
+/**
+ * @param {string} path
+ * @returns {boolean}
+ */
 export function isLinkedSkill(path) {
     return existsSync(path) && lstatSync(path).isSymbolicLink() && Boolean(readlinkSync(path));
 }
 
+/**
+ * @typedef {Object} BundledSkillEntry
+ * @property {string} name
+ * @property {string | undefined} description
+ * @property {string} path
+ * @property {boolean} available
+ */
+
+/**
+ * @param {string} sourceRoot
+ * @returns {BundledSkillEntry[]}
+ */
 export function listBundledSkills(sourceRoot) {
     return INSTALLABLE_SKILLS.map(name => {
         const path = join(resolve(sourceRoot), name);
@@ -205,6 +274,12 @@ export function listBundledSkills(sourceRoot) {
     });
 }
 
+/**
+ * @param {string} sourceRoot
+ * @param {string} name
+ * @param {{ full?: boolean }} [options]
+ * @returns {string}
+ */
 export function readBundledSkill(sourceRoot, name, options = {}) {
     if (name === 'core') {
         if (!options.full) return CORE_SKILL_GUIDE;
@@ -229,6 +304,11 @@ export function readBundledSkill(sourceRoot, name, options = {}) {
     return readFileSync(skillPath, 'utf8');
 }
 
+/**
+ * @param {string} sourceRoot
+ * @param {string} [name]
+ * @returns {string}
+ */
 export function resolveSkillPath(sourceRoot, name) {
     const root = resolve(sourceRoot);
     if (!name) return root;
@@ -238,6 +318,18 @@ export function resolveSkillPath(sourceRoot, name) {
     return join(root, name);
 }
 
+/**
+ * @typedef {{ type: 'text', text: string }
+ *   | { type: 'list' | 'json', skills: BundledSkillEntry[] }
+ *   | { type: 'install', result: ReturnType<typeof runInstallSkillsCli> }
+ * } RunSkillsCliResult
+ */
+
+/**
+ * @param {string[]} [args]
+ * @param {{ sourceRoot?: string }} [options]
+ * @returns {RunSkillsCliResult}
+ */
 export function runSkillsCli(args = [], options = {}) {
     const command = args[0] || 'help';
     if (command === '--help' || command === '-h' || command === 'help') {
@@ -248,7 +340,7 @@ export function runSkillsCli(args = [], options = {}) {
         const json = args.includes('--json');
         return {
             type: json ? 'json' : 'list',
-            skills: listBundledSkills(options.sourceRoot),
+            skills: listBundledSkills(/** @type {string} */ (options.sourceRoot)),
         };
     }
 
@@ -257,14 +349,14 @@ export function runSkillsCli(args = [], options = {}) {
         if (!name) throw new Error('Usage: agbrowse skills get <core|browser|web-ai|vision-click> [--full]');
         return {
             type: 'text',
-            text: readBundledSkill(options.sourceRoot, name, { full: args.includes('--full') }),
+            text: readBundledSkill(/** @type {string} */ (options.sourceRoot), name, { full: args.includes('--full') }),
         };
     }
 
     if (command === 'path') {
         return {
             type: 'text',
-            text: resolveSkillPath(options.sourceRoot, args[1]),
+            text: resolveSkillPath(/** @type {string} */ (options.sourceRoot), args[1]),
         };
     }
 
