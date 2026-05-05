@@ -1,7 +1,65 @@
+// @ts-check
 import { execFileSync } from 'node:child_process';
+
+/**
+ * @typedef {Object} Viewport
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
+ * @typedef {Object} Clip
+ * @property {number} x
+ * @property {number} y
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
+ * @typedef {Object} VisionClickDefaults
+ * @property {string} [port]
+ * @property {string} [browserScript]
+ * @property {Viewport|null} [viewport]
+ */
+
+/**
+ * @typedef {Object} VisionClickOpts
+ * @property {boolean} doubleClick
+ * @property {string|undefined} port
+ * @property {string|undefined} browserScript
+ * @property {boolean} prepareStable
+ * @property {boolean} verifyBeforeClick
+ * @property {Viewport|null} viewport
+ * @property {string|null} region
+ * @property {Clip|null} clip
+ * @property {boolean} help
+ */
+
+/**
+ * @typedef {Object} Point
+ * @property {number} x
+ * @property {number} y
+ */
+
+/**
+ * @typedef {Object} CoordPromptOptions
+ * @property {string} [regionHint]
+ * @property {boolean} [centerBias]
+ * @property {boolean} [preferContainer]
+ */
+
+/**
+ * @typedef {Object} AssertCodexOptions
+ * @property {(file: string, args: string[], opts: { encoding: string, timeout: number }) => unknown} [execFn]
+ * @property {string} [binary]
+ */
 
 // ─── JSON extraction ─────────────────────────────
 
+/**
+ * @param {string} text
+ * @returns {string[]}
+ */
 function extractJsonObjects(text) {
     const objects = [];
     let start = -1;
@@ -47,8 +105,14 @@ function extractJsonObjects(text) {
 
 // ─── CLI args ────────────────────────────────────
 
+/**
+ * @param {string[]} args
+ * @param {VisionClickDefaults} [defaults]
+ * @returns {{ target: string, opts: VisionClickOpts }}
+ */
 export function parseVisionClickCliArgs(args, defaults = {}) {
     const positionals = [];
+    /** @type {VisionClickOpts} */
     const opts = {
         doubleClick: false,
         port: defaults.port,
@@ -123,6 +187,10 @@ export function parseVisionClickCliArgs(args, defaults = {}) {
     };
 }
 
+/**
+ * @param {string|null|undefined} value
+ * @returns {Viewport|null}
+ */
 export function parseViewportSpec(value) {
     if (!value) return null;
     const match = String(value).match(/^(\d+)x(\d+)$/i);
@@ -135,8 +203,13 @@ export function parseViewportSpec(value) {
     };
 }
 
+/**
+ * @param {string|null|undefined} region
+ * @returns {string}
+ */
 export function describeRegion(region) {
     if (!region) return '';
+    /** @type {Record<string, string>} */
     const hints = {
         'left-panel': 'Focus only on the left-side results panel. Ignore the map canvas, header chrome, and floating controls.',
         'center-map': 'Focus only on the center map canvas area. Ignore the side panel, top search bar, and floating controls.',
@@ -145,6 +218,11 @@ export function describeRegion(region) {
     return hints[region] || `Focus only on the region labeled "${region}".`;
 }
 
+/**
+ * @param {string|null|undefined} region
+ * @param {Viewport} viewport
+ * @returns {Clip|null}
+ */
 export function resolveRegionClip(region, viewport) {
     if (!region) return null;
     const width = viewport.width;
@@ -180,6 +258,12 @@ export function resolveRegionClip(region, viewport) {
     }
 }
 
+/**
+ * @param {Point} point
+ * @param {Viewport} viewport
+ * @param {{ width?: number, height?: number }} [size]
+ * @returns {Clip}
+ */
 export function clipAroundPoint(point, viewport, size = {}) {
     const width = Math.min(size.width || 260, viewport.width);
     const height = Math.min(size.height || 180, viewport.height);
@@ -190,6 +274,11 @@ export function clipAroundPoint(point, viewport, size = {}) {
 
 // ─── Prompt ──────────────────────────────────────
 
+/**
+ * @param {string} target
+ * @param {CoordPromptOptions} [options]
+ * @returns {string}
+ */
 export function buildCoordPrompt(target, options = {}) {
     const prompt = [
         'Look at this screenshot image carefully.',
@@ -213,6 +302,10 @@ export function buildCoordPrompt(target, options = {}) {
 
 // ─── Coord JSON extraction ───────────────────────
 
+/**
+ * @param {string} text
+ * @returns {{ found: boolean, x: number, y: number, description?: string } | null}
+ */
 export function extractCoordJson(text) {
     const candidates = extractJsonObjects(String(text || ''));
     for (const candidate of candidates.reverse()) {
@@ -229,6 +322,9 @@ export function extractCoordJson(text) {
 
 // ─── Codex CLI check ─────────────────────────────
 
+/**
+ * @param {AssertCodexOptions} [options]
+ */
 export function assertCodexCli(options = {}) {
     const execFn = options.execFn || execFileSync;
     const binary = options.binary || (process.platform === 'win32' ? 'where' : 'which');
@@ -245,6 +341,12 @@ export function assertCodexCli(options = {}) {
 
 // ─── DPR correction ──────────────────────────────
 
+/**
+ * @param {number} rawX
+ * @param {number} rawY
+ * @param {number} [dpr]
+ * @returns {Point}
+ */
 export function applyDprCorrection(rawX, rawY, dpr = 1) {
     return {
         x: Math.round(rawX / dpr),
