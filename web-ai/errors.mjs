@@ -4,7 +4,7 @@
 // Phase 2 PR1 — class shape, helpers, and JSON serializer only. PR2 converts
 // every `throw new Error(` call site in `web-ai/**` to `WebAiError`.
 //
-// Catalog (devlog/03_phase2_errors.md is the source of truth):
+// Catalog (devlog/_fin/mvp/01_foundation/03_phase2_errors.md is the source of truth):
 //
 //   cdp.unreachable                 connect              start-or-check-port
 //   cdp.target-mismatch             connect              tab-switch

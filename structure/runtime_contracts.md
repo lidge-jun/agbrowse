@@ -92,26 +92,26 @@ Provider UI는 공식 API가 아니다. 따라서 live provider flow는 구현�
 
 | Contract | Phase doc |
 | --- | --- |
-| Trace replay and evidence | `devlog/13_phase12_trace_replay.md` |
-| Safety policy | `devlog/14_phase13_safety_policy.md` |
-| Active command ownership | `devlog/15_phase14_active_command_ownership.md` |
-| Browser primitive parity | `devlog/16_phase15_browser_primitives.md` |
-| Semantic resolver | `devlog/17_phase16_semantic_resolver.md` |
-| ActionIntent target resolver | `devlog/29_action_intent_target_resolver.md` |
-| ChatGPT composer resolver integration | `devlog/30_chatgpt_composer_resolver.md` |
-| ChatGPT send resolver integration | `devlog/31_chatgpt_send_resolver.md` |
-| ChatGPT upload resolver integration | `devlog/32_chatgpt_upload_resolver.md` |
-| ChatGPT copy resolver integration | `devlog/33_chatgpt_copy_resolver.md` |
-| ChatGPT send resolver trace | `devlog/34_chatgpt_send_resolver_trace.md` |
-| ChatGPT copy resolver trace | `devlog/35_chatgpt_copy_resolver_trace.md` |
-| ChatGPT reasoning effort resilience | `devlog/36_chatgpt_reasoning_effort_resilience.md` |
-| Provider contracts and source audit | `devlog/18_phase17_provider_contracts_source_audit.md` |
-| Answer artifact and source audit foundation | `devlog/25_answer_artifact_source_audit.md` |
-| Provider answer artifacts | `devlog/26_provider_answer_artifacts.md` |
-| Source audit enforcement | `devlog/28_source_audit_enforcement.md` |
-| MCP and AI SDK hardening | `devlog/19_phase18_mcp_ai_sdk_hardening.md` |
-| Benchmark trajectory | `devlog/21_phase20_benchmarks.md` |
-| Release gates | `devlog/22_phase21_release_gates.md` |
+| Trace replay and evidence | `devlog/_fin/mvp/04_eval_trace/13_phase12_trace_replay.md` |
+| Safety policy | `devlog/_fin/mvp/05_safety_ownership/14_phase13_safety_policy.md` |
+| Active command ownership | `devlog/_fin/mvp/05_safety_ownership/15_phase14_active_command_ownership.md` |
+| Browser primitive parity | `devlog/_fin/mvp/06_browser_primitives/16_phase15_browser_primitives.md` |
+| Semantic resolver | `devlog/_fin/mvp/07_semantic_resolver/17_phase16_semantic_resolver.md` |
+| ActionIntent target resolver | `devlog/_fin/mvp/07_semantic_resolver/29_action_intent_target_resolver.md` |
+| ChatGPT composer resolver integration | `devlog/_fin/mvp/07_semantic_resolver/30_chatgpt_composer_resolver.md` |
+| ChatGPT send resolver integration | `devlog/_fin/mvp/07_semantic_resolver/31_chatgpt_send_resolver.md` |
+| ChatGPT upload resolver integration | `devlog/_fin/mvp/07_semantic_resolver/32_chatgpt_upload_resolver.md` |
+| ChatGPT copy resolver integration | `devlog/_fin/mvp/07_semantic_resolver/33_chatgpt_copy_resolver.md` |
+| ChatGPT send resolver trace | `devlog/_fin/mvp/07_semantic_resolver/34_chatgpt_send_resolver_trace.md` |
+| ChatGPT copy resolver trace | `devlog/_fin/mvp/07_semantic_resolver/35_chatgpt_copy_resolver_trace.md` |
+| ChatGPT reasoning effort resilience | `devlog/_fin/mvp/07_semantic_resolver/36_chatgpt_reasoning_effort_resilience.md` |
+| Provider contracts and source audit | `devlog/_fin/mvp/08_provider_contracts/18_phase17_provider_contracts_source_audit.md` |
+| Answer artifact and source audit foundation | `devlog/_fin/mvp/08_provider_contracts/25_answer_artifact_source_audit.md` |
+| Provider answer artifacts | `devlog/_fin/mvp/08_provider_contracts/26_provider_answer_artifacts.md` |
+| Source audit enforcement | `devlog/_fin/mvp/08_provider_contracts/28_source_audit_enforcement.md` |
+| MCP and AI SDK hardening | `devlog/_fin/mvp/03_mcp_bridge/19_phase18_mcp_ai_sdk_hardening.md` |
+| Benchmark trajectory | `devlog/_fin/mvp/09_benchmarks/21_phase20_benchmarks.md` |
+| Release gates | `devlog/_fin/mvp/10_release_gates/22_phase21_release_gates.md` |
 
 ## 변경 기록
 

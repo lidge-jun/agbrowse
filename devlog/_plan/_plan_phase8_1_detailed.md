@@ -28,7 +28,7 @@ graph TD
     Prep --> F
 ```
 
-**Part 2 file:** `devlog/_plan_phase8_1_detailed.md` (this file, continued below)
+**Part 2 file:** `devlog/_plan/_plan_phase8_1_detailed.md` (this file, continued below)
 
 ---
 

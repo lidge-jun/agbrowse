@@ -337,7 +337,7 @@ line and `[hint] retryHint: <hint>` on the second line. Exit code is `1`
 in both modes.
 
 Initial code catalog (full list and PR2 call-site coverage live in
-`devlog/03_phase2_errors.md`):
+`devlog/_fin/mvp/01_foundation/03_phase2_errors.md`):
 
 - `cdp.unreachable`, `cdp.target-mismatch`
 - `provider.composer-not-visible`, `provider.model-mismatch`,
