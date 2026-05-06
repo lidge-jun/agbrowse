@@ -23,7 +23,11 @@
     "web-ai/doctor.mjs",
     "web-ai/grok-live.mjs",
     "web-ai/chatgpt.mjs",
-    "web-ai/gemini-live.mjs"
+    "web-ai/gemini-live.mjs",
+    "web-ai/cli-sessions.mjs",
+    "web-ai/mcp-server.mjs",
+    "web-ai/watcher.mjs",
+    "web-ai/cli.mjs"
   ],
   "exclude": [
     "node_modules",

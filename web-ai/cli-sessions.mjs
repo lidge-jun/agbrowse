@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { pollWebAi } from './chatgpt.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
@@ -9,6 +15,9 @@ const SESSIONS_SUBCOMMANDS = new Set(['list', 'show', 'resume', 'reattach', 'pru
 const SESSION_DURATION_RE = /^(\d+)\s*([smhdw]?)$/i;
 const DURATION_MS = { '': 1000, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 
+/**
+ * @param {any} value
+ */
 export function parseDurationToMs(value) {
     if (value === undefined || value === null || value === '') return null;
     const match = SESSION_DURATION_RE.exec(String(value).trim());
@@ -23,7 +32,7 @@ export function parseDurationToMs(value) {
     }
     const [, num, unitRaw] = match;
     const unit = (unitRaw || 'd').toLowerCase();
-    const factor = DURATION_MS[unit];
+    const factor = (/** @type {any} */ (DURATION_MS))[unit];
     if (!factor) {
         throw new WebAiError({
             errorCode: 'internal.unhandled',
@@ -36,6 +45,12 @@ export function parseDurationToMs(value) {
     return Number(num) * factor;
 }
 
+/**
+ * @param {any} args
+ * @param {any} values
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function runSessionsCommand(args, values, deps, input) {
     const [sub, ...rest] = args;
     if (!sub) {
@@ -56,7 +71,7 @@ export async function runSessionsCommand(args, values, deps, input) {
     }
     if (sub === 'list') {
         const filter = {};
-        const vendorExplicit = args.includes('--vendor') || args.some(a => a.startsWith('--vendor='));
+        const vendorExplicit = args.includes('--vendor') || args.some((/** @type {any} */ a) => a.startsWith('--vendor='));
         if (vendorExplicit && values.vendor) filter.vendor = values.vendor;
         if (values.status) filter.status = values.status;
         if (values.limit) filter.limit = Number(values.limit);
@@ -117,13 +132,16 @@ export async function runSessionsCommand(args, values, deps, input) {
             ? parseDurationToMs(values['older-than'])
             : 30 * 86_400_000;
         const result = pruneSessionsOlderThan({
-            olderThanMs,
+            olderThanMs: /** @type {any} */ (olderThanMs),
             ...(values.status ? { status: values.status } : {}),
         });
         return { ok: true, status: 'pruned', ...result, olderThanMs };
     }
 }
 
+/**
+ * @param {any} result
+ */
 export function printSessionsHuman(result) {
     if (!result) return;
     if (result.status === 'help') {

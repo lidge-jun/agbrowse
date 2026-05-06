@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { createInterface } from 'node:readline';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { sendWebAi, pollWebAi } from './chatgpt.mjs';
@@ -27,12 +33,18 @@ const VENDOR_DEFAULT_URLS = {
     grok: 'https://grok.com',
 };
 
+/**
+ * @param {any} args
+ */
 function providerFromArgs(args = {}) {
     const provider = args.provider || args.vendor || 'chatgpt';
     if (!PROVIDERS.has(provider)) throw new Error(`unsupported provider: ${provider}`);
     return provider;
 }
 
+/**
+ * @param {any} payload
+ */
 function jsonResult(payload) {
     return {
         content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
@@ -40,6 +52,12 @@ function jsonResult(payload) {
     };
 }
 
+/**
+ * @param {any} id
+ * @param {any} code
+ * @param {any} message
+ * @param {any} [data]
+ */
 function jsonError(id, code, message, data) {
     return {
         jsonrpc: JSON_RPC,
@@ -52,28 +70,51 @@ function jsonError(id, code, message, data) {
     };
 }
 
+/**
+ * @param {any} id
+ * @param {any} result
+ */
 function jsonResponse(id, result) {
     return { jsonrpc: JSON_RPC, id, result };
 }
 
+/**
+ * @param {any} provider
+ * @param {any} deps
+ * @param {any} input
+ */
 async function pollByProvider(provider, deps, input) {
     if (provider === 'gemini') return geminiPollWebAi(deps, input);
     if (provider === 'grok') return grokPollWebAi(deps, input);
     return pollWebAi(deps, input);
 }
 
+/**
+ * @param {any} provider
+ * @param {any} deps
+ * @param {any} input
+ */
 async function sendByProvider(provider, deps, input) {
     if (provider === 'gemini') return geminiSendWebAi(deps, input);
     if (provider === 'grok') return grokSendWebAi(deps, input);
     return sendWebAi(deps, input);
 }
 
+/**
+ * @param {any} provider
+ */
 function copySelectorsForProvider(provider) {
     if (provider === 'gemini') return GEMINI_COPY_SELECTORS;
     if (provider === 'grok') return GROK_COPY_SELECTORS;
     return CHATGPT_COPY_SELECTORS;
 }
 
+/**
+ * @param {any} name
+ * @param {any} args
+ * @param {any} deps
+ * @param {any} state
+ */
 async function callMcpTool(name, args, deps, state) {
     if (!isKnownMcpTool(name)) throw new Error(`unknown tool: ${name}`);
     const policy = normalizeMcpPolicy(args.policy === undefined ? {} : args.policy);
@@ -112,13 +153,13 @@ async function callMcpTool(name, args, deps, state) {
     if (name === 'web_ai_click_ref') {
         const provider = providerFromArgs(args);
         const snapshot = requireLatestSnapshot(state, WEB_AI_SCOPE, args.snapshotId);
-        enforcePolicy(policy, { url: snapshot.url || args.url || VENDOR_DEFAULT_URLS[provider] });
+        enforcePolicy(policy, { url: snapshot.url || args.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[provider] });
         return clickSnapshotRef(name, provider, deps, args, snapshot, { policy });
     }
     if (name === 'web_ai_submit_prompt') {
         const provider = providerFromArgs(args);
         enforcePolicy(policy, {
-            url: state.latestSnapshot?.url || args.url || VENDOR_DEFAULT_URLS[provider],
+            url: state.latestSnapshot?.url || args.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[provider],
             upload: Boolean(args.filePath),
             explicitUpload: Boolean(args.filePath),
             fileAccess: Boolean(args.filePath),
@@ -144,7 +185,7 @@ async function callMcpTool(name, args, deps, state) {
     }
     if (name === 'web_ai_copy_markdown') {
         const provider = providerFromArgs(args);
-        const fallbackUrl = state.latestSnapshot?.url || args.url || VENDOR_DEFAULT_URLS[provider];
+        const fallbackUrl = state.latestSnapshot?.url || args.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[provider];
         const action = { url: fallbackUrl, clipboardRead: true, unsafeAllow: args.unsafeAllow || [] };
         enforcePolicy(policy, action);
         const page = await deps.getPage();
@@ -162,6 +203,13 @@ async function callMcpTool(name, args, deps, state) {
     throw new Error(`unhandled tool: ${name}`);
 }
 
+/**
+ * @param {any} name
+ * @param {any} provider
+ * @param {any} deps
+ * @param {any} args
+ * @param {any} fn
+ */
 async function withMcpActiveCommand(name, provider, deps, args, fn) {
     const targetId = await deps.getTargetId?.().catch(() => null);
     if (!targetId) return fn();
@@ -175,11 +223,19 @@ async function withMcpActiveCommand(name, provider, deps, args, fn) {
     }, fn);
 }
 
+/**
+ * @param {any} policy
+ */
 function normalizeMcpPolicy(policy) {
     if (policy && typeof policy === 'object' && !Array.isArray(policy)) return policy;
     throw new Error('MCP policy must be an inline policy object');
 }
 
+/**
+ * @param {any} message
+ * @param {any} deps
+ * @param {any} state
+ */
 export async function handleMcpMessage(message, deps, state = {}) {
     if (!message || message.jsonrpc !== JSON_RPC) return jsonError(message?.id ?? null, -32600, 'Invalid Request');
     if (message.id === undefined || message.id === null) return null;
@@ -202,12 +258,20 @@ export async function handleMcpMessage(message, deps, state = {}) {
         return jsonError(message.id, -32601, `Method not found: ${message.method}`);
     } catch (error) {
         return jsonResponse(message.id, {
-            content: [{ type: 'text', text: error?.message || String(error) }],
+            content: [{ type: 'text', text: (/** @type {any} */ (error))?.message || String(error) }],
             isError: true,
         });
     }
 }
 
+/**
+ * @param {any} name
+ * @param {any} provider
+ * @param {any} deps
+ * @param {any} args
+ * @param {any} snapshot
+ * @param {any} options
+ */
 async function clickSnapshotRef(name, provider, deps, args, snapshot, options = {}) {
     const ref = snapshot.refs?.[args.ref];
     if (!ref) throw new Error(`unknown ref for latest snapshot: ${args.ref}`);
@@ -233,7 +297,7 @@ async function clickSnapshotRef(name, provider, deps, args, snapshot, options = 
     return { ok: true, snapshotId: snapshot.snapshotId, ref: args.ref };
 }
 
-export async function runMcpServer(deps, {
+export async function runMcpServer(/** @type {any} */ deps, {
     input = process.stdin,
     output = process.stdout,
 } = {}) {
@@ -245,7 +309,7 @@ export async function runMcpServer(deps, {
         try {
             message = JSON.parse(line);
         } catch (error) {
-            output.write(`${JSON.stringify(jsonError(null, -32700, error.message))}\n`);
+            output.write(`${JSON.stringify(jsonError(null, -32700, (/** @type {any} */ (error)).message))}\n`);
             continue;
         }
         const response = await handleMcpMessage(message, deps, state);

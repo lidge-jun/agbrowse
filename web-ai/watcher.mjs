@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -27,6 +33,11 @@ const PROVIDER_HOSTS = {
     grok: new Set(['grok.com']),
 };
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} notifier
+ */
 export async function watchSession(deps, input = {}, notifier = null) {
     const options = normalizeWatchOptions(input);
     if (!options.sessionId) {
@@ -40,8 +51,9 @@ export async function watchSession(deps, input = {}, notifier = null) {
 
     const lock = acquireWatcherSessionLock(options.sessionId, { staleMs: options.lockStaleMs });
     const notify = notifier || createStdoutNotifier({ json: options.json });
+    /** @type {any[]} */
     const events = [];
-    const emit = async (event) => {
+    const emit = async (/** @type {any} */ event) => {
         const enriched = { capturedAt: new Date().toISOString(), sessionId: options.sessionId, ...event };
         if (options.captureEvents) events.push(enriched);
         await notify(enriched);
@@ -87,13 +99,17 @@ export async function watchSession(deps, input = {}, notifier = null) {
             sessionId: options.sessionId,
             final,
             eventsPrinted: true,
-            events: options.captureEvents ? events : undefined,
+            events: options.captureEvents ? /** @type {any} */ (events) : undefined,
         };
     } finally {
         lock.release();
     }
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 export async function watchSessionOnce(deps, input = {}) {
     const options = normalizeWatchOptions(input);
     const session = getSession(options.sessionId);
@@ -177,12 +193,12 @@ export async function watchSessionOnce(deps, input = {}) {
             getTargetId: async () => targetId,
         };
 
-        const domHashBefore = await domHashAround(page, ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
+        const domHashBefore = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
         const pollResult = await callVendorPoll(sessionDeps, vendor, session, options);
-        const domHashAfter = await domHashAround(page, ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
-        const answerText = typeof pollResult.answerText === 'string'
-            ? pollResult.answerText
-            : (typeof pollResult.answer === 'string' ? pollResult.answer : null);
+        const domHashAfter = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
+        const answerText = typeof (/** @type {any} */ (pollResult)).answerText === 'string'
+            ? (/** @type {any} */ (pollResult)).answerText
+            : (typeof (/** @type {any} */ (pollResult)).answer === 'string' ? (/** @type {any} */ (pollResult)).answer : null);
         const refreshed = getSession(session.sessionId) || session;
         let status = refreshed.status || pollResult.status || 'polling';
 
@@ -209,7 +225,7 @@ export async function watchSessionOnce(deps, input = {}) {
             vendor,
             status,
             terminal: TERMINAL_SESSION_STATUSES.has(status),
-            url: page.url?.() || null,
+            url: (/** @type {any} */ (page)).url?.() || null,
             answerText,
             warnings: [...(reattach.warnings || []), ...(pollResult.warnings || [])],
             preflight,
@@ -218,8 +234,11 @@ export async function watchSessionOnce(deps, input = {}) {
     });
 }
 
+/**
+ * @param {any} opts
+ */
 export function createStdoutNotifier({ json = false, stream = process.stdout } = {}) {
-    return async function notify(event) {
+    return async function notify(/** @type {any} */ event) {
         if (json) {
             stream.write(`${JSON.stringify(event)}\n`);
             return;
@@ -236,6 +255,9 @@ export function createStdoutNotifier({ json = false, stream = process.stdout } =
     };
 }
 
+/**
+ * @param {any} input
+ */
 export function normalizeWatchOptions(input = {}) {
     const sessionId = input.session || input.sessionId || null;
     const intervalMs = durationToMs(input.interval || input.intervalMs || DEFAULT_WATCH_INTERVAL_MS, 's');
@@ -252,7 +274,7 @@ export function normalizeWatchOptions(input = {}) {
         sessionId,
         intervalMs,
         pollTimeoutSec: Number.isFinite(pollTimeoutSec) && pollTimeoutSec > 0 ? pollTimeoutSec : DEFAULT_WATCH_POLL_TIMEOUT_SEC,
-        maxIterations: Number.isFinite(maxIterations) && maxIterations > 0 ? maxIterations : null,
+        maxIterations: Number.isFinite(maxIterations) && (/** @type {number} */ (maxIterations)) > 0 ? maxIterations : null,
         deadlineAt,
         once: input.once === true,
         navigate: input.navigate === true,
@@ -264,6 +286,10 @@ export function normalizeWatchOptions(input = {}) {
     };
 }
 
+/**
+ * @param {any} sessionId
+ * @param {any} opts
+ */
 export function acquireWatcherSessionLock(sessionId, { staleMs = DEFAULT_WATCH_LOCK_STALE_MS } = {}) {
     const dir = watcherLockPath(sessionId);
     mkdirSync(watcherHome(), { recursive: true });
@@ -286,7 +312,7 @@ export function acquireWatcherSessionLock(sessionId, { staleMs = DEFAULT_WATCH_L
                 release() { rmSync(dir, { recursive: true, force: true }); },
             };
         } catch (err) {
-            if (err?.code !== 'EEXIST') throw err;
+            if ((/** @type {any} */ (err))?.code !== 'EEXIST') throw err;
             const existing = readWatcherLockMetadata(dir);
             if (isWatcherLockStale(existing, staleMs)) {
                 rmSync(dir, { recursive: true, force: true });
@@ -309,31 +335,36 @@ export function acquireWatcherSessionLock(sessionId, { staleMs = DEFAULT_WATCH_L
     });
 }
 
+/**
+ * @param {any} page
+ * @param {any} vendor
+ */
 export async function runWatcherPreflight(page, vendor) {
-    const expectedHosts = PROVIDER_HOSTS[vendor] || new Set();
+    const expectedHosts = (/** @type {any} */ (PROVIDER_HOSTS))[vendor] || new Set();
     const composer = featureDefinitionsForVendor(vendor).find(f => f.feature === 'composer');
     const capabilities = [
-        defineCapability('provider.host', ({ page: p }) => probeHostMatches(p, expectedHosts)),
+        defineCapability('provider.host', /** @type {any} */ ((/** @type {{page:any}} */ { page: p }) => probeHostMatches(p, expectedHosts))),
     ];
     if (composer) {
-        capabilities.push(defineCapability('provider.composer-visible', ({ page: p }) =>
-            probeFirstVisibleSelector(p, composer.selectors, {
+        capabilities.push(defineCapability('provider.composer-visible', /** @type {any} */ ((/** @type {{page:any}} */ { page: p }) =>
+            probeFirstVisibleSelector(p, /** @type {string[]} */ (composer.selectors), {
                 timeoutMs: 750,
                 failState: 'warn',
                 failNext: 'poll',
                 okNext: 'poll',
-            }),
-        ));
+            }))));
     }
     const rows = await runCapabilities({ page }, capabilities, { vendor });
     return { rows, worst: worstCapabilityState(rows) };
 }
 
+/**
+ */
 export async function readProfileLockSummary() {
     const candidates = ['getProfileLockStatus', 'readProfileLock', 'getProfileLock', 'inspectProfileLock'];
     for (const name of candidates) {
-        if (typeof profileLock[name] !== 'function') continue;
-        const value = await profileLock[name]();
+        if (typeof (/** @type {any} */ (profileLock))[name] !== 'function') continue;
+        const value = await (/** @type {any} */ (profileLock))[name]();
         return { state: 'ok', source: name, evidence: scrubProfileLockEvidence(value) };
     }
     return { state: 'unknown', reason: 'no-compatible-profile-lock-export' };
@@ -341,6 +372,11 @@ export async function readProfileLockSummary() {
 
 // --- internal helpers ---
 
+/**
+ * @param {any} page
+ * @param {any} session
+ * @param {any} options
+ */
 async function ensureWatcherAttached(page, session, options) {
     const targetUrl = session.conversationUrl || session.originalUrl;
     if (!targetUrl) return { ok: true, warnings: ['session-has-no-conversation-url'] };
@@ -357,6 +393,12 @@ async function ensureWatcherAttached(page, session, options) {
     };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} vendor
+ * @param {any} session
+ * @param {any} options
+ */
 async function callVendorPoll(deps, vendor, session, options) {
     const pollFn = vendor === 'gemini' ? geminiPollWebAi
         : vendor === 'grok' ? grokPollWebAi
@@ -382,22 +424,37 @@ async function callVendorPoll(deps, vendor, session, options) {
     }
 }
 
+/**
+ * @param {any} status
+ * @param {any} result
+ */
 function deriveStreamingState(status, result = {}) {
     if (status === 'streaming' || result.streaming === true) return 'streaming';
     if (TERMINAL_SESSION_STATUSES.has(status)) return 'idle';
     return 'unknown';
 }
 
+/**
+ * @param {any} warnings
+ * @param {any} warning
+ */
 function appendUniqueWarning(warnings, warning) {
     return warnings.includes(warning) ? warnings : [...warnings, warning];
 }
 
+/**
+ * @param {any} deadlineAt
+ */
 function isDeadlineExpired(deadlineAt) {
     if (!deadlineAt) return false;
     const t = Date.parse(deadlineAt);
     return Number.isFinite(t) && Date.now() >= t;
 }
 
+/**
+ * @param {any} value
+ * @param {any} label
+ */
 function toIsoDeadline(value, label) {
     const t = Date.parse(value);
     if (!Number.isFinite(t)) {
@@ -411,6 +468,10 @@ function toIsoDeadline(value, label) {
     return new Date(t).toISOString();
 }
 
+/**
+ * @param {any} value
+ * @param {any} defaultUnit
+ */
 function durationToMs(value, defaultUnit = 's') {
     if (typeof value === 'number') return value;
     const match = /^(\d+)\s*(ms|s|m|h)?$/i.exec(String(value || '').trim());
@@ -421,18 +482,30 @@ function durationToMs(value, defaultUnit = 's') {
     return n * factor;
 }
 
+/**
+ */
 function watcherHome() {
     return join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-watchers');
 }
 
+/**
+ * @param {any} sessionId
+ */
 function watcherLockPath(sessionId) {
     return join(watcherHome(), `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`);
 }
 
+/**
+ * @param {any} dir
+ * @param {any} metadata
+ */
 function writeWatcherLockMetadata(dir, metadata) {
     writeFileSync(join(dir, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
 }
 
+/**
+ * @param {any} dir
+ */
 function readWatcherLockMetadata(dir) {
     try {
         if (!existsSync(join(dir, 'metadata.json'))) return null;
@@ -442,6 +515,10 @@ function readWatcherLockMetadata(dir) {
     }
 }
 
+/**
+ * @param {any} metadata
+ * @param {any} staleMs
+ */
 function isWatcherLockStale(metadata, staleMs) {
     if (!metadata) return true;
     if (!pidAlive(Number(metadata.pid))) return true;
@@ -449,11 +526,18 @@ function isWatcherLockStale(metadata, staleMs) {
     return Number.isFinite(heartbeat) && Date.now() - heartbeat > staleMs;
 }
 
+/**
+ * @param {any} pid
+ */
 function pidAlive(pid) {
     if (!Number.isFinite(pid) || pid <= 0) return false;
-    try { process.kill(pid, 0); return true; } catch (err) { return err?.code === 'EPERM'; }
+    try { process.kill(pid, 0); return true; } catch (err) { return (/** @type {any} */ (err))?.code === 'EPERM'; }
 }
 
+/**
+ * @param {any} a
+ * @param {any} b
+ */
 function urlsEquivalentForWatch(a, b) {
     try {
         const ua = new URL(a);
@@ -466,11 +550,14 @@ function urlsEquivalentForWatch(a, b) {
     }
 }
 
+/**
+ * @param {any} value
+ */
 function scrubProfileLockEvidence(value) {
     if (!value || typeof value !== 'object') return value ?? null;
     const out = {};
     for (const key of ['pid', 'ownerPid', 'token', 'targetId', 'endpoint', 'wsEndpoint', 'createdAt', 'updatedAt', 'acquiredAt']) {
-        if (Object.prototype.hasOwnProperty.call(value, key)) out[key] = value[key];
+        if (Object.prototype.hasOwnProperty.call(value, key)) (/** @type {any} */ (out))[key] = (/** @type {any} */ (value))[key];
     }
     return out;
 }

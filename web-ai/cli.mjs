@@ -1,3 +1,9 @@
+// @ts-check
+/**
+ * @typedef {any} Deps
+ * @typedef {any} Input
+ * @typedef {any} Page
+ */
 import { parseArgs } from 'node:util';
 import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi } from './chatgpt.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
@@ -202,6 +208,10 @@ Examples:
   agbrowse web-ai watch --session "$SID" --interval 15s --poll-timeout 30 --navigate
 `;
 
+/**
+ * @param {any} argv
+ * @param {any} deps
+ */
 export async function runWebAiCli(argv = [], deps) {
     try {
         return await runWebAiCliInner(argv, deps);
@@ -220,11 +230,15 @@ export async function runWebAiCli(argv = [], deps) {
             }).catch(() => null);
         }
         emitCliError(wrapped, argv);
-        wrapped.alreadyReported = true;
+        (/** @type {any} */ (wrapped)).alreadyReported = true;
         throw wrapped;
     }
 }
 
+/**
+ * @param {any} err
+ * @param {any} argv
+ */
 function emitCliError(err, argv = []) {
     const forceJson = process.env.AGBROWSE_JSON_ERRORS === '1' || argv.includes('--json');
     if (forceJson) {
@@ -236,6 +250,10 @@ function emitCliError(err, argv = []) {
     if (err.retryHint) console.error(`[hint] retryHint: ${err.retryHint}`);
 }
 
+/**
+ * @param {any} argv
+ * @param {any} flag
+ */
 function readFlagValue(argv = [], flag) {
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
@@ -245,6 +263,10 @@ function readFlagValue(argv = [], flag) {
     return undefined;
 }
 
+/**
+ * @param {any} argv
+ * @param {any} deps
+ */
 async function runWebAiCliInner(argv = [], deps) {
     const command = argv[0];
     if (!command || command === '--help' || command === 'help') {
@@ -331,7 +353,7 @@ async function runWebAiCliInner(argv = [], deps) {
     });
 
     rejectFutureScope(values);
-    const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some(a => a.startsWith('--vendor='));
+    const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some((/** @type {any} */ a) => a.startsWith('--vendor='));
     const hasContextPackage = Boolean(values['context-file'] || (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0));
     if (['send', 'query'].includes(command) && !values['inline-only'] && !values.file && !hasContextPackage) {
         throw new WebAiError({
@@ -422,11 +444,11 @@ async function runWebAiCliInner(argv = [], deps) {
         : null;
     if (traceId) {
         result.traceId = traceId;
-        await writeCommandTrace(input.traceDir, {
+        await writeCommandTrace(/** @type {any} */ (input.traceDir), {
             traceId,
             command: `web-ai ${command}`,
             provider: input.vendor || result.vendor || 'chatgpt',
-            modelAlias: input.model,
+            modelAlias: /** @type {any} */ (input.model),
             sessionId: input.session || result.sessionId,
             url: result.url || input.url,
             status: result.status,
@@ -434,21 +456,21 @@ async function runWebAiCliInner(argv = [], deps) {
                 prompt: input.prompt,
                 answerText: result.answerText,
                 pageText: result.pageText,
-                sourceContext: input.contextPackageText,
+                sourceContext: /** @type {any} */ (input).contextPackageText,
             },
             steps: [{ type: 'command', status: result.ok === false ? 'fail' : 'ok' }],
         });
     }
     if (isContextCommand(command) && values.json) console.log(renderContextDryRunReport(result, {
         mode: 'json',
-        full: values.full || command === 'context-render',
+        full: /** @type {any} */ (values.full || command === 'context-render'),
         json: true,
-        includeComposerText: values.full || command === 'context-render',
+        includeComposerText: /** @type {any} */ (values.full || command === 'context-render'),
     }));
     else if (values.json) console.log(JSON.stringify(result, null, 2));
     else if (isContextCommand(command)) console.log(renderContextDryRunReport(result, {
-        mode: command === 'context-render' || values.full ? 'full' : (values['dry-run'] || 'summary'),
-        full: values.full || command === 'context-render',
+        mode: /** @type {any} */ (command === 'context-render' || values.full ? 'full' : (values['dry-run'] || 'summary')),
+        full: /** @type {any} */ (values.full || command === 'context-render'),
         json: false,
     }));
     else if (command === 'watch') printWatchHuman(result);
@@ -460,6 +482,11 @@ async function runWebAiCliInner(argv = [], deps) {
     return result;
 }
 
+/**
+ * @param {any} command
+ * @param {any} result
+ * @param {any} input
+ */
 export function applyRequiredSourceAudit(command, result = {}, input = {}) {
     if (input.requireSourceAudit !== true) return result;
     const answerText = result.answerText || result.answerArtifact?.text || result.answerArtifact?.markdown || '';
@@ -503,6 +530,9 @@ export function applyRequiredSourceAudit(command, result = {}, input = {}) {
     return result;
 }
 
+/**
+ * @param {any} value
+ */
 export function parseSourceAuditRatio(value) {
     if (value === undefined || value === null || value === '') return 1;
     const parsed = Number(value);
@@ -519,9 +549,13 @@ export function parseSourceAuditRatio(value) {
     return parsed;
 }
 
+/**
+ * @param {any} command
+ * @param {any} input
+ */
 async function enforceCliPolicy(command, input) {
     const mutating = ['send', 'query', 'stop'].includes(command);
-    const policyUrl = input.url || VENDOR_DEFAULT_URLS[input.vendor || 'chatgpt'];
+    const policyUrl = input.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[input.vendor || 'chatgpt'];
     const action = {
         url: policyUrl,
         upload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
@@ -535,6 +569,9 @@ async function enforceCliPolicy(command, input) {
     return loadAndEnforcePolicy(input, action);
 }
 
+/**
+ * @param {any} input
+ */
 async function runEvalCommand(input) {
     const result = await runWebAiEval({
         config: input.evalConfig,
@@ -558,6 +595,11 @@ async function runEvalCommand(input) {
     return result;
 }
 
+/**
+ * @param {any} command
+ * @param {any} input
+ * @param {any} values
+ */
 async function runContextCommand(command, input, values) {
     const result = values['context-transport'] === 'inline' || values['inline-only']
         ? await buildContextPackageResult(input)
@@ -574,13 +616,20 @@ async function runContextCommand(command, input, values) {
     };
 }
 
+/**
+ * @param {any} command
+ */
 function isContextCommand(command) {
     return command === 'context-dry-run' || command === 'context-render';
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
 async function ensureProviderTab(deps, input) {
     if (!input.newTab || input.reuseTab) return deps;
-    const vendorUrl = input.url || VENDOR_DEFAULT_URLS[input.vendor || 'chatgpt'];
+    const vendorUrl = input.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[input.vendor || 'chatgpt'];
     const port = deps.getPort?.() || 9222;
 
     await cleanupPoolTabs(port);
@@ -588,12 +637,12 @@ async function ensureProviderTab(deps, input) {
 
     if (input.forceNewTab !== true) {
         // Phase 9.2: try tab pool first
-        const pooled = await getPooledTab(port, input.vendor || 'chatgpt', {
+        const pooled = await getPooledTab(port, input.vendor || 'chatgpt', /** @type {any} */ ({
             owner: 'web-ai',
             sessionType: 'send-poll',
             url: vendorUrl,
-            port,
-        });
+            port: port,
+        }));
         if (pooled) {
             const page = await waitForPageByTargetId(port, pooled.targetId);
             return bindProviderPage(deps, page, pooled.targetId, vendorUrl);
@@ -616,10 +665,16 @@ async function ensureProviderTab(deps, input) {
             return page;
         },
         getTargetId: async () => tab.targetId,
-        getCdpSession: async () => page.context().newCDPSession(page),
+        getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
     };
 }
 
+/**
+ * @param {any} deps
+ * @param {any} page
+ * @param {any} targetId
+ * @param {any} vendorUrl
+ */
 function bindProviderPage(deps, page, targetId, vendorUrl) {
     return {
         ...deps,
@@ -628,7 +683,7 @@ function bindProviderPage(deps, page, targetId, vendorUrl) {
             return page;
         },
         getTargetId: async () => targetId,
-        getCdpSession: async () => page.context().newCDPSession(page),
+        getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
         prepareProviderPage: async () => {
             if (page.url() !== vendorUrl) {
                 await page.goto(vendorUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -637,6 +692,11 @@ function bindProviderPage(deps, page, targetId, vendorUrl) {
     };
 }
 
+/**
+ * @param {any} port
+ * @param {any} vendor
+ * @param {any} targetUrl
+ */
 async function findReusableProviderTab(port, vendor, targetUrl) {
     const origin = providerOrigin(vendor, targetUrl);
     if (!origin) return null;
@@ -655,6 +715,10 @@ async function findReusableProviderTab(port, vendor, targetUrl) {
         .sort((a, b) => (Number(b.lastActiveAt) || 0) - (Number(a.lastActiveAt) || 0))[0] || null;
 }
 
+/**
+ * @param {any} targetId
+ * @param {any} leaseByTargetId
+ */
 function isReusableByLease(targetId, leaseByTargetId) {
     const lease = leaseByTargetId.get(targetId);
     if (!lease) return true;
@@ -662,10 +726,17 @@ function isReusableByLease(targetId, leaseByTargetId) {
         ['pooled', 'completed-session'].includes(lease.state);
 }
 
+/**
+ * @param {any} vendor
+ * @param {any} fallbackUrl
+ */
 function providerOrigin(vendor, fallbackUrl = '') {
-    return providerOriginFromUrl(fallbackUrl || VENDOR_DEFAULT_URLS[vendor] || '');
+    return providerOriginFromUrl(fallbackUrl || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[vendor] || '');
 }
 
+/**
+ * @param {any} url
+ */
 function providerOriginFromUrl(url = '') {
     try {
         return new URL(url).origin;
@@ -674,6 +745,13 @@ function providerOriginFromUrl(url = '') {
     }
 }
 
+/**
+ * @param {any} command
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} pollFn
+ * @param {any} stopFn
+ */
 async function runBoundCommand(command, deps, input, pollFn, stopFn) {
     if (['poll', 'stop'].includes(command) && input.session) {
         return withSessionCommandLock(input.session, async () => {
@@ -682,7 +760,7 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
                     ...deps,
                     getPage: async () => page,
                     getTargetId: async () => targetId,
-                    getCdpSession: async () => page.context().newCDPSession(page),
+                    getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
                 };
                 return withWebAiActiveCommand(command, sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId }, async () => {
                     if (command === 'poll') return pollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
@@ -696,6 +774,11 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
     throw new Error(`runBoundCommand: unsupported command ${command}`);
 }
 
+/**
+ * @param {any} command
+ * @param {any} deps
+ * @param {any} input
+ */
 async function runBoundSendOrQuery(command, deps, input) {
     if (!['send', 'query'].includes(command) || !input.session) return null;
     return withSessionCommandLock(input.session, async () => {
@@ -704,7 +787,7 @@ async function runBoundSendOrQuery(command, deps, input) {
                 ...deps,
                 getPage: async () => page,
                 getTargetId: async () => targetId,
-                getCdpSession: async () => page.context().newCDPSession(page),
+                getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
             };
             const sessionInput = {
                 ...input,
@@ -730,6 +813,12 @@ async function runBoundSendOrQuery(command, deps, input) {
     });
 }
 
+/**
+ * @param {any} command
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} fn
+ */
 async function withWebAiActiveCommand(command, deps, input, fn) {
     const targetId = await deps.getTargetId?.().catch(() => null);
     if (!targetId) return fn();
@@ -746,6 +835,11 @@ async function withWebAiActiveCommand(command, deps, input, fn) {
     });
 }
 
+/**
+ * @param {any} command
+ * @param {any} deps
+ * @param {any} input
+ */
 async function runCommand(command, deps, input) {
     const boundSendOrQuery = await runBoundSendOrQuery(command, deps, input);
     if (boundSendOrQuery) return boundSendOrQuery;
@@ -788,12 +882,21 @@ async function runCommand(command, deps, input) {
     }
 }
 
+/**
+ * @param {any} command
+ * @param {any} argv
+ */
 export function commandNeedsHeadedBrowser(command, argv = []) {
     if (BROWSER_REQUIRED_COMMANDS.has(command)) return true;
     if (command !== 'sessions') return false;
     return BROWSER_REQUIRED_SESSION_COMMANDS.has(argv[1]);
 }
 
+/**
+ * @param {any} deps
+ * @param {any} command
+ * @param {any} argv
+ */
 export async function ensureHeadedBrowserForWebAi(deps = {}, command, argv = []) {
     if (!commandNeedsHeadedBrowser(command, argv)) {
         return { ok: true, status: 'skipped' };
@@ -838,6 +941,9 @@ export async function ensureHeadedBrowserForWebAi(deps = {}, command, argv = [])
     return { ok: true, status: 'ready', port };
 }
 
+/**
+ * @param {any} values
+ */
 function rejectFutureScope(values) {
     if (values.vendor && !['chatgpt', 'gemini', 'grok'].includes(values.vendor)) {
         throw new WebAiError({
@@ -881,6 +987,10 @@ function rejectFutureScope(values) {
     }
 }
 
+/**
+ * @param {any} vendor
+ * @param {any} model
+ */
 function isSupportedWebAiModel(vendor, model) {
     const key = String(model || '').trim().toLowerCase();
     const byVendor = {
@@ -888,9 +998,14 @@ function isSupportedWebAiModel(vendor, model) {
         gemini: new Set(['fast', 'flash', 'gemini-fast', 'thinking', 'think', 'gemini-thinking', 'pro', 'gemini-pro', '3.1-pro', 'deepthink', 'deep-think', 'deep_think', 'deep think', 'gemini-deepthink', 'gemini-deep-think']),
         grok: new Set(['auto', 'automatic', 'fast', 'quick', 'expert', 'thinking', 'think', 'grok-4.3', 'grok43', 'grok-43', 'beta', 'heavy']),
     };
-    return Boolean(byVendor[String(vendor || 'chatgpt')]?.has(key));
+    return Boolean((/** @type {any} */ (byVendor))[String(vendor || 'chatgpt')]?.has(key));
 }
 
+/**
+ * @param {any} vendor
+ * @param {any} model
+ * @param {any} effort
+ */
 function isSupportedWebAiEffort(vendor, model, effort) {
     if (String(vendor || 'chatgpt') !== 'chatgpt') return false;
     const effortKey = String(effort || '').trim().toLowerCase();
@@ -921,6 +1036,9 @@ function isSupportedWebAiEffort(vendor, model, effort) {
     return false;
 }
 
+/**
+ * @param {any} vendor
+ */
 function webAiVendorLabel(vendor) {
     const key = String(vendor || 'chatgpt');
     if (key === 'chatgpt') return 'ChatGPT';
@@ -929,6 +1047,10 @@ function webAiVendorLabel(vendor) {
     return key;
 }
 
+/**
+ * @param {any} deps
+ * @param {any} options
+ */
 async function runDoctorWithChurn(deps, options) {
     const report = await runDoctor(deps, options);
     const churnRecords = maybeRecordChurn(report);
@@ -938,10 +1060,13 @@ async function runDoctorWithChurn(deps, options) {
     return report;
 }
 
+/**
+ * @param {any} report
+ */
 function printDoctorHuman(report) {
-    const worst = report.features.reduce((w, f) => {
+    const worst = report.features.reduce((/** @type {any} */ w, /** @type {any} */ f) => {
         const rank = { fail: 3, warn: 2, ok: 1, unknown: 0 };
-        return (rank[f.state] || 0) > (rank[w] || 0) ? f.state : w;
+        return ((/** @type {any} */ (rank))[f.state] || 0) > ((/** @type {any} */ (rank))[w] || 0) ? f.state : w;
     }, 'ok');
     console.log(`doctor ${report.vendor}  worst=${worst}  ${report.url}`);
     console.log(`captured: ${report.capturedAt}`);
@@ -966,6 +1091,11 @@ function printDoctorHuman(report) {
     }
 }
 
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} values
+ */
 async function runSnapshotCommand(deps, input, values) {
     const page = await deps.getPage();
     return buildWebAiSnapshot(page, {
@@ -977,15 +1107,24 @@ async function runSnapshotCommand(deps, input, values) {
     });
 }
 
+/**
+ * @param {any} result
+ */
 function printWatchHuman(result) {
     if (!result || result.eventsPrinted) return;
     console.log(`watch ${result.sessionId}: ${result.status}`);
 }
 
+/**
+ * @param {any} result
+ */
 function printSnapshotHuman(result) {
     console.log(result.text);
 }
 
+/**
+ * @param {any} result
+ */
 function printEvalHuman(result) {
     console.log(`web-ai eval ${result.status}: ${result.summary.passCount}/${result.summary.total} fixtures passed`);
     for (const regression of result.regressions || []) {
@@ -993,6 +1132,10 @@ function printEvalHuman(result) {
     }
 }
 
+/**
+ * @param {any} command
+ * @param {any} result
+ */
 function printHuman(command, result) {
     if (command === 'render') {
         console.log(result.rendered.composerText);
