@@ -9,7 +9,7 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('Provider:');
         expect(result.stdout).toContain('--context-from-files');
         expect(result.stdout).toContain('--effort <alias>');
-        expect(result.stdout).toContain('Requires --model');
+        expect(result.stdout).toContain('default for chatgpt: pro');
         expect(result.stdout).toContain('Tab lease policy:');
         expect(result.stdout).toContain('leaseClosedTabs');
         expect(result.stdout).toContain('mcp-server');
@@ -69,6 +69,16 @@ describe('web-ai CLI contract', () => {
         expect(result.stderr).not.toContain('--inline-only');
     });
 
+    it('defaults --model to pro for chatgpt when omitted', async () => {
+        const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello']);
+        expect(result.code).toBe(0);
+        // No model error and renders successfully (model selection happens at browser-mutation time, not in render).
+        expect(result.stderr).not.toContain('unsupported');
+        const effortDefault = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
+        expect(effortDefault.code).toBe(0);
+        expect(effortDefault.stderr).not.toContain('requires --model');
+    });
+
     it('rejects unsupported ChatGPT model choices', async () => {
         const result = await execBrowser(['web-ai', 'query', '--vendor', 'chatgpt', '--inline-only', '--prompt', 'hello', '--model', 'deepthink']);
         expect(result.code).not.toBe(0);
@@ -85,8 +95,9 @@ describe('web-ai CLI contract', () => {
         expect(thinking.stderr).not.toContain('unsupported ChatGPT reasoning effort');
 
         const effortOnly = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
-        expect(effortOnly.code).not.toBe(0);
-        expect(effortOnly.stderr).toContain('reasoning effort requires --model');
+        // ChatGPT now defaults --model to 'pro' when omitted, so --effort alone is accepted.
+        expect(effortOnly.code).toBe(0);
+        expect(effortOnly.stderr).not.toContain('reasoning effort requires --model');
 
         const proHeavy = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--model', 'pro', '--effort', 'heavy']);
         expect(proHeavy.code).not.toBe(0);

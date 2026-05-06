@@ -70,12 +70,14 @@ Provider:
   --vendor <name>     chatgpt | gemini | grok (default: chatgpt)
   --url <url>         Navigate or verify the provider URL before mutation
   --model <alias>     Provider model alias; aliases below
-                        ChatGPT: instant, thinking, pro
+                        ChatGPT: instant, thinking, pro  (default for chatgpt: pro)
                         Gemini  models: fast, thinking, pro
                         Gemini  tool:   deepthink
                         Grok:   auto, fast, expert, thinking, heavy
-  --effort <alias>    ChatGPT reasoning effort. Requires --model because
-                      Pro and Thinking expose different effort menus.
+  --effort <alias>    ChatGPT reasoning effort. The reasoning-effort menu is
+                      ONLY touched when this flag is provided; otherwise the
+                      currently-checked effort in the browser is left as-is.
+                      Requires a model because Pro and Thinking expose different menus.
                         Pro: standard, extended
                         Thinking: light, standard, extended, heavy
   --reasoning-effort <alias>
@@ -352,6 +354,7 @@ async function runWebAiCliInner(argv = [], deps) {
         strict: false,
     });
 
+    applyVendorDefaults(values, command);
     rejectFutureScope(values);
     const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some((/** @type {any} */ a) => a.startsWith('--vendor='));
     const hasContextPackage = Boolean(values['context-file'] || (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0));
@@ -939,6 +942,24 @@ export async function ensureHeadedBrowserForWebAi(deps = {}, command, argv = [])
         });
     }
     return { ok: true, status: 'ready', port };
+}
+
+/**
+ * Apply implicit defaults so the most common workflows do not require flags.
+ * Currently: when targeting ChatGPT without --model, we pre-select Pro via DOM.
+ * The reasoning-effort menu is intentionally NOT defaulted — it remains untouched
+ * unless the user explicitly passes --effort/--reasoning-effort.
+ *
+ * @param {any} values
+ * @param {string} command
+ */
+function applyVendorDefaults(values, command) {
+    const commandsThatSelectModel = new Set(['send', 'query', 'render', 'context-render', 'context-dry-run']);
+    if (!commandsThatSelectModel.has(command)) return;
+    const vendor = values.vendor || 'chatgpt';
+    if (vendor === 'chatgpt' && !values.model) {
+        values.model = 'pro';
+    }
 }
 
 /**
