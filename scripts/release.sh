@@ -65,6 +65,9 @@ npm run test:eval-fixtures
 npm run eval:web-ai:fixtures
 npm run benchmark:trajectory -- --help >/dev/null
 
+echo "Running release gates (gate:all)..."
+npm run gate:all
+
 echo "Checking diff whitespace..."
 git diff --check
 

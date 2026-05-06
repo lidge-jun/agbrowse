@@ -22,6 +22,7 @@ aliases: [agbrowse 구조 허브, agbrowse source of truth, agbrowse architectur
 | [commands.md](commands.md) | `agbrowse` root CLI와 `web-ai` command surface | `skills/browser/browser.mjs`, `web-ai/cli.mjs` |
 | [runtime_contracts.md](runtime_contracts.md) | sessions, tabs, provider, policy, trace, MCP, eval runtime 계약 | `web-ai/`, `skills/browser/`, `devlog/13_phase12_trace_replay.md` 이후 |
 | [release_gates.md](release_gates.md) | ready/beta/experimental 라벨과 release 전 검증 | `package.json`, `scripts/release.sh`, `.github/workflows/release.yml` |
+| [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md) | Phase 22 capability/cli-jaw mirror truth table (single source of truth) | `web-ai/`, `cli-jaw/structure/CAPABILITY_TRUTH_TABLE.md` |
 | [phase_status.md](phase_status.md) | Phase 11+ 구현/미러/claim 상태 truth table | `devlog/00_index.md`, `web-ai/`, `cli-jaw` mirror |
 | [check-doc-drift.sh](check-doc-drift.sh) | 구조 문서의 최소 drift 검사 | `package.json`, `README.md`, `structure/*.md` |
 | [verify-counts.sh](verify-counts.sh) | `str_func.md`의 파일 수/라인 수 스냅샷 검증 | `structure/str_func.md`, live source tree |

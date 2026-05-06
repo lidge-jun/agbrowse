@@ -18,6 +18,7 @@ import {
     GROK_COPY_SELECTORS,
 } from './copy-markdown.mjs';
 import { allToolSchemas, isKnownMcpTool } from './tool-schema.mjs';
+import { isKnownBrowserTool, validateBrowserToolInput } from './browser-tool-schema.mjs';
 import { enforcePolicy } from './policy/enforce.mjs';
 import { withActiveCommand } from './active-command-store.mjs';
 import { requireLatestSnapshot, setLatestSnapshot } from './mcp-state.mjs';
@@ -117,6 +118,7 @@ function copySelectorsForProvider(provider) {
  */
 async function callMcpTool(name, args, deps, state) {
     if (!isKnownMcpTool(name)) throw new Error(`unknown tool: ${name}`);
+    if (isKnownBrowserTool(name)) validateBrowserToolInput(name, args || {});
     const policy = normalizeMcpPolicy(args.policy === undefined ? {} : args.policy);
     if (name === 'browser_snapshot') {
         const page = await deps.getPage();

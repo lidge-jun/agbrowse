@@ -63,6 +63,9 @@ jobs:
           npm run eval:web-ai:fixtures
           npm run benchmark:trajectory -- --help
 
+      - name: Release gates (gate:all)
+        run: npm run gate:all
+
       - name: Git diff whitespace check
         run: git diff --check
 
