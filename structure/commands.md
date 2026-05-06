@@ -104,7 +104,23 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 | `web_ai_doctor` | provider diagnostics와 repair packet 반환 |
 | `web_ai_session_resume` | stored session poll resume |
 
+## MCP-ready vs CLI-ready Matrix (G04)
+
+`browser_*` MCP tools 외의 기능은 항상 CLI를 통해 노출된다. MCP에서는 의도적으로 좁힌 surface만 등록한다. 등록되지 않은 tool은 `tools/call` 시 deterministic `capability.unsupported` envelope를 반환하므로 probe-safe하다. 자세한 deferral 사유는 [`structure/mcp_scope.md`](mcp_scope.md) 참고.
+
+| Capability | MCP | CLI | Notes |
+| --- | --- | --- | --- |
+| Snapshot active tab | `browser_snapshot` ✅ | `agbrowse snapshot --interactive` ✅ | parity |
+| Click snapshot ref | `browser_click_ref` ✅ | `agbrowse click <ref>` ✅ | parity |
+| Type into ref | ❌ deferred | `agbrowse type <ref> --text "..."` ✅ | MCP planned, CLI today |
+| Navigate URL | ❌ deferred | `agbrowse navigate <url>` ✅ | MCP duplicate adds attack surface; defer |
+| History back/forward/reload | ❌ deferred | `agbrowse back` / `forward` / `reload` ✅ | CLI today |
+| Wait for ref/text | ❌ deferred | `agbrowse wait-for <ref-or-text>` ✅ | MCP wait policy not finalized |
+| Screenshot | ❌ deferred | `agbrowse screenshot --out <path>` ✅ | MCP planned with policy gating |
+| Extract visible text | ❌ deferred | covered by `browser_snapshot` interactive output | use snapshot ref text |
+
 ## 변경 기록
 
+- 2026-05-06: G04 — MCP-ready vs CLI-ready matrix와 deferred-tool envelope 동작을 commands.md에 명시했다 (`structure/mcp_scope.md` 결정 기록과 `gate:mcp-deferred-metadata` 게이트 동기).
 - 2026-05-06: Phase 9.1 multi-tab의 `new-tab`, `tab-close` 명령을 root command 표에 추가해 README와 일치시켰다.
 - 2026-05-05: root CLI, web-ai, MCP tool, provider alias, failure envelope, drift 검사 기준을 source-of-truth 문서로 추가했다.

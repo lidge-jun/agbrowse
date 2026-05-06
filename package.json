@@ -57,6 +57,7 @@
     "gate:mcp-scope-frozen": "node scripts/release-gates.mjs mcp-scope-frozen",
     "gate:no-experimental-in-readme-ready-section": "node scripts/release-gates.mjs no-experimental-in-readme-ready-section",
     "gate:no-cloud-claims": "node scripts/release-gates.mjs no-cloud-claims",
+    "gate:mcp-deferred-metadata": "node scripts/release-gates.mjs mcp-deferred-metadata",
     "gate:all": "node scripts/release-gates.mjs",
     "benchmark:trajectory": "node benchmarks/agbrowse/run-task.mjs",
     "release": "bash scripts/release.sh",

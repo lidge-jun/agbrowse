@@ -56,16 +56,86 @@ export const BROWSER_TOOLS = {
 
 export const FROZEN_BROWSER_TOOL_NAMES = Object.freeze(Object.keys(BROWSER_TOOLS));
 
-export const NOT_IMPLEMENTED_BROWSER_TOOLS = Object.freeze({
-    browser_type_ref: 'planned: type into a snapshot ref',
-    browser_navigate: 'planned: navigate the active tab to a URL',
-    browser_back: 'planned: navigate back in history',
-    browser_forward: 'planned: navigate forward in history',
-    browser_reload: 'planned: reload the active tab',
-    browser_wait_for: 'planned: wait for a snapshot ref or condition',
-    browser_screenshot: 'planned: capture a screenshot of the active tab',
-    browser_extract_text: 'planned: extract visible text from a snapshot ref',
+/**
+ * Structured metadata for every browser MCP tool that we deliberately do NOT
+ * register today. Each entry must carry:
+ *   - reason: why agbrowse is not exposing this via MCP yet
+ *   - cliEquivalent: the agbrowse CLI command that already covers the use-case
+ *   - competitorRef: a reference comparison (e.g., Playwright MCP tool name)
+ *   - since: phase when the deferral was recorded
+ *
+ * `gate:mcp-deferred-metadata` enforces that every key has all four fields.
+ */
+export const DEFERRED_BROWSER_TOOLS = Object.freeze({
+    browser_type_ref: Object.freeze({
+        reason: 'planned: type into a snapshot ref (input validation surface still hardening)',
+        cliEquivalent: 'agbrowse type <ref> --text "..."',
+        competitorRef: 'playwright-mcp:browser_type',
+        since: 'phase22',
+    }),
+    browser_navigate: Object.freeze({
+        reason: 'planned: navigate the active tab to a URL via MCP (CLI already covers this)',
+        cliEquivalent: 'agbrowse navigate <url>',
+        competitorRef: 'playwright-mcp:browser_navigate',
+        since: 'phase22',
+    }),
+    browser_back: Object.freeze({
+        reason: 'planned: navigate back in history',
+        cliEquivalent: 'agbrowse back',
+        competitorRef: 'playwright-mcp:browser_navigate_back',
+        since: 'phase22',
+    }),
+    browser_forward: Object.freeze({
+        reason: 'planned: navigate forward in history',
+        cliEquivalent: 'agbrowse forward',
+        competitorRef: 'playwright-mcp:browser_navigate_forward',
+        since: 'phase22',
+    }),
+    browser_reload: Object.freeze({
+        reason: 'planned: reload the active tab',
+        cliEquivalent: 'agbrowse reload',
+        competitorRef: 'playwright-mcp:browser_navigate (reload)',
+        since: 'phase22',
+    }),
+    browser_wait_for: Object.freeze({
+        reason: 'planned: wait for a snapshot ref or condition',
+        cliEquivalent: 'agbrowse wait-for <ref-or-text>',
+        competitorRef: 'playwright-mcp:browser_wait_for',
+        since: 'phase22',
+    }),
+    browser_screenshot: Object.freeze({
+        reason: 'planned: capture screenshot via MCP (CLI already exposes this)',
+        cliEquivalent: 'agbrowse screenshot --out <path>',
+        competitorRef: 'playwright-mcp:browser_take_screenshot',
+        since: 'phase22',
+    }),
+    browser_extract_text: Object.freeze({
+        reason: 'planned: extract visible text from a snapshot ref',
+        cliEquivalent: 'agbrowse snapshot --interactive (returns ref text)',
+        competitorRef: 'playwright-mcp:browser_extract_text (planned)',
+        since: 'phase22',
+    }),
 });
+
+/**
+ * Legacy alias kept for back-compat with Phase 22 tests. Maps tool name → reason
+ * string only; new code should use `DEFERRED_BROWSER_TOOLS` for full metadata.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const NOT_IMPLEMENTED_BROWSER_TOOLS = Object.freeze(
+    Object.fromEntries(
+        Object.entries(DEFERRED_BROWSER_TOOLS).map(([name, meta]) => [name, meta.reason]),
+    ),
+);
+
+/**
+ * @param {string} toolName
+ * @returns {{ reason: string, cliEquivalent: string, competitorRef: string, since: string } | null}
+ */
+export function getDeferredBrowserToolMetadata(toolName) {
+    const meta = /** @type {any} */ (DEFERRED_BROWSER_TOOLS)[toolName];
+    return meta || null;
+}
 
 /**
  * @typedef {Error & { code?: string }} BrowserToolError

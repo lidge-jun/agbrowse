@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { auditClaims, formatClaimAuditReport } from '../web-ai/claim-audit.mjs';
+import { DEFERRED_BROWSER_TOOLS, BROWSER_TOOLS } from '../web-ai/browser-tool-schema.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -150,6 +151,41 @@ const GATES = {
             const report = auditClaims({ repoRoot });
             const detail = formatClaimAuditReport(report);
             return { ok: report.ok, detail };
+        },
+    },
+    'mcp-deferred-metadata': {
+        description: 'every deferred browser MCP tool has reason+cliEquivalent+competitorRef+since (G04)',
+        check() {
+            const required = ['reason', 'cliEquivalent', 'competitorRef', 'since'];
+            const offending = [];
+            const names = Object.keys(DEFERRED_BROWSER_TOOLS);
+            if (names.length === 0) {
+                return { ok: false, detail: 'DEFERRED_BROWSER_TOOLS is empty — at least one entry required while MCP scope is frozen' };
+            }
+            for (const name of names) {
+                const meta = DEFERRED_BROWSER_TOOLS[name];
+                if (!meta || typeof meta !== 'object') {
+                    offending.push(`${name}: not an object`);
+                    continue;
+                }
+                for (const key of required) {
+                    const val = /** @type {any} */ (meta)[key];
+                    if (typeof val !== 'string' || val.trim().length === 0) {
+                        offending.push(`${name}.${key} missing or empty`);
+                    }
+                }
+                if (Object.prototype.hasOwnProperty.call(BROWSER_TOOLS, name)) {
+                    offending.push(`${name}: appears in both BROWSER_TOOLS and DEFERRED_BROWSER_TOOLS`);
+                }
+            }
+            const scopeRecord = path.join(repoRoot, 'structure/mcp_scope.md');
+            if (!fs.existsSync(scopeRecord)) {
+                offending.push('structure/mcp_scope.md is missing — required decision record for G04');
+            }
+            if (offending.length > 0) {
+                return { ok: false, detail: `mcp-deferred-metadata violations:\n  - ${offending.join('\n  - ')}` };
+            }
+            return { ok: true, detail: `${names.length} deferred browser tool(s) carry full metadata; structure/mcp_scope.md present` };
         },
     },
 };
