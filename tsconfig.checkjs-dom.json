@@ -27,7 +27,8 @@
     "web-ai/cli-sessions.mjs",
     "web-ai/mcp-server.mjs",
     "web-ai/watcher.mjs",
-    "web-ai/cli.mjs"
+    "web-ai/cli.mjs",
+    "skills/browser/browser.mjs"
   ],
   "exclude": [
     "node_modules",
