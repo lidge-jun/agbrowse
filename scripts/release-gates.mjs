@@ -322,6 +322,37 @@ const GATES = {
             }
         },
     },
+    'action-memory-safe-replay': {
+        description: 'action-memory cache returns hit only when DOM signature matches (G07)',
+        async check() {
+            try {
+                const mod = await import('../web-ai/action-memory.mjs');
+                if (typeof mod.createActionMemory !== 'function') {
+                    return { ok: false, detail: 'web-ai/action-memory.mjs missing createActionMemory' };
+                }
+                if (mod.ACTION_MEMORY_SCHEMA_VERSION !== 'action-memory-v1') {
+                    return { ok: false, detail: `unexpected schema: ${mod.ACTION_MEMORY_SCHEMA_VERSION}` };
+                }
+                const m = mod.createActionMemory();
+                m.put({
+                    origin: 'https://x.test', intentId: 'send.click', signature: 'sig-A',
+                    ref: '@e3', hits: 0, validations: { ok: 0, fail: 0 }, lastGoodAt: '',
+                });
+                const hit = m.get('https://x.test', 'send.click', 'sig-A');
+                if (!hit || hit.ref !== '@e3') return { ok: false, detail: 'exact-signature lookup missed' };
+                const drift = m.get('https://x.test', 'send.click', 'sig-B');
+                if (drift !== null) return { ok: false, detail: 'signature drift returned a hit (unsafe replay)' };
+                const validated = mod.validateMemoryHit(hit, 'sig-B');
+                if (validated !== null) return { ok: false, detail: 'validateMemoryHit allowed signature drift' };
+                m.recordReplay('https://x.test', 'send.click', 'sig-A', 'ok');
+                m.clear();
+                if (m.size() !== 0) return { ok: false, detail: 'clear() did not empty the cache' };
+                return { ok: true, detail: 'action-memory: hit-on-match, miss-on-drift, clear OK' };
+            } catch (err) {
+                return { ok: false, detail: `action-memory-safe-replay gate threw: ${(err && err.message) || err}` };
+            }
+        },
+    },
 };
 
 function printResult(name, result) {

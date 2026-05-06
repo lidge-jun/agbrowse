@@ -62,6 +62,7 @@
     "gate:observation-bundle-fixtures": "node scripts/release-gates.mjs observation-bundle-fixtures",
     "gate:browser-primitives-complete": "node scripts/release-gates.mjs browser-primitives-complete",
     "gate:trace-browser-actions": "node scripts/release-gates.mjs trace-browser-actions",
+    "gate:action-memory-safe-replay": "node scripts/release-gates.mjs action-memory-safe-replay",
     "gate:all": "node scripts/release-gates.mjs",
     "benchmark:trajectory": "node benchmarks/agbrowse/run-task.mjs",
     "release": "bash scripts/release.sh",

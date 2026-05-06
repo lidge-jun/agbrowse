@@ -2215,6 +2215,43 @@ try {
             else console.log(`uploaded ${uFiles.length} file(s) to ${uRef}`);
             break;
         }
+        case 'action-memory': {
+            // EXPERIMENTAL: persistent action cache. Off by default at the
+            // resolver level; this CLI surface only inspects/clears the store.
+            const sub = process.argv[3];
+            const json = process.argv.includes('--json');
+            const memPath = join(DATA_DIR, 'action-memory.json');
+            const { createActionMemory } = await import('../../web-ai/action-memory.mjs');
+            /** @type {any} */
+            let initial;
+            try {
+                if (existsSync(memPath)) initial = JSON.parse(readFileSync(memPath, 'utf8'));
+            } catch { initial = undefined; }
+            const mem = createActionMemory(initial ? { initial } : undefined);
+            if (!sub || sub === 'list') {
+                const origin = process.argv.includes('--origin')
+                    ? process.argv[process.argv.indexOf('--origin') + 1]
+                    : undefined;
+                const entries = mem.list(origin);
+                if (json) console.log(JSON.stringify({ count: entries.length, entries }, null, 2));
+                else {
+                    console.log(`action-memory: ${entries.length} entry(ies)${origin ? ` for origin=${origin}` : ''}`);
+                    for (const e of entries) {
+                        console.log(`  ${e.origin} :: ${e.intentId} :: sig=${e.signature.slice(0, 8)} ref=${e.ref} hits=${e.hits} ok/fail=${e.validations.ok}/${e.validations.fail}`);
+                    }
+                    if (entries.length === 0) console.log('  (empty — experimental cache; not yet wired into resolver)');
+                }
+            } else if (sub === 'clear') {
+                mem.clear();
+                try { writeFileSync(memPath, JSON.stringify(mem.snapshot(), null, 2)); } catch {}
+                if (json) console.log(JSON.stringify({ ok: true, cleared: true }));
+                else console.log('action-memory: cleared');
+            } else {
+                console.error('Usage: browser.mjs action-memory [list|clear] [--origin <url>] [--json]');
+                process.exit(1);
+            }
+            break;
+        }
         case 'reset': {
             const force = process.argv.includes('--force');
             if (!force) {
