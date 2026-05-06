@@ -39,6 +39,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | `stop` | Yes | active provider tab에 Escape 전송 |
 | `watch` | Yes | persisted session을 terminal 상태까지 감시 |
 | `snapshot` | Yes | active provider tab의 compact accessibility snapshot 출력 |
+| `observe-bundle` | Yes | URL/title/viewport/DPR/refs/boxes/screenshot/text를 묶은 ObservationBundleV1 출력 (G06) |
 | `observe-actions` | Yes | snapshot을 캡처해 instruction-aware ActionCandidate 랭킹 반환 (G02) |
 | `sessions list` | No | persisted session 목록 |
 | `sessions show` | No | session 상세 |
@@ -120,6 +121,30 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 | Screenshot | ❌ deferred | `agbrowse screenshot --out <path>` ✅ | MCP planned with policy gating |
 | Extract visible text | ❌ deferred | covered by `browser_snapshot` interactive output | use snapshot ref text |
 
+## ObservationBundleV1 Schema (G06)
+
+`agbrowse observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]`은 한 번의 호출로 URL, title, viewport, DPR, snapshot refs, optional bounding boxes, optional screenshot path, body innerText 요약을 단일 record로 묶는다. Vercel agent-browser/Playwright MCP `browser_observe`/VisualWebArena 류 multimodal 벤치가 요구하는 reproducible observation step을 만족시킨다.
+
+```json
+{
+  "schemaVersion": "observation-bundle-v1",
+  "url": "https://example.com/",
+  "title": "Example",
+  "viewport": { "width": 1280, "height": 800 },
+  "dpr": 2,
+  "capturedAt": "2026-05-06T13:00:00.000Z",
+  "refs": [
+    { "ref": "@e1", "role": "button", "name": "Sign in", "depth": 2,
+      "box": { "x": 100, "y": 400, "width": 80, "height": 32 } }
+  ],
+  "screenshot": "/tmp/screenshot.png",
+  "textSummary": "Sign in to Example...",
+  "stats": { "refCount": 1, "boxCount": 1, "textChars": 23, "hasScreenshot": true }
+}
+```
+
+`screenshot`/`boxes`는 명시적 flag로만 캡처되어 token/IO 비용을 통제한다. Box 캡처 실패는 best-effort로 swallowed된다 (해당 ref만 `box` 필드 없음). `textSummary`는 기본 2000자, `--max-text-chars`로 조정 가능. Pure builder는 `web-ai/observation-bundle.mjs`이며 이미 캡처된 입력만 받기 때문에 오프라인 fixture 테스트가 가능하다 (`gate:observation-bundle-fixtures`).
+
 ## ActionCandidate Schema (G02)
 
 `agbrowse observe-actions <instruction> [--json] [--top-n N] [--include-disabled]`은 현재 active tab의 snapshot을 캡처하고 instruction과의 token overlap·role bucket·risk heuristic을 합쳐 ranked `ActionCandidate[]`를 반환한다. 외부 Vercel agent-browser/Browserbase의 `observeActions` 류 API와 같은 위치를 차지한다.
@@ -149,6 +174,7 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 
 ## 변경 기록
 
+- 2026-05-06: G06 — `agbrowse observe-bundle`과 ObservationBundleV1 스키마를 추가했다. URL/title/viewport/DPR/refs/boxes/screenshot/text를 한 번에 묶어 multimodal benchmark step 재현성을 확보한다 (`gate:observation-bundle-fixtures`).
 - 2026-05-06: G02 — `agbrowse observe-actions <instruction>` CLI 추가. Pure `buildObserveActions(snapshot, instruction, opts)` API가 ranked `ActionCandidate[]`를 반환한다 (`gate:observe-actions-fixtures`).
 - 2026-05-06: G04 — MCP-ready vs CLI-ready matrix와 deferred-tool envelope 동작을 commands.md에 명시했다 (`structure/mcp_scope.md` 결정 기록과 `gate:mcp-deferred-metadata` 게이트 동기).
 - 2026-05-06: Phase 9.1 multi-tab의 `new-tab`, `tab-close` 명령을 root command 표에 추가해 README와 일치시켰다.

@@ -12,6 +12,7 @@
  *   stop                             Stop Chrome
  *   status                           Connection status
  *   snapshot [--interactive] [--max-nodes N]  Accessibility tree with ref IDs
+ *   observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]  ObservationBundleV1 (G06)
  *   observe-actions <instruction> [--json] [--top-n N] [--include-disabled]  Rank candidate next actions (G02)
  *   screenshot [--full-page] [--ref eN] [--json]  Capture screenshot
  *   mouse-click <x> <y> [--double]  Click at pixel coordinates
@@ -1675,6 +1676,82 @@ try {
                 const val = (/** @type {any} */ (n)).value ? ` = "${(/** @type {any} */ (n)).value}"` : '';
                 console.log(`${n.ref.padEnd(4)} ${indent}${n.role.padEnd(10)} "${n.name}"${val}`);
             }
+            break;
+        }
+        case 'observe-bundle': {
+            const { values } = parseArgs({
+                args: process.argv.slice(3),
+                options: {
+                    json: { type: 'boolean', default: false },
+                    screenshot: { type: 'boolean', default: false },
+                    boxes: { type: 'boolean', default: false },
+                    'max-text-chars': { type: 'string' },
+                    'max-nodes': { type: 'string' },
+                },
+                strict: false,
+            });
+            const maxNodes = values['max-nodes'] ? parseInt(/** @type {string} */ (values['max-nodes'])) : undefined;
+            const maxTextChars = values['max-text-chars'] ? parseInt(/** @type {string} */ (values['max-text-chars'])) : undefined;
+            const page = await getReadyPage(getPort());
+            const url = page.url();
+            let title = '';
+            try { title = await page.title(); } catch { /* best-effort */ }
+            const viewport = page.viewportSize() || { width: 0, height: 0 };
+            let dpr = 1;
+            try { dpr = await page.evaluate(() => window.devicePixelRatio || 1); } catch { /* best-effort */ }
+            const nodes = await snapshot(getPort(), { interactive: true, maxNodes, persist: true });
+            let screenshotPath = null;
+            if (values.screenshot) {
+                try {
+                    const r = await screenshotAction(getPort(), {});
+                    screenshotPath = r.path;
+                } catch (err) {
+                    console.error(`observe-bundle: screenshot failed: ${(err && /** @type {any} */ (err).message) || err}`);
+                }
+            }
+            /** @type {Record<string,{x:number,y:number,width:number,height:number}>} */
+            const boxes = {};
+            if (values.boxes) {
+                try {
+                    const cdp = await getCdpSession(getPort());
+                    for (const n of nodes) {
+                        if (!n.ref || n.ref === '...' || !n.ref.startsWith('@')) continue;
+                        try {
+                            const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+                            const sel = `[aria-label="${(n.name || '').replace(/"/g, '\\"')}"]`;
+                            if (!sel || sel === '[aria-label=""]') continue;
+                            const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: sel });
+                            if (!nodeId) continue;
+                            const { model } = await cdp.send('DOM.getBoxModel', { nodeId });
+                            if (model && Array.isArray(model.content) && model.content.length >= 8) {
+                                const c = model.content;
+                                boxes[n.ref] = { x: Math.round(c[0]), y: Math.round(c[1]), width: Math.round(model.width), height: Math.round(model.height) };
+                            }
+                        } catch { /* best-effort per-node */ }
+                    }
+                    await cdp.detach().catch(() => { });
+                } catch (err) {
+                    console.error(`observe-bundle: box-model capture failed: ${(err && /** @type {any} */ (err).message) || err}`);
+                }
+            }
+            let textSummary = '';
+            try {
+                textSummary = await page.evaluate(() => (document.body && document.body.innerText) || '');
+            } catch { /* best-effort */ }
+            const { buildObservationBundle, formatObservationBundle } = await import('../../web-ai/observation-bundle.mjs');
+            const bundle = buildObservationBundle({
+                url,
+                title,
+                viewport,
+                dpr,
+                snapshotNodes: nodes,
+                boxes,
+                screenshotPath,
+                textSummary,
+                maxTextChars,
+            });
+            if (values.json) console.log(JSON.stringify(bundle, null, 2));
+            else console.log(formatObservationBundle(bundle));
             break;
         }
         case 'observe-actions': {

@@ -225,6 +225,49 @@ const GATES = {
             }
         },
     },
+    'observation-bundle-fixtures': {
+        description: 'observation-bundle module emits ObservationBundleV1 from a fixture (G06)',
+        async check() {
+            try {
+                const mod = await import('../web-ai/observation-bundle.mjs');
+                if (typeof mod.buildObservationBundle !== 'function' || typeof mod.formatObservationBundle !== 'function') {
+                    return { ok: false, detail: 'web-ai/observation-bundle.mjs missing required exports' };
+                }
+                if (mod.OBSERVATION_BUNDLE_SCHEMA_VERSION !== 'observation-bundle-v1') {
+                    return { ok: false, detail: `unexpected schema version: ${mod.OBSERVATION_BUNDLE_SCHEMA_VERSION}` };
+                }
+                const bundle = mod.buildObservationBundle({
+                    url: 'https://example.com/',
+                    title: 'Fixture',
+                    viewport: { width: 1280, height: 800 },
+                    dpr: 2,
+                    snapshotNodes: [
+                        { ref: '@e1', role: 'button', name: 'Go', depth: 1 },
+                        { ref: '...', role: 'note', name: 'truncated' },
+                    ],
+                    boxes: { '@e1': { x: 0, y: 0, width: 100, height: 30 } },
+                    screenshotPath: '/tmp/x.png',
+                    textSummary: 'hello',
+                });
+                if (bundle.schemaVersion !== 'observation-bundle-v1') {
+                    return { ok: false, detail: 'fixture bundle has wrong schemaVersion' };
+                }
+                if (bundle.stats.refCount !== 1 || bundle.stats.boxCount !== 1 || !bundle.stats.hasScreenshot) {
+                    return { ok: false, detail: `fixture bundle stats wrong: ${JSON.stringify(bundle.stats)}` };
+                }
+                if (!bundle.refs[0].box || bundle.refs[0].box.width !== 100) {
+                    return { ok: false, detail: 'fixture bundle ref missing box' };
+                }
+                const text = mod.formatObservationBundle(bundle);
+                if (!text.includes('observation-bundle-v1')) {
+                    return { ok: false, detail: 'formatObservationBundle output missing schema label' };
+                }
+                return { ok: true, detail: `observation-bundle fixture: refs=${bundle.stats.refCount} boxes=${bundle.stats.boxCount} text=${bundle.stats.textChars}ch` };
+            } catch (err) {
+                return { ok: false, detail: `observation-bundle fixture check threw: ${(err && err.message) || err}` };
+            }
+        },
+    },
 };
 
 function printResult(name, result) {
