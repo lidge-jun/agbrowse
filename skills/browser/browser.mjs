@@ -63,13 +63,13 @@ import {
     dedupeRequests,
 } from './browser-core.mjs';
 import { runInstallSkillsCli, runSkillsCli } from './skill-install.mjs';
-import { acquireProfileLock, releaseProfileLock, updateLockPid } from './profile-lock.mjs';
+import { acquireProfileLock, releaseProfileLock, updateLockPid, readProfileLock, isPidAlive, isStaleLock } from './profile-lock.mjs';
 import { runWebAiCli } from '../../web-ai/cli.mjs';
 import { cleanupPoolTabs } from '../../web-ai/tab-pool.mjs';
 import { listActiveCommands } from '../../web-ai/active-command-store.mjs';
 import { enforcePolicy } from '../../web-ai/policy/enforce.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
-import { cleanupIdleTabs, isPinned, parseDuration } from './tab-lifecycle.mjs';
+import { cleanupIdleTabs, planCleanupIdleTabs, pickCleanupCandidates, isPinned, parseDuration, DEFAULT_MAX_TABS } from './tab-lifecycle.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -189,6 +189,236 @@ function isWSL() {
         return readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
     } catch { return false; }
 }
+
+/**
+ * Best-effort description of which process holds a TCP port.
+ * Returns "<exe> (PID N)" or null on failure / unsupported platform.
+ * @param {number} port
+ * @returns {Promise<string | null>}
+ */
+async function describePortHolder(port) {
+    try {
+        if (process.platform === 'darwin' || process.platform === 'linux') {
+            const out = spawnSync('lsof', ['-nP', '-iTCP:' + port, '-sTCP:LISTEN'], {
+                encoding: 'utf8',
+                timeout: 2000,
+            });
+            if (out.status === 0 && out.stdout) {
+                const lines = out.stdout.trim().split('\n');
+                if (lines.length >= 2) {
+                    const cols = lines[1].split(/\s+/);
+                    const exe = cols[0];
+                    const pid = cols[1];
+                    if (pid && exe) return `${exe} (PID ${pid})`;
+                }
+            }
+        } else if (process.platform === 'win32') {
+            const out = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', timeout: 2000 });
+            if (out.status === 0 && out.stdout) {
+                const re = new RegExp(`\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`);
+                const m = out.stdout.match(re);
+                if (m && m[1]) return `PID ${m[1]}`;
+            }
+        }
+    } catch { /* best effort */ }
+    return null;
+}
+
+/**
+ * Diagnose why `agbrowse start` may fail.
+ * Returns a structured report with checks: lock / port / cdp-ours / env-leak / display.
+ * @param {{ port?: number }} [opts]
+ */
+async function runStartDoctor(opts = {}) {
+    const port = Number(opts.port || DEFAULT_CDP_PORT);
+    /** @type {{ id: string, ok: boolean, severity: 'info'|'warn'|'fail', detail: string, fix?: string }[]} */
+    const checks = [];
+
+    // 1. Profile lock + PID alive
+    const lock = readProfileLock(DATA_DIR);
+    if (!lock) {
+        checks.push({ id: 'profile-lock', ok: true, severity: 'info', detail: 'no profile.lock present' });
+    } else if (isStaleLock(lock)) {
+        checks.push({
+            id: 'profile-lock',
+            ok: false,
+            severity: 'warn',
+            detail: `stale profile.lock from PID ${lock.pid} (acquired ${lock.acquiredAt})`,
+            fix: `rm ${join(DATA_DIR, 'profile.lock')}   # or: agbrowse stop`,
+        });
+    } else if (lock.pid && !isPidAlive(lock.pid)) {
+        checks.push({
+            id: 'profile-lock',
+            ok: false,
+            severity: 'fail',
+            detail: `profile.lock claims PID ${lock.pid} but that process is not alive`,
+            fix: `rm ${join(DATA_DIR, 'profile.lock')}`,
+        });
+    } else {
+        checks.push({
+            id: 'profile-lock',
+            ok: true,
+            severity: 'info',
+            detail: `profile.lock held by live PID ${lock.pid}`,
+        });
+    }
+
+    // 2 + 3. Port listening + ownership
+    const listening = await isPortListening(port);
+    const persisted = readPersistedState();
+    if (!listening) {
+        checks.push({
+            id: 'port-listen',
+            ok: true,
+            severity: 'info',
+            detail: `port ${port} is free`,
+        });
+    } else {
+        const holder = await describePortHolder(port);
+        const persistedPid = persisted?.pid;
+        const ours = !!(persistedPid && holder && holder.includes(`PID ${persistedPid}`));
+        if (ours) {
+            checks.push({
+                id: 'port-cdp-ownership',
+                ok: true,
+                severity: 'info',
+                detail: `port ${port} held by our agbrowse Chrome (${holder})`,
+            });
+        } else {
+            // Probe whether it's a CDP endpoint
+            let isCdp = false;
+            try {
+                const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
+                isCdp = r.ok;
+            } catch { /* not CDP */ }
+            if (isCdp) {
+                checks.push({
+                    id: 'port-cdp-foreign',
+                    ok: false,
+                    severity: 'warn',
+                    detail: `port ${port} responds as CDP but not from our agbrowse Chrome${holder ? ` (held by ${holder})` : ''}`,
+                    fix: `agbrowse stop will NOT close it. Close manually, or use --port ${port + 1}.`,
+                });
+            } else {
+                checks.push({
+                    id: 'port-foreign',
+                    ok: false,
+                    severity: 'fail',
+                    detail: `port ${port} held by ${holder || 'another process'} but is not CDP`,
+                    fix: `Stop the conflicting process or: agbrowse start --port ${port + 1}`,
+                });
+            }
+        }
+    }
+
+    // 4. Env-var leak
+    const envLeaks = [];
+    if (process.env.CHROME_HEADLESS === '1') envLeaks.push('CHROME_HEADLESS=1');
+    if (process.env.AGBROWSE_HEAVY_SITE_COMPAT === '1') envLeaks.push('AGBROWSE_HEAVY_SITE_COMPAT=1');
+    if (process.env.AGBROWSE_KEEP_BG_NETWORKING === '1') envLeaks.push('AGBROWSE_KEEP_BG_NETWORKING=1');
+    if (process.env.AGBROWSE_CHROME_FLAGS) envLeaks.push(`AGBROWSE_CHROME_FLAGS=${process.env.AGBROWSE_CHROME_FLAGS}`);
+    if (envLeaks.length === 0) {
+        checks.push({ id: 'env-vars', ok: true, severity: 'info', detail: 'no agbrowse env-var overrides set' });
+    } else {
+        checks.push({
+            id: 'env-vars',
+            ok: true,
+            severity: 'warn',
+            detail: `env overrides active: ${envLeaks.join(', ')}`,
+            fix: envLeaks.includes('CHROME_HEADLESS=1')
+                ? 'CHROME_HEADLESS=1 will force headless even with --headed. unset CHROME_HEADLESS to use --headed.'
+                : 'unset these to launch with default flags.',
+        });
+    }
+
+    // 5. macOS Chrome.app singleton
+    if (process.platform === 'darwin') {
+        try {
+            const ps = spawnSync('pgrep', ['-fa', 'Google Chrome'], { encoding: 'utf8', timeout: 2000 });
+            const lines = (ps.stdout || '').trim().split('\n').filter(Boolean);
+            const usingOurProfile = lines.filter(l => l.includes(PROFILE_DIR));
+            const otherInstances = lines.filter(l => !l.includes(PROFILE_DIR));
+            if (usingOurProfile.length > 0 && lock && !isStaleLock(lock) && lock.pid && isPidAlive(lock.pid)) {
+                // expected — our own Chrome
+                checks.push({
+                    id: 'chrome-singleton',
+                    ok: true,
+                    severity: 'info',
+                    detail: `Chrome.app already bound to our profile (expected: lock=${lock.pid})`,
+                });
+            } else if (usingOurProfile.length > 0) {
+                checks.push({
+                    id: 'chrome-singleton',
+                    ok: false,
+                    severity: 'fail',
+                    detail: `another Chrome.app is bound to ${PROFILE_DIR} but profile.lock is missing/stale`,
+                    fix: `Quit that Chrome.app, then: agbrowse start --headed`,
+                });
+            } else if (otherInstances.length > 0) {
+                checks.push({
+                    id: 'chrome-singleton',
+                    ok: true,
+                    severity: 'warn',
+                    detail: `${otherInstances.length} other Chrome.app instance(s) running (different profile) — macOS may absorb our launch`,
+                    fix: `If start hangs: quit all Chrome windows first.`,
+                });
+            } else {
+                checks.push({
+                    id: 'chrome-singleton',
+                    ok: true,
+                    severity: 'info',
+                    detail: 'no other Chrome.app processes running',
+                });
+            }
+        } catch {
+            checks.push({ id: 'chrome-singleton', ok: true, severity: 'info', detail: 'pgrep unavailable; skipped' });
+        }
+    }
+
+    // 6. Display available
+    if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+        checks.push({
+            id: 'display',
+            ok: false,
+            severity: 'warn',
+            detail: 'no $DISPLAY or $WAYLAND_DISPLAY — headed Chrome will fail',
+            fix: 'CHROME_HEADLESS=1 agbrowse start',
+        });
+    } else {
+        checks.push({ id: 'display', ok: true, severity: 'info', detail: 'display available (or platform is darwin/win32)' });
+    }
+
+    const ok = !checks.some(c => c.severity === 'fail');
+    return { ok, port, dataDir: DATA_DIR, profileDir: PROFILE_DIR, persisted, lock, checks };
+}
+
+/**
+ * @param {Awaited<ReturnType<typeof runStartDoctor>>} report
+ */
+function formatDoctorReport(report) {
+    /** @type {string[]} */
+    const lines = [];
+    lines.push(`agbrowse doctor — port ${report.port}`);
+    lines.push(`  data: ${report.dataDir}`);
+    if (report.lock) {
+        lines.push(`  lock: PID ${report.lock.pid} (acquired ${report.lock.acquiredAt})`);
+    } else {
+        lines.push(`  lock: (none)`);
+    }
+    if (report.persisted) {
+        lines.push(`  state: PID ${report.persisted.pid} port ${report.persisted.port} headless=${report.persisted.headless}`);
+    }
+    lines.push('');
+    for (const ck of report.checks) {
+        const icon = ck.severity === 'fail' ? '✖' : ck.severity === 'warn' ? '⚠' : '✓';
+        lines.push(`${icon} ${ck.id}: ${ck.detail}`);
+        if (ck.fix) lines.push(`    → ${ck.fix}`);
+    }
+    lines.push('');
+    lines.push(report.ok ? '✅ start should succeed' : '❌ start may fail — fix the items above');
+    return lines.join('\n');
+}
+
 
 function readPersistedState() {
     if (!existsSync(STATE_FILE)) return null;
@@ -448,13 +678,29 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
         const minWidth = Math.max(opts.width || 1440, 1280);
         const minHeight = Math.max(opts.height || 900, 720);
 
-        chromeProc = spawn(chrome, [
+        const extraFlags = (process.env.AGBROWSE_CHROME_FLAGS || '').split(/\s+/).filter(Boolean);
+        const baseFlags = [
             `--remote-debugging-port=${port}`,
             `--user-data-dir=${PROFILE_DIR}`,
             `--window-size=${minWidth},${minHeight}`,
             '--no-first-run', '--no-default-browser-check',
             '--disable-dev-shm-usage',
-            '--disable-background-networking',
+        ];
+        const networkingFlag = process.env.AGBROWSE_KEEP_BG_NETWORKING === '1'
+            ? []
+            : ['--disable-background-networking'];
+        // Heavy-site compat: relax cross-origin isolation to load sites that gate
+        // on permissive embedder/opener policies (nytimes/amazon-class). Does NOT
+        // include any stealth / anti-fingerprint flags — those are forbidden by
+        // the gate:no-cloud-stealth-claims invariant.
+        const compatFlags = process.env.AGBROWSE_HEAVY_SITE_COMPAT === '1'
+            ? ['--disable-features=CrossOriginOpenerPolicy,CrossOriginEmbedderPolicy']
+            : [];
+        chromeProc = spawn(chrome, [
+            ...baseFlags,
+            ...networkingFlag,
+            ...compatFlags,
+            ...extraFlags,
             ...(noSandbox ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
             ...(headless ? ['--headless=new'] : []),
             'about:blank',
@@ -478,16 +724,30 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
             if (!headless) await foregroundCdpWindow(port, chrome);
         } else {
             if (chromeProc && !chromeProc.killed) {
+                console.error(`[browser] failed launch: spawned PID ${chromeProc.pid} but CDP did not respond after 10s`);
                 chromeProc.kill('SIGTERM');
                 chromeProc = null;
             }
             clearPersistedState();
+            const lockPath = join(DATA_DIR, 'profile.lock');
+            const portInfo = await describePortHolder(port).catch(() => null);
+            const portLine = portInfo
+                ? `Port ${port} held by ${portInfo}.`
+                : `Port ${port} held by another process.`;
             throw new Error(
-                `Chrome CDP not responding on port ${port} after 10s. ` +
-                `Possible causes:\n` +
-                `  - Windows: Chrome singleton absorbed the launch (close ALL Chrome windows first)\n` +
-                `  - No display available (try --headless or CHROME_HEADLESS=1)\n` +
-                `  - Port conflict (try --port <other>)`
+                `Chrome CDP not responding on port ${port} after 10s.\n` +
+                `\n` +
+                `Diagnose: agbrowse doctor\n` +
+                `\n` +
+                `Likely causes (most common first):\n` +
+                `  1. macOS/Win Chrome singleton absorbed the launch.\n` +
+                `       → Quit all Chrome windows, then: agbrowse start --headed\n` +
+                `  2. ${portLine}\n` +
+                `       → agbrowse start --port ${port + 1}\n` +
+                `  3. Stale profile lock at ${lockPath}.\n` +
+                `       → agbrowse stop  (or: rm ${lockPath})\n` +
+                `  4. No display available.\n` +
+                `       → CHROME_HEADLESS=1 agbrowse start\n`
             );
         }
     } catch (err) {
@@ -502,7 +762,12 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
  */
 function resolveHeadlessMode(opts = {}) {
     if (opts.headed === true) return false;
-    return opts.headless === true || process.env.CHROME_HEADLESS === '1';
+    if (opts.headless === true) return true;
+    if (process.env.CHROME_HEADLESS === '1') {
+        console.warn('[browser] note: CHROME_HEADLESS=1 in env → starting headless. Pass --headed to override.');
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -1702,8 +1967,12 @@ try {
                     headless: { type: 'boolean', default: false },
                     headed: { type: 'boolean', default: false },
                     'chrome-path': { type: 'string' },
+                    'heavy-site-compat': { type: 'boolean', default: false },
+                    'keep-bg-networking': { type: 'boolean', default: false },
                 }, strict: false,
             });
+            if (values['heavy-site-compat']) process.env.AGBROWSE_HEAVY_SITE_COMPAT = '1';
+            if (values['keep-bg-networking']) process.env.AGBROWSE_KEEP_BG_NETWORKING = '1';
             await launchChrome(Number(values.port), {
                 headless: values.headless,
                 headed: values.headed,
@@ -1720,6 +1989,24 @@ try {
         case 'status': {
             const r = await getBrowserStatus();
             console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
+            break;
+        }
+        case 'doctor': {
+            const { values } = parseArgs({
+                args: process.argv.slice(3),
+                options: {
+                    port: { type: 'string', default: String(DEFAULT_CDP_PORT) },
+                    json: { type: 'boolean', default: false },
+                },
+                strict: false,
+            });
+            const r = await runStartDoctor({ port: Number(values.port) });
+            if (values.json) {
+                console.log(JSON.stringify(r, null, 2));
+            } else {
+                console.log(formatDoctorReport(r));
+            }
+            if (!r.ok) process.exit(2);
             break;
         }
         case 'snapshot': {
@@ -1977,6 +2264,9 @@ try {
                 const activeCommand = activeCommandSummary(activeByTargetId.get(displayed.targetId));
                 return activeCommand ? { ...displayed, activeCommand } : displayed;
             });
+            const MAX = Number(process.env.AGBROWSE_MAX_TABS || DEFAULT_MAX_TABS);
+            const trackedCount = tabs.filter(t => t.idleForMs !== null).length;
+            const untrackedCount = tabs.length - trackedCount;
             if (json) {
                 console.log(JSON.stringify(tabs.map((t, i) => ({ index: i + 1, ...t })), null, 2));
             } else {
@@ -1986,7 +2276,19 @@ try {
                     console.log(`   ${t.url}`);
                     console.log(`   targetId: ${t.targetId}`);
                 });
-                console.log(`\nTip: run "agbrowse tab-cleanup" to close idle/overflow tabs.`);
+                console.log(`\ntotal: ${tabs.length}/${MAX}  tracked: ${trackedCount}  untracked: ${untrackedCount}`);
+                if (tabs.length >= Math.max(1, MAX - 2)) {
+                    const advisor = pickCleanupCandidates(tabs, MAX);
+                    if (advisor.length) {
+                        console.log(`⚠ approaching MAX_TABS — suggested close (oldest-idle first):`);
+                        advisor.forEach(a => {
+                            console.log(`   • ${a.targetId}  ${(a.title || '(untitled)').slice(0, 60)}  idle=${a.idleFor || 'untracked'}`);
+                        });
+                        console.log(`Run: agbrowse tab-cleanup --dry-run   (or --force to actually close)`);
+                    }
+                } else {
+                    console.log(`Tip: run "agbrowse tab-cleanup" to close idle/overflow tabs.`);
+                }
             }
             break;
         }
@@ -2034,6 +2336,7 @@ try {
                     provider: { type: 'string' },
                     'keep-provider-tabs': { type: 'string' },
                     force: { type: 'boolean', default: false },
+                    'dry-run': { type: 'boolean', default: false },
                 },
                 strict: false,
             });
@@ -2041,14 +2344,34 @@ try {
                 console.error('error: tab-cleanup --include-untracked requires --force');
                 process.exit(1);
             }
-            const leaseResult = await cleanupPoolTabs(getPort());
-            const result = await cleanupIdleTabs(getPort(), {
+            const cleanupOpts = {
                 idleTimeoutMs: values['idle-after'] ? parseDuration(values['idle-after']) : undefined,
                 maxTabs: values['max-tabs'] ? parseInt(/** @type {string} */ (values['max-tabs']), 10) : undefined,
                 includeUntracked: values['include-untracked'] === true,
                 provider: /** @type {any} */ (values.provider),
                 keepProviderTabs: values['keep-provider-tabs'] ? parseInt(/** @type {string} */ (values['keep-provider-tabs']), 10) : undefined,
-            });
+            };
+            if (values['dry-run']) {
+                const plan = await planCleanupIdleTabs(getPort(), cleanupOpts);
+                if (values.json) {
+                    console.log(JSON.stringify({ ok: true, dryRun: true, ...plan }, null, 2));
+                } else {
+                    console.log(`tab-cleanup --dry-run`);
+                    console.log(`tabs: ${plan.tabsTotal}/${plan.maxTabs}  wouldClose: ${plan.wouldClose.length}`);
+                    if (plan.wouldClose.length === 0) {
+                        console.log(`  (nothing to close)`);
+                    } else {
+                        plan.wouldClose.forEach(t => {
+                            const idle = t.idleForMs === null ? 'untracked' : `${Math.round(t.idleForMs / 1000)}s`;
+                            console.log(`  • ${t.targetId}  ${(t.title || '(untitled)').slice(0, 60)}  reason=${t.reason}  idle=${idle}`);
+                        });
+                    }
+                    console.log(`\nNo tabs were closed. Re-run without --dry-run to actually close.`);
+                }
+                break;
+            }
+            const leaseResult = await cleanupPoolTabs(getPort());
+            const result = await cleanupIdleTabs(getPort(), cleanupOpts);
             const combined = {
                 ...result,
                 closed: result.closed + (leaseResult.closed || 0),
@@ -2358,7 +2681,33 @@ try {
     See docs/comparison.md and run "agbrowse web-ai claim-audit" to verify.
 
   Usage:
-    agbrowse <command> [args] [--flags]
+    agbrowse <command> [args] [--flags]    (try: agbrowse start --headed)
+
+  Quick start:
+    agbrowse start --headed                  Launch a visible Chrome
+    agbrowse navigate https://example.com    Open a URL
+    agbrowse snapshot --interactive          Get refs (e1, e2, …)
+    agbrowse click e1                        Click ref e1
+    agbrowse stop                            Close Chrome
+
+  Stuck? Run:
+    agbrowse doctor                          Diagnose start/CDP/profile issues
+    agbrowse tabs                            See open tabs + cleanup advice
+    agbrowse tab-cleanup --dry-run           Preview cleanup without closing
+
+  Common failures:
+    "❌ Failed" / "Chrome CDP not responding"
+        → run: agbrowse doctor
+    "Port 9222 in use but not responding as CDP"
+        → another process holds the port. Use --port 9223 or stop it.
+    "CDP port X is already backed by a headless agbrowse Chrome"
+        → agbrowse stop && agbrowse start --headed
+    "tab-cleanup --include-untracked requires --force"
+        → safety; add --force only after reviewing --dry-run output.
+
+  Heavy / anti-bot sites (nytimes, amazon class):
+    AGBROWSE_HEAVY_SITE_COMPAT=1 agbrowse start --headed
+    agbrowse navigate <url> --wait-until commit --timeout 60000
 
   Start here:
     npm install -g agbrowse
@@ -2410,9 +2759,15 @@ try {
 
   Browser lifecycle:
     start [--port <9222>] [--headless|--headed] [--chrome-path PATH]
+                           [--heavy-site-compat] [--keep-bg-networking]
                            Start Chrome (--headed overrides CHROME_HEADLESS=1)
+                           --heavy-site-compat: relax COEP/COOP for sites that
+                             gate on permissive cross-origin isolation
+                             (helps nytimes/amazon-class). No stealth flags.
+                           --keep-bg-networking: omit --disable-background-networking
     stop                   Stop Chrome
     status                 Connection status
+    doctor                 Diagnose start/CDP/profile issues (run when start fails)
     reset [--force]        Reset (clear profile + screenshots)
 
   Observe:
@@ -2445,13 +2800,15 @@ try {
     mouse-up               Release mouse button [--right]
 
   Navigation:
-    navigate <url>         Go to URL
+    navigate <url>         Go to URL [--wait-until <commit|domcontentloaded|load>] [--timeout ms]
+                              ex: agbrowse navigate https://github.com --wait-until commit
     reload                 Reload current page
     resize <w> <h>         Resize browser window / viewport [--fullscreen]
      tabs                   List tabs [--json]
      tab-switch <target>    Switch to tab index or CDP target id [--json] [--force]
      select-tab <target>    Alias for tab-switch [--json] [--force]
      tab-cleanup            Close idle/overflow tabs
+       --dry-run            Preview cleanup plan without closing any tabs
        --idle-after <30m>   Override idle threshold for this cleanup
        --max-tabs <N>       Override max tab limit for this cleanup
        --provider <vendor>  Close extra inactive provider tabs by origin
@@ -2550,6 +2907,12 @@ try {
     AGBROWSE_WEB_AI_AUTO_START=0
                            Disable web-ai headed auto-start
     AGBROWSE_JSON_ERRORS=1 Force JSON failure envelopes regardless of --json
+    AGBROWSE_HEAVY_SITE_COMPAT=1
+                           Relax COEP/COOP + hide automation hint at launch
+                           (or pass: agbrowse start --heavy-site-compat)
+    AGBROWSE_KEEP_BG_NETWORKING=1
+                           Don't pass --disable-background-networking
+    AGBROWSE_CHROME_FLAGS  Extra Chrome launch flags (space-separated)
     CHROME_HEADLESS=1      Force headless mode unless start --headed is passed
     CHROME_NO_SANDBOX=1    Disable sandbox (Docker/CI)
     CHROME_BINARY_PATH     Custom Chrome/Chromium binary path

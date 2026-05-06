@@ -16,6 +16,8 @@ import { activeCommandTargetIds } from '../../web-ai/active-command-store.mjs';
 
 const MAX_TABS = parseInt(process.env.AGBROWSE_MAX_TABS || '10', 10);
 const IDLE_TIMEOUT_MS = parseDuration(process.env.AGBROWSE_TAB_IDLE || '30m');
+
+export const DEFAULT_MAX_TABS = MAX_TABS;
 /** @type {Readonly<Record<string, string>>} */
 const PROVIDER_ORIGINS = {
     chatgpt: 'https://chatgpt.com',
@@ -257,6 +259,113 @@ export async function cleanupIdleTabs(port, opts = {}) {
     }
 
     return summary;
+}
+
+/**
+ * Same selection logic as cleanupIdleTabs but never invokes Target.closeTarget.
+ * Returns a JSON-serialisable plan describing what would be closed.
+ *
+ * @param {number} port
+ * @param {CleanupOptions} [opts]
+ * @returns {Promise<{
+ *   wouldClose: Array<{ targetId: string, title?: string, url?: string, idleForMs: number|null, reason: string, vendor?: string }>,
+ *   counts: { total: number, idleClosed: number, limitClosed: number, untrackedClosed: number, providerClosed: number, leaseClosed: number },
+ *   maxTabs: number,
+ *   idleTimeoutMs: number,
+ *   tabsTotal: number
+ * }>}
+ */
+export async function planCleanupIdleTabs(port, opts = {}) {
+    const tabs = await listManagedTabs(port);
+    const now = opts.now || Date.now();
+    const leases = await listLeases().catch(() => /** @type {Lease[]} */ ([]));
+    const leaseByTargetId = new Map(leases.map(lease => [lease.targetId, lease]));
+
+    /** @type {Set<string>} */
+    const activeSessionTargetIds = new Set();
+    for (const session of listSessions({ active: true })) {
+        if (session.targetId) activeSessionTargetIds.add(session.targetId);
+    }
+    const activeCommandTargets = await activeCommandTargetIds({ browserProfileKey: String(port) });
+
+    const idleTimeoutMs = opts.idleTimeoutMs || IDLE_TIMEOUT_MS;
+    const maxTabs = opts.maxTabs ?? MAX_TABS;
+
+    const toClose = selectTabsForCleanup({
+        tabs,
+        activeSessionTargetIds,
+        activeCommandTargetIds: activeCommandTargets,
+        pinnedTargetIds: pinnedTabs,
+        now,
+        idleTimeoutMs,
+        maxTabs,
+        includeUntracked: opts.includeUntracked === true,
+        leaseByTargetId,
+    });
+    if (opts.provider) {
+        for (const tab of selectProviderTabsForCleanup({
+            tabs,
+            vendor: opts.provider,
+            keep: opts.keepProviderTabs ?? 1,
+            activeSessionTargetIds,
+            activeCommandTargetIds: activeCommandTargets,
+            pinnedTargetIds: pinnedTabs,
+        })) {
+            if (!toClose.some(row => row.targetId === tab.targetId)) toClose.push(tab);
+        }
+    }
+
+    const counts = { total: 0, idleClosed: 0, limitClosed: 0, untrackedClosed: 0, providerClosed: 0, leaseClosed: 0 };
+    /** @type {any[]} */
+    const wouldClose = [];
+    for (const tab of toClose) {
+        const lastActiveAt = Number(tab.lastActiveAt);
+        const idleForMs = Number.isFinite(lastActiveAt) && lastActiveAt > 0 ? now - lastActiveAt : null;
+        wouldClose.push({
+            targetId: tab.targetId,
+            title: tab.title,
+            url: tab.url,
+            idleForMs,
+            reason: tab.cleanupReason || 'unknown',
+            vendor: tab.vendor,
+        });
+        counts.total += 1;
+        if (tab.cleanupReason === 'idle-timeout') counts.idleClosed += 1;
+        else if (tab.cleanupReason === 'max-tabs') counts.limitClosed += 1;
+        else if (tab.cleanupReason === 'untracked') counts.untrackedClosed += 1;
+        else if (tab.cleanupReason === 'provider-overflow') counts.providerClosed += 1;
+    }
+
+    return { wouldClose, counts, maxTabs, idleTimeoutMs, tabsTotal: tabs.length };
+}
+
+/**
+ * Pick non-active, non-pinned tabs to suggest closing, oldest-idle first,
+ * up to enough to bring count to maxTabs - 1.
+ * Untracked tabs (no lastActiveAt) are sorted last (we don't know their age).
+ *
+ * @param {Array<{ targetId: string, title?: string, url?: string, lastActiveAt?: number, idleForMs?: number|null, idleFor?: string }>} tabs
+ * @param {number} maxTabs
+ * @returns {Array<{ targetId: string, title?: string, url?: string, idleFor?: string }>}
+ */
+export function pickCleanupCandidates(tabs, maxTabs = MAX_TABS) {
+    const pool = (tabs || [])
+        .filter(t => t && t.targetId && !pinnedTabs.has(t.targetId))
+        .map(t => ({
+            ...t,
+            _idle: Number.isFinite(Number(t.lastActiveAt)) && Number(t.lastActiveAt) > 0
+                ? Date.now() - Number(t.lastActiveAt)
+                : -1,
+        }));
+    pool.sort((a, b) => {
+        // Tracked & most-idle first, untracked (=-1) sorted last.
+        if (a._idle === -1 && b._idle !== -1) return 1;
+        if (a._idle !== -1 && b._idle === -1) return -1;
+        return b._idle - a._idle;
+    });
+    const overflow = Math.max(0, pool.length - (maxTabs - 1));
+    return pool.slice(0, Math.max(overflow, Math.min(3, pool.length)))
+        .map(({ _idle, ...rest }) => rest);
 }
 
 /**
