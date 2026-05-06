@@ -66,6 +66,7 @@
     "gate:model-adapter-frozen": "node scripts/release-gates.mjs model-adapter-frozen",
     "gate:planner-loop-local": "node scripts/release-gates.mjs planner-loop-local",
     "gate:extract-schema-fixtures": "node scripts/release-gates.mjs extract-schema-fixtures",
+    "gate:eval-adapters-no-score-claims": "node scripts/release-gates.mjs eval-adapters-no-score-claims",
     "gate:all": "node scripts/release-gates.mjs",
     "benchmark:trajectory": "node benchmarks/agbrowse/run-task.mjs",
     "release": "bash scripts/release.sh",

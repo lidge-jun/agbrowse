@@ -516,6 +516,48 @@ const GATES = {
             }
         },
     },
+    'eval-adapters-no-score-claims': {
+        description: 'G08 experimental: eval adapters carry no leaderboard/score claims; dry-run outputs scoreClaim=null',
+        async check() {
+            const fs = await import('node:fs');
+            const path = await import('node:path');
+            const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+            const adapterDir = path.join(repoRoot, 'web-ai', 'eval-adapters');
+            if (!fs.existsSync(adapterDir)) {
+                return { ok: false, detail: `eval-adapters dir missing: ${adapterDir}` };
+            }
+            const forbidden = [
+                /leaderboard/i,
+                /%\s*on\s*webvoyager/i,
+                /%\s*on\s*webarena/i,
+                /%\s*on\s*mind2web/i,
+                /score\s*:\s*\d/i,
+                /rank\s*:\s*\d/i,
+                /success-rate\s*:\s*\d/i,
+            ];
+            const files = fs.readdirSync(adapterDir).filter((f) => f.endsWith('.mjs'));
+            for (const f of files) {
+                const body = fs.readFileSync(path.join(adapterDir, f), 'utf8');
+                for (const re of forbidden) {
+                    if (re.test(body)) {
+                        return { ok: false, detail: `forbidden score pattern in ${f}: ${re}` };
+                    }
+                }
+            }
+            try {
+                const wv = await import('../web-ai/eval-adapters/webvoyager.mjs');
+                const fixture = JSON.stringify({ id: 't1', url: 'https://example.com', instruction: 'x' });
+                const r = wv.dryRunWebVoyager(fixture, { limit: 1 });
+                if (r.scoreClaim !== null) return { ok: false, detail: 'dryRunWebVoyager.scoreClaim must be null' };
+                if (r.descriptors.some((d) => d.scoreClaim !== null)) {
+                    return { ok: false, detail: 'descriptor.scoreClaim must be null' };
+                }
+                return { ok: true, detail: `${files.length} adapter file(s) clean; dry-run scoreClaim=null` };
+            } catch (err) {
+                return { ok: false, detail: `eval-adapters gate threw: ${(err && err.message) || err}` };
+            }
+        },
+    },
 };
 
 function printResult(name, result) {

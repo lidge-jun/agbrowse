@@ -45,7 +45,7 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 - [ ] `npm run test:mcp`
 - [ ] `npm run test:source-audit`
 - [ ] `npm run test:release-gates`
-- [ ] `npm run gate:all` (named release gates: typecheck, tests, truth-table-fresh, mcp-scope-frozen, no-experimental-in-readme-ready-section, no-cloud-claims, mcp-deferred-metadata, observe-actions-fixtures, observation-bundle-fixtures, browser-primitives-complete, trace-browser-actions, action-memory-safe-replay, model-adapter-frozen, planner-loop-local, extract-schema-fixtures)
+- [ ] `npm run gate:all` (named release gates: typecheck, tests, truth-table-fresh, mcp-scope-frozen, no-experimental-in-readme-ready-section, no-cloud-claims, mcp-deferred-metadata, observe-actions-fixtures, observation-bundle-fixtures, browser-primitives-complete, trace-browser-actions, action-memory-safe-replay, model-adapter-frozen, planner-loop-local, extract-schema-fixtures, eval-adapters-no-score-claims)
 - [ ] `node scripts/check-strict-baseline.mjs`
 - [ ] `npm run check:module-graph`
 - [ ] `npm run smoke:bins`
