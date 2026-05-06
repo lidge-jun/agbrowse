@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// @ts-check
+
 /**
  * agbrowse — agent-first browser automation and web-ai CLI
  * Extracted from cli-jaw browser. Zero external dependencies beyond playwright-core.
@@ -80,6 +82,9 @@ const SNAPSHOTS_DIR = join(DATA_DIR, 'snapshots');
 const DEFAULT_CDP_PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const CUSTOM_CHROME_PATH = process.env.CHROME_BINARY_PATH || null;
 
+/**
+ * @param {any} ms
+ */
 function formatRelativeAge(ms) {
     if (!Number.isFinite(ms) || ms < 0) return 'untracked';
     if (ms < 1000) return 'now';
@@ -92,6 +97,10 @@ function formatRelativeAge(ms) {
     return `${Math.floor(hours / 24)}d`;
 }
 
+/**
+ * @param {any} tab
+ * @param {any} now
+ */
 function tabDisplayState(tab, now = Date.now()) {
     const idleForMs = Number.isFinite(tab.lastActiveAt) && tab.lastActiveAt > 0
         ? now - tab.lastActiveAt
@@ -105,6 +114,9 @@ function tabDisplayState(tab, now = Date.now()) {
     };
 }
 
+/**
+ * @param {any} command
+ */
 function activeCommandSummary(command) {
     if (!command) return null;
     return {
@@ -118,9 +130,13 @@ function activeCommandSummary(command) {
 }
 
 // ─── State ───────────────────────────────────────
+/** @type {any} */
 let cached = null;   // { browser, cdpUrl }
+/** @type {any} */
 let chromeProc = null;
+/** @type {any} */
 let activePort = null;
+/** @type {any} */
 let activeLockToken = null;
 
 // ─── ANSI colors ─────────────────────────────────
@@ -134,6 +150,10 @@ const c = {
 //  Connection Layer (from cli-jaw src/browser/connection.ts)
 // ═══════════════════════════════════════════════════
 
+/**
+ * @param {any} port
+ * @param {any} host
+ */
 function isPortListening(port, host = '127.0.0.1') {
     return new Promise(resolve => {
         const sock = net.createConnection({ port, host });
@@ -143,6 +163,10 @@ function isPortListening(port, host = '127.0.0.1') {
     });
 }
 
+/**
+ * @param {any} port
+ * @param {any} timeoutMs
+ */
 async function waitForCdpReady(port, timeoutMs = 10000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -173,11 +197,17 @@ function readPersistedState() {
     }
 }
 
+/**
+ * @param {any} state
+ */
 function writePersistedState(state) {
     mkdirSync(DATA_DIR, { recursive: true });
     writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
+/**
+ * @param {any} patch
+ */
 function updatePersistedState(patch) {
     writePersistedState({
         ...(readPersistedState() || {}),
@@ -189,11 +219,17 @@ function clearPersistedState() {
     rmSync(STATE_FILE, { force: true });
 }
 
+/**
+ * @param {any} targetId
+ */
 function getSnapshotFile(targetId = null) {
     if (targetId) return join(SNAPSHOTS_DIR, `${targetId}.json`);
     return SNAPSHOT_FILE;
 }
 
+/**
+ * @param {any} targetId
+ */
 function readPersistedSnapshot(targetId = null) {
     const file = getSnapshotFile(targetId);
     if (!existsSync(file)) return null;
@@ -204,12 +240,19 @@ function readPersistedSnapshot(targetId = null) {
     }
 }
 
+/**
+ * @param {any} snapshotState
+ * @param {any} targetId
+ */
 function writePersistedSnapshot(snapshotState, targetId = null) {
     const file = getSnapshotFile(targetId);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(snapshotState, null, 2));
 }
 
+/**
+ * @param {any} targetId
+ */
 function clearPersistedSnapshot(targetId = null) {
     if (targetId) {
         rmSync(getSnapshotFile(targetId), { force: true });
@@ -235,11 +278,14 @@ function getCliPort() {
     return port;
 }
 
+/**
+ * @param {any} args
+ */
 function parseClipArgs(args = []) {
     const index = args.indexOf('--clip');
     if (index === -1) return null;
-    const values = args.slice(index + 1, index + 5).map(value => parseInt(value, 10));
-    if (values.length < 4 || values.some(value => Number.isNaN(value))) {
+    const values = args.slice(index + 1, index + 5).map((/** @type {any} */ value) => parseInt(value, 10));
+    if (values.length < 4 || values.some((/** @type {any} */ value) => Number.isNaN(value))) {
         throw new Error('Invalid --clip arguments. Usage: --clip <x> <y> <width> <height>');
     }
     return {
@@ -250,11 +296,14 @@ function parseClipArgs(args = []) {
     };
 }
 
+/**
+ * @param {any} pid
+ */
 async function killPersistedChrome(pid) {
     if (!pid) return false;
 
     if (process.platform === 'win32') {
-        await new Promise((resolve, reject) => {
+        await new Promise((/** @type {any} */ resolve, /** @type {any} */ reject) => {
             const child = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
             child.once('exit', code => {
                 if (code === 0 || code === 128) resolve();
@@ -269,19 +318,22 @@ async function killPersistedChrome(pid) {
         process.kill(-pid, 'SIGTERM');
         return true;
     } catch (error) {
-        if (error?.code === 'ESRCH') return false;
-        if (error?.code !== 'EINVAL') throw error;
+        if ((/** @type {any} */ (error))?.code === 'ESRCH') return false;
+        if ((/** @type {any} */ (error))?.code !== 'EINVAL') throw error;
     }
 
     try {
         process.kill(pid, 'SIGTERM');
         return true;
     } catch (error) {
-        if (error?.code === 'ESRCH') return false;
+        if ((/** @type {any} */ (error))?.code === 'ESRCH') return false;
         throw error;
     }
 }
 
+/**
+ * @param {any} customChromePath
+ */
 function findChrome(customChromePath = CUSTOM_CHROME_PATH) {
     if (customChromePath) {
         if (existsSync(customChromePath)) return customChromePath;
@@ -331,6 +383,10 @@ function findChrome(customChromePath = CUSTOM_CHROME_PATH) {
     throw new Error('Chrome not found — install Google Chrome');
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
     const headless = resolveHeadlessMode(opts);
     // CDP already responding → reuse
@@ -403,7 +459,7 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
         ], { detached: true, stdio: 'ignore' });
         chromeProc.unref();
 
-        updateLockPid(DATA_DIR, lockResult.token, chromeProc.pid);
+        updateLockPid(DATA_DIR, lockResult.token, /** @type {number} */ (chromeProc.pid));
 
         const ready = await waitForCdpReady(port);
         if (ready) {
@@ -439,11 +495,17 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
     }
 }
 
+/**
+ * @param {any} opts
+ */
 function resolveHeadlessMode(opts = {}) {
     if (opts.headed === true) return false;
     return opts.headless === true || process.env.CHROME_HEADLESS === '1';
 }
 
+/**
+ * @param {any} chromePath
+ */
 function focusChromeApp(chromePath) {
     if (process.platform !== 'darwin' || !chromePath) return;
     const appName = macAppNameFromChromePath(chromePath);
@@ -454,10 +516,14 @@ function focusChromeApp(chromePath) {
     }
 }
 
+/**
+ * @param {any} port
+ * @param {any} chromePath
+ */
 async function foregroundCdpWindow(port, chromePath) {
     try {
         const { browser } = await connectCdp(port, 2);
-        const page = browser.contexts().flatMap(context => context.pages())[0];
+        const page = browser.contexts().flatMap((/** @type {any} */ context) => context.pages())[0];
         if (!page) {
             focusChromeApp(chromePath);
             return;
@@ -484,6 +550,9 @@ async function foregroundCdpWindow(port, chromePath) {
     focusChromeApp(chromePath);
 }
 
+/**
+ * @param {any} chromePath
+ */
 function macAppNameFromChromePath(chromePath) {
     const marker = '.app/';
     const idx = String(chromePath).indexOf(marker);
@@ -507,6 +576,9 @@ function getPort() {
     return DEFAULT_CDP_PORT;
 }
 
+/**
+ * @param {any} port
+ */
 async function connectCdp(port = getPort(), retries = 4) {
     const { chromium } = await loadPlaywright();
     const cdpUrl = `http://127.0.0.1:${port}`;
@@ -529,7 +601,7 @@ async function connectCdp(port = getPort(), retries = 4) {
         }
     }
     throw new Error(
-        `CDP connection failed after ${retries} attempts: ${lastError?.message}\n` +
+        `CDP connection failed after ${retries} attempts: ${(/** @type {any} */ (lastError))?.message}\n` +
         `  💡 Fix: Ensure Chrome is running (agbrowse start) or check port ${port}`
     );
 }
@@ -538,7 +610,7 @@ async function loadPlaywright() {
     try {
         return await import('playwright-core');
     } catch (error) {
-        if (error?.code === 'ERR_MODULE_NOT_FOUND' || String(error?.message || '').includes('playwright-core')) {
+        if ((/** @type {any} */ (error))?.code === 'ERR_MODULE_NOT_FOUND' || String((/** @type {any} */ (error))?.message || '').includes('playwright-core')) {
             throw new Error(
                 `playwright-core is required.\n` +
                 `  💡 Fix: cd <project-root> && npm install playwright-core`
@@ -548,6 +620,9 @@ async function loadPlaywright() {
     }
 }
 
+/**
+ * @param {any} port
+ */
 async function closeBrowserViaCdp(port = getPort()) {
     const { chromium } = await loadPlaywright();
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 5000 });
@@ -559,7 +634,7 @@ async function closeBrowserViaCdp(port = getPort()) {
             return;
         }
 
-        const page = browser.contexts().flatMap(context => context.pages())[0];
+        const page = browser.contexts().flatMap((/** @type {any} */ context) => context.pages())[0];
         if (!page) throw new Error('No page available for Browser.close');
         const cdp = await page.context().newCDPSession(page);
         await cdp.send('Browser.close');
@@ -569,9 +644,12 @@ async function closeBrowserViaCdp(port = getPort()) {
     }
 }
 
+/**
+ * @param {any} port
+ */
 async function getActivePage(port = getPort()) {
     const { browser } = await connectCdp(port);
-    const pages = browser.contexts().flatMap(c => c.pages());
+    const pages = browser.contexts().flatMap((/** @type {any} */ c) => c.pages());
     const state = readPersistedState();
     const activeTargetId = state?.activeTargetId;
     if (activeTargetId) {
@@ -580,13 +658,16 @@ async function getActivePage(port = getPort()) {
             if (pageTargetId === activeTargetId) return page;
         }
         const tabs = await listTabs(port).catch(() => []);
-        if (tabs.some(t => t.id === activeTargetId)) {
+        if (tabs.some((/** @type {any} */ t) => t.id === activeTargetId)) {
             throw new Error(`active target ${activeTargetId} is present in CDP but not attached as a Playwright page`);
         }
     }
     return pages[pages.length - 1] || null;
 }
 
+/**
+ * @param {any} page
+ */
 async function getPageTargetId(page) {
     const session = await page.context().newCDPSession(page);
     try {
@@ -597,17 +678,26 @@ async function getPageTargetId(page) {
     }
 }
 
+/**
+ * @param {any} port
+ */
 async function getActiveTargetId(port = getPort()) {
     const page = await getActivePage(port);
     if (!page) return null;
     return getPageTargetId(page);
 }
 
+/**
+ * @param {any} port
+ */
 async function listTabs(port = getPort()) {
     const resp = await fetch(`http://127.0.0.1:${port}/json/list`);
-    return (await resp.json()).filter(t => t.type === 'page');
+    return (await resp.json()).filter((/** @type {any} */ t) => t.type === 'page');
 }
 
+/**
+ * @param {any} port
+ */
 async function getBrowserStatus(port = getPort()) {
     try {
         const tabs = await listTabs(port);
@@ -615,6 +705,9 @@ async function getBrowserStatus(port = getPort()) {
     } catch { return { running: false, tabs: 0 }; }
 }
 
+/**
+ * @param {any} port
+ */
 async function getCdpSession(port = getPort()) {
     const page = await getActivePage(port);
     if (!page) return null;
@@ -660,23 +753,26 @@ const INTERACTIVE_ROLES = ['button', 'link', 'textbox', 'checkbox',
     'option', 'switch', 'spinbutton'];
 const TELEMETRY_MAX_ENTRIES = 200;
 
+/**
+ * @param {any} maxEntries
+ */
 function telemetryInitScript(maxEntries) {
     const g = globalThis;
-    const state = g.__browserAgentTelemetry || {
+    const state = (/** @type {any} */ (g)).__browserAgentTelemetry || {
         console: [],
         maxEntries,
     };
     state.maxEntries = Math.max(state.maxEntries || 0, maxEntries);
-    g.__browserAgentTelemetry = state;
+    (/** @type {any} */ (g)).__browserAgentTelemetry = state;
 
-    const push = entry => {
+    const push = (/** @type {any} */ entry) => {
         state.console.push({ ...entry, ts: Date.now() });
         if (state.console.length > state.maxEntries) {
             state.console.splice(0, state.console.length - state.maxEntries);
         }
     };
 
-    const toText = value => {
+    const toText = (/** @type {any} */ value) => {
         if (typeof value === 'string') return value;
         if (value instanceof Error) return value.stack || value.message;
         try {
@@ -686,20 +782,20 @@ function telemetryInitScript(maxEntries) {
         }
     };
 
-    if (!g.__browserAgentConsolePatched && g.console) {
-        g.__browserAgentConsolePatched = true;
+    if (!(/** @type {any} */ (g)).__browserAgentConsolePatched && g.console) {
+        (/** @type {any} */ (g)).__browserAgentConsolePatched = true;
         for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
-            const original = g.console[level]?.bind(g.console);
+            const original = (/** @type {any} */ (g.console))[level]?.bind(g.console);
             if (!original) continue;
-            g.console[level] = (...args) => {
+            (/** @type {any} */ (g.console))[level] = (/** @type {...any} */ ...args) => {
                 push({ type: level, text: args.map(toText).join(' ') });
                 return original(...args);
             };
         }
     }
 
-    if (!g.__browserAgentErrorPatched) {
-        g.__browserAgentErrorPatched = true;
+    if (!(/** @type {any} */ (g)).__browserAgentErrorPatched) {
+        (/** @type {any} */ (g)).__browserAgentErrorPatched = true;
         g.addEventListener('error', event => {
             push({
                 type: 'pageerror',
@@ -715,11 +811,17 @@ function telemetryInitScript(maxEntries) {
     }
 }
 
+/**
+ * @param {any} page
+ */
 async function ensureTelemetry(page) {
     await page.addInitScript(telemetryInitScript, TELEMETRY_MAX_ENTRIES);
     await page.evaluate(telemetryInitScript, TELEMETRY_MAX_ENTRIES).catch(() => { });
 }
 
+/**
+ * @param {any} port
+ */
 async function getReadyPage(port = getPort()) {
     const page = await getActivePage(port);
     if (!page) throw new Error('No active page — run `start` first, then `navigate <url>`');
@@ -727,20 +829,30 @@ async function getReadyPage(port = getPort()) {
     return page;
 }
 
+/**
+ * @param {any} page
+ */
 async function clearConsoleBuffer(page) {
     await page.evaluate(() => {
-        const state = globalThis.__browserAgentTelemetry;
+        const state = (/** @type {any} */ (globalThis)).__browserAgentTelemetry;
         if (state) state.console = [];
     });
 }
 
+/**
+ * @param {any} page
+ * @param {any} limit
+ */
 async function readConsoleBuffer(page, limit) {
-    return await page.evaluate(max => {
-        const logs = globalThis.__browserAgentTelemetry?.console || [];
+    return await page.evaluate((/** @type {any} */ max) => {
+        const logs = (/** @type {any} */ (globalThis)).__browserAgentTelemetry?.console || [];
         return logs.slice(-max);
     }, limit);
 }
 
+/**
+ * @param {any} page
+ */
 async function getViewportInfo(page) {
     return await page.evaluate(() => ({
         width: window.innerWidth,
@@ -749,6 +861,10 @@ async function getViewportInfo(page) {
     }));
 }
 
+/**
+ * @param {any} clip
+ * @param {any} viewport
+ */
 function normalizeClip(clip, viewport) {
     const x = Math.max(0, Math.round(clip.x));
     const y = Math.max(0, Math.round(clip.y));
@@ -764,6 +880,10 @@ function normalizeClip(clip, viewport) {
     return { x, y, width, height };
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function snapshot(port, opts = {}) {
     const page = await getReadyPage(port);
     const targetId = await getPageTargetId(page).catch(() => null);
@@ -783,7 +903,7 @@ async function snapshot(port, opts = {}) {
             await cdp.detach().catch(() => { });
         } catch (e2) {
             throw new Error(
-                `Snapshot failed.\n  ariaSnapshot: ${e1.message}\n  CDP fallback: ${e2.message}\n` +
+                `Snapshot failed.\n  ariaSnapshot: ${(/** @type {any} */ (e1)).message}\n  CDP fallback: ${(/** @type {any} */ (e2)).message}\n` +
                 `  💡 Fix: Try navigating to a page first, or use 'screenshot' for visual inspection`
             );
         }
@@ -798,7 +918,7 @@ async function snapshot(port, opts = {}) {
     if (opts.maxNodes && nodes.length > opts.maxNodes) {
         const totalNodes = nodes.length;
         nodes = nodes.slice(0, opts.maxNodes);
-        nodes.push({ ref: '...', role: 'note', name: `${opts.maxNodes} of ${totalNodes} shown (--max-nodes)`, depth: 0 });
+        nodes.push(/** @type {any} */ ({ ref: '...', role: 'note', name: `${opts.maxNodes} of ${totalNodes} shown (--max-nodes)`, depth: 0 }));
     }
 
     if (opts.persist) {
@@ -819,6 +939,10 @@ async function snapshot(port, opts = {}) {
     return nodes;
 }
 
+/**
+ * @param {any} page
+ * @param {any} node
+ */
 function locatorForSnapshotNode(page, node) {
     const base = node.name
         ? page.getByRole(node.role, { name: node.name })
@@ -826,6 +950,11 @@ function locatorForSnapshotNode(page, node) {
     return base.nth(node.occurrence ?? 0);
 }
 
+/**
+ * @param {any} page
+ * @param {any} port
+ * @param {any} ref
+ */
 async function refToLocator(page, port, ref) {
     const targetId = await getPageTargetId(page).catch(() => null);
     const persisted = targetId ? readPersistedSnapshot(targetId) : null;
@@ -842,11 +971,15 @@ async function refToLocator(page, port, ref) {
         );
     }
 
-    const node = persisted.nodes.find(n => n.ref === ref);
+    const node = persisted.nodes.find((/** @type {any} */ n) => n.ref === ref);
     if (!node) throw new Error(`ref ${ref} not found — re-run snapshot`);
     return locatorForSnapshotNode(page, node);
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function screenshotAction(port, opts = {}) {
     const page = await getReadyPage(port);
     mkdirSync(SCREENSHOTS_DIR, { recursive: true });
@@ -875,6 +1008,11 @@ async function screenshotAction(port, opts = {}) {
     return { path: filepath, dpr: viewport.dpr, viewport: { width: viewport.width, height: viewport.height }, clip };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ * @param {any} opts
+ */
 async function click(port, ref, opts = {}) {
     const page = await getReadyPage(port);
     const locator = await refToLocator(page, port, ref);
@@ -884,6 +1022,12 @@ async function click(port, ref, opts = {}) {
     return { ok: true, url: page.url() };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ * @param {any} text
+ * @param {any} opts
+ */
 async function typeAction(port, ref, text, opts = {}) {
     const page = await getReadyPage(port);
     const locator = await refToLocator(page, port, ref);
@@ -892,12 +1036,20 @@ async function typeAction(port, ref, text, opts = {}) {
     return { ok: true };
 }
 
+/**
+ * @param {any} port
+ * @param {any} key
+ */
 async function press(port, key) {
     const page = await getReadyPage(port);
     await page.keyboard.press(key);
     return { ok: true };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ */
 async function hover(port, ref) {
     const page = await getReadyPage(port);
     const locator = await refToLocator(page, port, ref);
@@ -905,6 +1057,10 @@ async function hover(port, ref) {
     return { ok: true };
 }
 
+/**
+ * @param {any} port
+ * @param {any} url
+ */
 async function navigate(port, url) {
     const page = await getReadyPage(port);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -914,6 +1070,11 @@ async function navigate(port, url) {
     return { ok: true, url: page.url() };
 }
 
+/**
+ * @param {any} port
+ * @param {any} expression
+ * @param {any} opts
+ */
 async function evaluate(port, expression, opts = {}) {
     enforcePolicy(opts.policy || {}, {
         evaluate: true,
@@ -929,12 +1090,22 @@ async function evaluate(port, expression, opts = {}) {
     return { ok: true, result };
 }
 
+/**
+ * @param {any} port
+ * @param {any} format
+ */
 async function getPageText(port, format = 'text') {
     const page = await getReadyPage(port);
     if (format === 'html') return { text: await page.content() };
     return { text: await page.innerText('body') };
 }
 
+/**
+ * @param {any} port
+ * @param {any} x
+ * @param {any} y
+ * @param {any} opts
+ */
 async function mouseClick(port, x, y, opts = {}) {
     const page = await getReadyPage(port);
     if (opts.doubleClick) await page.mouse.dblclick(x, y);
@@ -946,6 +1117,11 @@ async function mouseClick(port, x, y, opts = {}) {
 //  Extended Actions (v2)
 // ═══════════════════════════════════════════════════
 
+/**
+ * @param {any} port
+ * @param {any} direction
+ * @param {any} opts
+ */
 async function scroll(port, direction, opts = {}) {
     const page = await getReadyPage(port);
     const amount = opts.amount || 500;
@@ -953,7 +1129,7 @@ async function scroll(port, direction, opts = {}) {
         down: [0, amount], up: [0, -amount],
         right: [amount, 0], left: [-amount, 0],
     };
-    const [dx, dy] = deltaMap[direction] || [0, amount];
+    const [dx, dy] = (/** @type {any} */ (deltaMap))[direction] || [0, amount];
 
     if (opts.ref) {
         const locator = await refToLocator(page, port, opts.ref);
@@ -967,6 +1143,11 @@ async function scroll(port, direction, opts = {}) {
     return { ok: true, direction, pixels: amount };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ * @param {any} opts
+ */
 async function waitFor(port, ref, opts = {}) {
     const timeout = opts.timeout || 10000;
     const page = await getReadyPage(port);
@@ -985,7 +1166,7 @@ async function waitFor(port, ref, opts = {}) {
         );
     }
 
-    const node = persisted.nodes.find(entry => entry.ref === ref);
+    const node = persisted.nodes.find((/** @type {any} */ entry) => entry.ref === ref);
     if (!node) {
         throw new Error(
             `wait-for: ref ${ref} not found in the last snapshot\n` +
@@ -1004,6 +1185,11 @@ async function waitFor(port, ref, opts = {}) {
     };
 }
 
+/**
+ * @param {any} port
+ * @param {any} selector
+ * @param {any} opts
+ */
 async function waitForSelector(port, selector, opts = {}) {
     const timeout = opts.timeout || 10000;
     const page = await getReadyPage(port);
@@ -1011,6 +1197,11 @@ async function waitForSelector(port, selector, opts = {}) {
     return { ok: true, selector, state: opts.state || 'visible' };
 }
 
+/**
+ * @param {any} port
+ * @param {any} text
+ * @param {any} opts
+ */
 async function waitForText(port, text, opts = {}) {
     const timeout = opts.timeout || 10000;
     const page = await getReadyPage(port);
@@ -1018,18 +1209,24 @@ async function waitForText(port, text, opts = {}) {
     return { ok: true, text, state: opts.state || 'visible' };
 }
 
+/**
+ * @param {any} port
+ * @param {any} target
+ * @param {any} opts
+ */
 async function tabSwitch(port, target, opts = {}) {
     const tabs = await listTabs(port);
     const wantedIndex = Number(target);
     const wanted = Number.isInteger(wantedIndex)
         ? tabs[wantedIndex - 1]
-        : tabs.find(t => t.id === target);
+        : tabs.find((/** @type {any} */ t) => t.id === target);
     if (!wanted) {
         throw new Error(
             `Tab ${target} not found\n` +
             `  💡 Fix: Run 'tabs' and use a valid index or target id`
         );
     }
+    /** @type {any[]|undefined} */
     let activeCommands;
     try {
         activeCommands = await listActiveCommands({
@@ -1042,9 +1239,9 @@ async function tabSwitch(port, target, opts = {}) {
         else {
             const error = new Error(
                 `cannot verify active-command ownership for tab ${wanted.id}\n` +
-                `  💡 Fix: retry, inspect ${cause?.message || 'active-command store'}, or pass --force if you are sure`
+                `  💡 Fix: retry, inspect ${(/** @type {any} */ (cause))?.message || 'active-command store'}, or pass --force if you are sure`
             );
-            error.code = 'active-command.store-unavailable';
+            (/** @type {any} */ (error)).code = 'active-command.store-unavailable';
             error.cause = cause;
             throw error;
         }
@@ -1055,8 +1252,8 @@ async function tabSwitch(port, target, opts = {}) {
             `tab ${wanted.id} is owned by active command ${owner.commandId}\n` +
             `  💡 Fix: wait for the command to finish, or pass --force if you are sure`
         );
-        error.code = 'active-command.target-owned';
-        error.command = owner;
+        (/** @type {any} */ (error)).code = 'active-command.target-owned';
+        (/** @type {any} */ (error)).command = owner;
         throw error;
     }
     const { browser } = await connectCdp(port);
@@ -1075,6 +1272,11 @@ async function tabSwitch(port, target, opts = {}) {
     return { ok: true, tab: Number.isInteger(wantedIndex) ? wantedIndex : null, targetId: wanted.id, title: wanted?.title };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ * @param {any} value
+ */
 async function selectOption(port, ref, value) {
     const page = await getReadyPage(port);
     const locator = await refToLocator(page, port, ref);
@@ -1082,6 +1284,11 @@ async function selectOption(port, ref, value) {
     return { ok: true, ref, value };
 }
 
+/**
+ * @param {any} port
+ * @param {any} ref
+ * @param {any} checked
+ */
 async function setChecked(port, ref, checked) {
     const page = await getReadyPage(port);
     const locator = await refToLocator(page, port, ref);
@@ -1090,6 +1297,11 @@ async function setChecked(port, ref, checked) {
     return { ok: true, ref, checked };
 }
 
+/**
+ * @param {any} port
+ * @param {any} fromRef
+ * @param {any} toRef
+ */
 async function drag(port, fromRef, toRef) {
     const page = await getReadyPage(port);
     const fromLocator = await refToLocator(page, port, fromRef);
@@ -1098,11 +1310,17 @@ async function drag(port, fromRef, toRef) {
     return { ok: true, from: fromRef, to: toRef };
 }
 
+/**
+ * @param {any} ms
+ */
 async function waitMs(ms) {
     await new Promise(r => setTimeout(r, ms));
     return { ok: true, waited: ms };
 }
 
+/**
+ * @param {any} port
+ */
 async function reload(port) {
     const page = await getReadyPage(port);
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -1112,6 +1330,12 @@ async function reload(port) {
     return { ok: true, url: page.url() };
 }
 
+/**
+ * @param {any} port
+ * @param {any} width
+ * @param {any} height
+ * @param {any} opts
+ */
 async function resize(port, width, height, opts = {}) {
     const page = await getReadyPage(port);
 
@@ -1138,7 +1362,7 @@ async function resize(port, width, height, opts = {}) {
                     mode: 'fullscreen',
                     strategy: 'viewport-fallback',
                     viewport,
-                    warning: error.message,
+                    warning: (/** @type {any} */ (error)).message,
                 };
             }
         }
@@ -1159,19 +1383,23 @@ async function resize(port, width, height, opts = {}) {
             width: viewport.width,
             height: viewport.height,
             strategy: 'viewport-fallback',
-            warning: error.message,
+            warning: (/** @type {any} */ (error)).message,
         };
     } finally {
         await cdp.detach().catch(() => { });
     }
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function getDom(port, opts = {}) {
     const page = await getReadyPage(port);
 
     let html;
     if (opts.selector) {
-        html = await page.locator(opts.selector).first().evaluate(node => node.outerHTML);
+        html = await page.locator(opts.selector).first().evaluate((/** @type {any} */ node) => node.outerHTML);
     } else {
         html = await page.content();
     }
@@ -1187,6 +1415,10 @@ async function getDom(port, opts = {}) {
     return { html, truncated: false, shownChars: html.length, totalChars: html.length };
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function captureConsole(port, opts = {}) {
     const page = await getReadyPage(port);
     const duration = opts.duration ?? 0;
@@ -1209,9 +1441,12 @@ async function captureConsole(port, opts = {}) {
     return { logs, count: logs.length, duration, buffered: true };
 }
 
+/**
+ * @param {any} page
+ */
 async function collectPerformanceRequests(page) {
     return page.evaluate(() => {
-        const normalize = (url, type, source) => ({
+        const normalize = (/** @type {any} */ url, /** @type {any} */ type, /** @type {any} */ source) => ({
             method: 'GET',
             url,
             type,
@@ -1233,7 +1468,7 @@ async function collectPerformanceRequests(page) {
         const resourceEntries = performance.getEntriesByType('resource');
         for (const entry of resourceEntries) {
             const url = entry.name;
-            const type = entry.initiatorType || 'resource';
+            const type = (/** @type {any} */ (entry)).initiatorType || 'resource';
             const key = `${type}:${url}`;
             if (!seen.has(key)) {
                 seen.add(key);
@@ -1245,9 +1480,14 @@ async function collectPerformanceRequests(page) {
     });
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function captureNetwork(port, opts = {}) {
     const page = await getReadyPage(port);
     const duration = opts.duration ?? 5000;
+    /** @type {any[]} */
     const liveRequests = [];
     const shouldCaptureLive = opts.reload || duration > 0;
 
@@ -1259,7 +1499,7 @@ async function captureNetwork(port, opts = {}) {
         const cdp = await getCdpSession(port);
         if (!cdp) throw new Error('Could not open CDP session for network capture');
 
-        const handler = params => {
+        const handler = (/** @type {any} */ params) => {
             liveRequests.push({
                 method: params.request.method,
                 url: params.request.url,
@@ -1298,18 +1538,31 @@ async function captureNetwork(port, opts = {}) {
     };
 }
 
+/**
+ * @param {any} port
+ * @param {any} x
+ * @param {any} y
+ */
 async function moveMouse(port, x, y) {
     const page = await getReadyPage(port);
     await page.mouse.move(x, y);
     return { ok: true, position: { x, y } };
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function mouseDown(port, opts = {}) {
     const page = await getReadyPage(port);
     await page.mouse.down({ button: opts.button || 'left' });
     return { ok: true, button: opts.button || 'left' };
 }
 
+/**
+ * @param {any} port
+ * @param {any} opts
+ */
 async function mouseUp(port, opts = {}) {
     const page = await getReadyPage(port);
     await page.mouse.up({ button: opts.button || 'left' });
@@ -1328,7 +1581,7 @@ const browserDeps = {
     getTargetId: () => getActiveTargetId(getPort()),
     getBrowserStatus: (port = getPort()) => getBrowserStatus(Number(port)),
     readBrowserState: () => readPersistedState(),
-    ensureStarted: (options = {}) => launchChrome(Number(options.port || getPort()), options),
+    ensureStarted: (options = {}) => launchChrome(Number((/** @type {any} */ (options)).port || getPort()), options),
 };
 
 try {
@@ -1344,32 +1597,32 @@ try {
                     console.log(`             ${skill.path}`);
                 }
             } else if (result.type === 'install') {
-                if (result.result.help) {
-                    console.log(result.result.usage);
+                if ((/** @type {any} */ (result.result)).help) {
+                    console.log((/** @type {any} */ (result.result)).usage);
                 } else if (result.result.json) {
                     console.log(JSON.stringify(result.result, null, 2));
                 } else {
-                    console.log(`installed ${result.result.installed.length} skills to ${result.result.targetRoot}`);
-                    for (const item of result.result.installed) {
+                    console.log(`installed ${(/** @type {any} */ (result.result)).installed.length} skills to ${(/** @type {any} */ (result.result)).targetRoot}`);
+                    for (const item of (/** @type {any} */ (result.result)).installed) {
                         console.log(`  ${item.action.padEnd(6)} ${item.name} -> ${item.path}`);
                     }
                 }
             } else {
-                console.log(result.text);
+                console.log((/** @type {any} */ (result)).text);
             }
             break;
         }
         case 'install-skills': {
             const result = runInstallSkillsCli(process.argv.slice(3), { sourceRoot: SKILLS_ROOT });
-            if (result.help) {
-                console.log(result.usage);
+            if ((/** @type {any} */ (result)).help) {
+                console.log((/** @type {any} */ (result)).usage);
                 break;
             }
             if (result.json) {
                 console.log(JSON.stringify(result, null, 2));
             } else {
-                console.log(`installed ${result.installed.length} skills to ${result.targetRoot}`);
-                for (const item of result.installed) {
+                console.log(`installed ${(/** @type {any} */ (result)).installed.length} skills to ${(/** @type {any} */ (result)).targetRoot}`);
+                for (const item of (/** @type {any} */ (result)).installed) {
                     console.log(`  ${item.action.padEnd(6)} ${item.name} -> ${item.path}`);
                 }
             }
@@ -1414,11 +1667,11 @@ try {
                     'max-nodes': { type: 'string' },
                 }, strict: false,
             });
-            const maxNodes = values['max-nodes'] ? parseInt(values['max-nodes']) : undefined;
+            const maxNodes = values['max-nodes'] ? parseInt(/** @type {string} */ (values['max-nodes'])) : undefined;
             const nodes = await snapshot(getPort(), { interactive: values.interactive, maxNodes, persist: true });
             for (const n of nodes) {
                 const indent = '  '.repeat(n.depth);
-                const val = n.value ? ` = "${n.value}"` : '';
+                const val = (/** @type {any} */ (n)).value ? ` = "${(/** @type {any} */ (n)).value}"` : '';
                 console.log(`${n.ref.padEnd(4)} ${indent}${n.role.padEnd(10)} "${n.name}"${val}`);
             }
             break;
@@ -1607,10 +1860,10 @@ try {
             const leaseResult = await cleanupPoolTabs(getPort());
             const result = await cleanupIdleTabs(getPort(), {
                 idleTimeoutMs: values['idle-after'] ? parseDuration(values['idle-after']) : undefined,
-                maxTabs: values['max-tabs'] ? parseInt(values['max-tabs'], 10) : undefined,
+                maxTabs: values['max-tabs'] ? parseInt(/** @type {string} */ (values['max-tabs']), 10) : undefined,
                 includeUntracked: values['include-untracked'] === true,
-                provider: values.provider,
-                keepProviderTabs: values['keep-provider-tabs'] ? parseInt(values['keep-provider-tabs'], 10) : undefined,
+                provider: /** @type {any} */ (values.provider),
+                keepProviderTabs: values['keep-provider-tabs'] ? parseInt(/** @type {string} */ (values['keep-provider-tabs']), 10) : undefined,
             });
             const combined = {
                 ...result,
@@ -1646,7 +1899,7 @@ try {
                     'max-chars': { type: 'string' },
                 }, strict: false,
             });
-            const maxChars = values['max-chars'] ? parseInt(values['max-chars']) : undefined;
+            const maxChars = values['max-chars'] ? parseInt(/** @type {string} */ (values['max-chars'])) : undefined;
             const r = await getDom(getPort(), { selector: values.selector, maxChars });
             if (r.truncated) {
                 console.error(`[truncated: ${r.shownChars}/${r.totalChars} chars]`);
@@ -1665,8 +1918,8 @@ try {
                     reload: { type: 'boolean', default: false },
                 }, strict: false,
             });
-            const duration = values.duration ? parseInt(values.duration, 10) : 0;
-            const limit = values.limit ? parseInt(values.limit, 10) : 50;
+            const duration = values.duration ? parseInt(/** @type {string} */ (values.duration), 10) : 0;
+            const limit = values.limit ? parseInt(/** @type {string} */ (values.limit), 10) : 50;
             const r = await captureConsole(getPort(), {
                 duration,
                 expression: values.expression,
@@ -1691,7 +1944,7 @@ try {
                     reload: { type: 'boolean', default: false },
                 }, strict: false,
             });
-            const duration = values.duration ? parseInt(values.duration, 10) : 0;
+            const duration = values.duration ? parseInt(/** @type {string} */ (values.duration), 10) : 0;
             const r = await captureNetwork(getPort(), {
                 duration,
                 filter: values.filter,
@@ -2082,6 +2335,6 @@ try {
     // Force exit — playwright CDP WebSocket keeps event loop alive
     process.exit(0);
 } catch (e) {
-    if (!e?.alreadyReported) console.error(`❌ ${e.message}`);
+    if (!(/** @type {any} */ (e))?.alreadyReported) console.error(`❌ ${(/** @type {any} */ (e)).message}`);
     process.exit(1);
 }
