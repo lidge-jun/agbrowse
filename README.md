@@ -712,6 +712,31 @@ structure drift, fixture evals, package dry-run, and high-severity dependency
 audit. Use `npm run test:mcp`, `npm run test:source-audit`, and
 `npm run test:release-gates` when checking those surfaces directly.
 
+Phase 22 also wires single-name release gates that fold those checks into one
+runner (`scripts/release-gates.mjs`):
+
+```bash
+npm run gate:all                                  # run every named gate
+npm run gate:typecheck                            # node --check + structure drift
+npm run gate:tests                                # unit + MCP + source-audit + trace-policy
+npm run gate:truth-table-fresh                    # CAPABILITY_TRUTH_TABLE.md ≤ 7 days old
+npm run gate:mcp-scope-frozen                     # only the 2 frozen browser_* tools
+npm run gate:no-experimental-in-readme-ready-section
+```
+
+The capability/claim truth table for both `agbrowse` and the `cli-jaw` mirror
+lives at [`structure/CAPABILITY_TRUTH_TABLE.md`](structure/CAPABILITY_TRUTH_TABLE.md);
+update that file in the same commit as any capability or claim change.
+
+Strict-migration baseline checks shipped alongside the gates:
+
+```bash
+npm run check:strict-baseline    # JSDoc opt-in regression guard
+npm run check:module-graph       # module dependency graph regression
+npm run smoke:bins               # published bin entrypoints boot
+npm run typecheck                # tsc --noEmit on the strict surface
+```
+
 For npm trusted publishing through GitHub Actions, configure npm's trusted
 publisher for:
 

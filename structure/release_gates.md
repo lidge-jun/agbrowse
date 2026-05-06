@@ -45,6 +45,10 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 - [ ] `npm run test:mcp`
 - [ ] `npm run test:source-audit`
 - [ ] `npm run test:release-gates`
+- [ ] `npm run gate:all` (named release gates: typecheck, tests, truth-table-fresh, mcp-scope-frozen, no-experimental-in-readme-ready-section)
+- [ ] `node scripts/check-strict-baseline.mjs`
+- [ ] `npm run check:module-graph`
+- [ ] `npm run smoke:bins`
 - [ ] `npm run benchmark:trajectory -- --help`
 - [ ] `npm pack --dry-run`
 - [ ] `npm publish --dry-run --access public` 또는 preview면 `--tag preview`
@@ -63,6 +67,17 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | `npm run test:mcp` | MCP protocol/schema/policy tests | Phase 18 ready claim이 실제 tool surface와 일치하는지 확인 |
 | `npm run test:source-audit` | answer artifact + source audit tests | Phase 17 research/source claim 차단 |
 | `npm run test:release-gates` | structure drift + count checks | Phase status, command, release claim drift 차단 |
+| `npm run gate:all` | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) | capability table freshness, frozen MCP scope, README 라벨 일치를 단일 명령으로 검증 |
+| `npm run gate:typecheck` | `node --check` + `check-doc-drift.sh` | 공개 .mjs 진입점 syntax + 구조 문서 일치 |
+| `npm run gate:tests` | unit + MCP + source-audit + trace-policy 통합 실행 | 핵심 회귀 suite 한 번에 |
+| `npm run gate:truth-table-fresh` | `structure/CAPABILITY_TRUTH_TABLE.md` 7일 이내 갱신 또는 코드 ref 일치 | capability claim drift 차단 |
+| `npm run gate:mcp-scope-frozen` | MCP `browser_*` tool 등록 범위가 frozen scope (`browser_snapshot`, `browser_click_ref`)에 머무는지 확인 | 미구현 browser MCP tool 노출 차단 |
+| `npm run gate:no-experimental-in-readme-ready-section` | README ready 섹션이 external CDP 등 experimental 표면을 광고하지 않는지 검사 | 라벨 drift 차단 |
+| `npm run check:strict-baseline` (`node scripts/check-strict-baseline.mjs`) | strict-migration JSDoc opt-in baseline 회귀 차단 | 이미 strict로 옮긴 파일이 다시 untyped로 돌아가지 않게 한다 |
+| `npm run check:module-graph` | `scripts/check-module-graph.mjs` 모듈 의존성 그래프 회귀 검사 | leaf/utility layer 경계 보존 |
+| `npm run smoke:bins` | published bin entrypoint smoke (`agbrowse`, `agbrowse-vision-click`) | 패키징 후 bin shim이 부팅하는지 확인 |
+| `npm run typecheck` / `typecheck:checkjs` / `typecheck:checkjs-dom` | `tsc --noEmit` (root, JSDoc opt-in, DOM-aware JSDoc opt-in) | strict-migration 진행 표면이 깨지지 않는지 확인 |
+| `npm run pack:dry` | `npm pack --dry-run --json` | 패키징 manifest 회귀 확인 |
 | `npm run benchmark:trajectory` | offline trajectory bundle writer | score가 아니라 sanitized trajectory artifact 생성만 허용 |
 | `npm run release` | latest release script | clean tree, install, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `npm run release:preview` | preview release script | preview version, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
@@ -80,5 +95,6 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 
 ## 변경 기록
 
+- 2026-05-06: Phase 22 named release gates (`gate:all`, `gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`)와 strict-baseline / module-graph / bin smoke / pack dry-run 명령을 release path에 추가했다. capability 주장은 [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md)가 단일 source of truth다.
 - 2026-05-05: MCP/source-audit/release-gate named scripts를 release path에 추가해 public claim gate가 `npm test` 안에 묻히지 않게 했다.
 - 2026-05-05: Phase 21 release gate 요구를 현재 npm scripts, package dry-run, support label 기준으로 정리했다.

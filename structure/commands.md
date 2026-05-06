@@ -22,7 +22,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Lifecycle | `start`, `stop`, `status`, `reset` | Chrome CDP lifecycle |
 | Observe | `snapshot`, `screenshot`, `text`, `get-dom` | DOM/ref/text/screenshot 관찰 |
 | Act | `click`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `drag`, `mouse-click`, `move-mouse`, `mouse-down`, `mouse-up` | ref 기반 또는 coordinate 기반 mutation |
-| Navigate | `navigate`, `reload`, `resize`, `tabs`, `tab-switch`, `select-tab`, `tab-cleanup`, `scroll` | navigation, viewport, tab 관리 |
+| Navigate | `navigate`, `reload`, `resize`, `tabs`, `tab-switch`, `select-tab`, `new-tab`, `tab-close`, `tab-cleanup`, `scroll` | navigation, viewport, tab 관리 (multi-tab create/close 포함) |
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
 | Diagnostics | `console`, `network`, `evaluate` | console/network capture와 explicit unsafe JS evaluation |
 | Web AI | `web-ai` | provider workflow subcommand |
@@ -106,4 +106,5 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 
 ## 변경 기록
 
+- 2026-05-06: Phase 9.1 multi-tab의 `new-tab`, `tab-close` 명령을 root command 표에 추가해 README와 일치시켰다.
 - 2026-05-05: root CLI, web-ai, MCP tool, provider alias, failure envelope, drift 검사 기준을 source-of-truth 문서로 추가했다.

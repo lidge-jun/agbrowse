@@ -82,5 +82,6 @@ graph LR
 
 ## 변경 기록
 
+- 2026-05-06: strict-migration P02–P51 + Phase 22 머지 이후 `str_func.md` 스냅샷, `commands.md` root command 표(`new-tab`, `tab-close`), `release_gates.md`의 `gate:*` named release gate 표를 동기화했다. capability/claim 진실은 [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md)에 모았다.
 - 2026-05-05: Phase 11+ claim status를 [phase_status.md](phase_status.md)에 분리해 partial/deferred phase가 완료로 오해되지 않게 했다.
 - 2026-05-05: `cli-jaw/structure` 패턴을 `agbrowse`에 맞게 축소하지 않고 drift/count 검증 스크립트까지 포함한 source-of-truth 허브로 추가했다.
