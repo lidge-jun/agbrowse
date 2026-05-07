@@ -53,7 +53,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, openSync, closeSync, statSync } from 'node:fs';
 import net from 'node:net';
 import {
     parseAriaYaml,
@@ -317,6 +317,7 @@ async function runStartDoctor(opts = {}) {
     if (process.env.AGBROWSE_HEAVY_SITE_COMPAT === '1') envLeaks.push('AGBROWSE_HEAVY_SITE_COMPAT=1');
     if (process.env.AGBROWSE_KEEP_BG_NETWORKING === '1') envLeaks.push('AGBROWSE_KEEP_BG_NETWORKING=1');
     if (process.env.AGBROWSE_CHROME_FLAGS) envLeaks.push(`AGBROWSE_CHROME_FLAGS=${process.env.AGBROWSE_CHROME_FLAGS}`);
+    if (process.env.AGBROWSE_ENABLE_AUTOMATION === '1') envLeaks.push('AGBROWSE_ENABLE_AUTOMATION=1');
     if (envLeaks.length === 0) {
         checks.push({ id: 'env-vars', ok: true, severity: 'info', detail: 'no agbrowse env-var overrides set' });
     } else {
@@ -331,7 +332,7 @@ async function runStartDoctor(opts = {}) {
         });
     }
 
-    // 5. macOS Chrome.app singleton
+    // 5. Chrome singleton detection (all platforms)
     if (process.platform === 'darwin') {
         try {
             const ps = spawnSync('pgrep', ['-fa', 'Google Chrome'], { encoding: 'utf8', timeout: 2000 });
@@ -339,7 +340,6 @@ async function runStartDoctor(opts = {}) {
             const usingOurProfile = lines.filter(l => l.includes(PROFILE_DIR));
             const otherInstances = lines.filter(l => !l.includes(PROFILE_DIR));
             if (usingOurProfile.length > 0 && lock && !isStaleLock(lock) && lock.pid && isPidAlive(lock.pid)) {
-                // expected — our own Chrome
                 checks.push({
                     id: 'chrome-singleton',
                     ok: true,
@@ -372,6 +372,40 @@ async function runStartDoctor(opts = {}) {
             }
         } catch {
             checks.push({ id: 'chrome-singleton', ok: true, severity: 'info', detail: 'pgrep unavailable; skipped' });
+        }
+    } else if (process.platform === 'win32') {
+        try {
+            const ps = spawnSync('tasklist', ['/FI', 'IMAGENAME eq chrome.exe', '/NH'], {
+                encoding: 'utf8', timeout: 3000,
+            });
+            const chromeLines = (ps.stdout || '').trim().split('\n')
+                .filter(l => l.toLowerCase().includes('chrome.exe'));
+            if (chromeLines.length > 0) {
+                checks.push({
+                    id: 'chrome-singleton',
+                    ok: true,
+                    severity: 'warn',
+                    detail: `${chromeLines.length} chrome.exe process(es) running — singleton risk if profile dir creation fails`,
+                    fix: 'agbrowse uses unique profile to avoid absorption. If launch fails, close all Chrome windows.',
+                });
+            } else {
+                checks.push({ id: 'chrome-singleton', ok: true, severity: 'info', detail: 'no chrome.exe running' });
+            }
+        } catch {
+            checks.push({ id: 'chrome-singleton', ok: true, severity: 'info', detail: 'tasklist unavailable; skipped' });
+        }
+    } else {
+        const singletonLock = join(PROFILE_DIR, 'SingletonLock');
+        if (existsSync(singletonLock)) {
+            checks.push({
+                id: 'chrome-singleton',
+                ok: true,
+                severity: 'warn',
+                detail: `stale SingletonLock found at ${singletonLock}`,
+                fix: `rm -f "${PROFILE_DIR}/Singleton*" then retry`,
+            });
+        } else {
+            checks.push({ id: 'chrome-singleton', ok: true, severity: 'info', detail: 'no singleton lock conflict' });
         }
     }
 
@@ -563,56 +597,87 @@ async function killPersistedChrome(pid) {
     }
 }
 
+function validateProfileDir(dir) {
+    const probe = join(dir, '.agbrowse-probe');
+    try {
+        writeFileSync(probe, 'ok', { flag: 'w' });
+        rmSync(probe, { force: true });
+    } catch (err) {
+        throw new Error(
+            `Profile directory is not writable: ${dir}\n` +
+            `Chrome will silently fall back to the default profile and singleton-absorb.\n` +
+            `Fix: ensure the directory exists and is writable, or set BROWSER_AGENT_HOME to a writable path.\n` +
+            `Original error: ${/** @type {any} */ (err).message}`
+        );
+    }
+}
+
 /**
  * @param {any} customChromePath
+ * @param {{ preferAlternate?: boolean }} [findOpts]
  */
-function findChrome(customChromePath = CUSTOM_CHROME_PATH) {
+function findChrome(customChromePath = CUSTOM_CHROME_PATH, { preferAlternate = false } = {}) {
     if (customChromePath) {
         if (existsSync(customChromePath)) return customChromePath;
         throw new Error(`Custom Chrome path not found: ${customChromePath}`);
     }
 
     const platform = process.platform;
-    const paths = [];
+    const stable = [];
+    const alternate = [];
 
     if (platform === 'darwin') {
-        paths.push(
+        stable.push(
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            `${homedir()}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+        );
+        alternate.push(
+            '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
             '/Applications/Chromium.app/Contents/MacOS/Chromium',
             '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-            `${homedir()}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
         );
     } else if (platform === 'win32') {
         const pf = process.env.PROGRAMFILES || 'C:\\Program Files';
         const pf86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
         const local = process.env.LOCALAPPDATA || '';
-        paths.push(
+        stable.push(
             `${pf}\\Google\\Chrome\\Application\\chrome.exe`,
             `${pf86}\\Google\\Chrome\\Application\\chrome.exe`,
             `${local}\\Google\\Chrome\\Application\\chrome.exe`,
+        );
+        alternate.push(
+            `${local}\\Google\\Chrome SxS\\Application\\chrome.exe`,
+            `${local}\\Google\\Chrome Dev\\Application\\chrome.exe`,
+            `${local}\\Google\\Chrome Beta\\Application\\chrome.exe`,
+            `${local}\\Chromium\\Application\\chrome.exe`,
             `${pf}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
         );
     } else {
-        paths.push(
+        stable.push(
             '/usr/bin/google-chrome-stable',
             '/usr/bin/google-chrome',
+        );
+        alternate.push(
             '/usr/bin/chromium-browser',
             '/usr/bin/chromium',
             '/snap/bin/chromium',
             '/usr/bin/brave-browser',
         );
         if (isWSL()) {
-            paths.push(
+            stable.push(
                 '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
                 '/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe',
             );
         }
     }
 
-    for (const p of paths) {
+    const ordered = preferAlternate
+        ? [...alternate, ...stable]
+        : [...stable, ...alternate];
+    for (const p of ordered) {
         if (p && existsSync(p)) return p;
     }
-    throw new Error('Chrome not found — install Google Chrome');
+    throw new Error('Chrome not found — install Google Chrome or Chromium');
 }
 
 /**
@@ -669,7 +734,8 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
     const lockResult = acquireProfileLock(DATA_DIR);
     activeLockToken = lockResult.token;
     try {
-        mkdirSync(DATA_DIR, { recursive: true });
+        mkdirSync(PROFILE_DIR, { recursive: true });
+        validateProfileDir(PROFILE_DIR);
         const chrome = findChrome(opts.chromePath);
         const noSandbox = process.env.CHROME_NO_SANDBOX === '1';
 
@@ -679,12 +745,14 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
         const minHeight = Math.max(opts.height || 900, 720);
 
         const extraFlags = (process.env.AGBROWSE_CHROME_FLAGS || '').split(/\s+/).filter(Boolean);
+        const enableAutomation = process.env.AGBROWSE_ENABLE_AUTOMATION === '1';
         const baseFlags = [
             `--remote-debugging-port=${port}`,
             `--user-data-dir=${PROFILE_DIR}`,
             `--window-size=${minWidth},${minHeight}`,
             '--no-first-run', '--no-default-browser-check',
             '--disable-dev-shm-usage',
+            ...(enableAutomation ? ['--enable-automation'] : []),
         ];
         const networkingFlag = process.env.AGBROWSE_KEEP_BG_NETWORKING === '1'
             ? []
@@ -696,6 +764,10 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
         const compatFlags = process.env.AGBROWSE_HEAVY_SITE_COMPAT === '1'
             ? ['--disable-features=CrossOriginOpenerPolicy,CrossOriginEmbedderPolicy']
             : [];
+        const stderrPath = join(DATA_DIR, 'chrome-stderr.log');
+        const stderrFd = openSync(stderrPath, 'w');
+        console.error(`[browser] launching: ${chrome}`);
+        console.error(`[browser] user-data-dir: ${PROFILE_DIR}`);
         chromeProc = spawn(chrome, [
             ...baseFlags,
             ...networkingFlag,
@@ -704,8 +776,9 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
             ...(noSandbox ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
             ...(headless ? ['--headless=new'] : []),
             'about:blank',
-        ], { detached: true, stdio: 'ignore' });
+        ], { detached: true, stdio: ['ignore', 'ignore', stderrFd] });
         chromeProc.unref();
+        closeSync(stderrFd);
 
         updateLockPid(DATA_DIR, lockResult.token, /** @type {number} */ (chromeProc.pid));
 
@@ -723,25 +796,46 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
             });
             if (!headless) await foregroundCdpWindow(port, chrome);
         } else {
+            const stderr = existsSync(stderrPath)
+                ? readFileSync(stderrPath, 'utf8').trim().slice(-2000) : '';
             if (chromeProc && !chromeProc.killed) {
                 console.error(`[browser] failed launch: spawned PID ${chromeProc.pid} but CDP did not respond after 10s`);
+                if (stderr) console.error(`[browser] chrome stderr:\n${stderr}`);
                 chromeProc.kill('SIGTERM');
                 chromeProc = null;
             }
             clearPersistedState();
+
+            if (!opts._retried && !opts.chromePath) {
+                const altChrome = findChrome(null, { preferAlternate: true });
+                if (altChrome !== chrome) {
+                    console.warn(`[browser] retrying with alternate browser: ${basename(altChrome)}`);
+                    releaseProfileLock(DATA_DIR, lockResult.token);
+                    activeLockToken = null;
+                    return launchChrome(port, { ...opts, chromePath: altChrome, _retried: true });
+                }
+            }
+
             const lockPath = join(DATA_DIR, 'profile.lock');
             const portInfo = await describePortHolder(port).catch(() => null);
             const portLine = portInfo
                 ? `Port ${port} held by ${portInfo}.`
                 : `Port ${port} held by another process.`;
+            const canaryHint = process.platform === 'win32'
+                ? 'Install Chrome Canary → https://www.google.com/chrome/canary/'
+                : process.platform === 'darwin'
+                    ? 'brew install --cask google-chrome-canary'
+                    : '';
             throw new Error(
                 `Chrome CDP not responding on port ${port} after 10s.\n` +
                 `\n` +
                 `Diagnose: agbrowse doctor\n` +
+                (stderr ? `Chrome stderr: ${stderr.slice(0, 200)}\n` : '') +
                 `\n` +
                 `Likely causes (most common first):\n` +
-                `  1. macOS/Win Chrome singleton absorbed the launch.\n` +
-                `       → Quit all Chrome windows, then: agbrowse start --headed\n` +
+                `  1. Chrome singleton absorbed the launch.\n` +
+                `       → Close all Chrome windows, then: agbrowse start --headed\n` +
+                (canaryHint ? `       → Or: ${canaryHint}\n` : '') +
                 `  2. ${portLine}\n` +
                 `       → agbrowse start --port ${port + 1}\n` +
                 `  3. Stale profile lock at ${lockPath}.\n` +
@@ -2925,7 +3019,12 @@ try {
     AGBROWSE_CHROME_FLAGS  Extra Chrome launch flags (space-separated)
     CHROME_HEADLESS=1      Force headless mode unless start --headed is passed
     CHROME_NO_SANDBOX=1    Disable sandbox (Docker/CI)
-    CHROME_BINARY_PATH     Custom Chrome/Chromium binary path
+    AGBROWSE_ENABLE_AUTOMATION=1
+                           Pass --enable-automation to Chrome (drops singleton
+                           notifications but sets navigator.webdriver=true)
+    CHROME_BINARY_PATH     Custom Chrome/Canary/Chromium binary path.
+                           Win Canary: %LOCALAPPDATA%\\Google\\Chrome SxS\\Application\\chrome.exe
+                           macOS Canary: /Applications/Google Chrome Canary.app/.../Google Chrome Canary
 
   Configuration model:
     npm package files include bin/, skills/, and web-ai/.
