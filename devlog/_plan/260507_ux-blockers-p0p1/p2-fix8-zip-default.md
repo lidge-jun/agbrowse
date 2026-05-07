@@ -1,4 +1,4 @@
-# Fix 8 — Zip Default for Multi-File Upload Context Packages
+# Fix 8 — Auto-ZIP for All Upload-Transport Context Packages
 
 **Priority: P2** | **Status: planned** | **Audit: R8-R10 PASS**
 
@@ -9,10 +9,15 @@
 | `web-ai/context-pack/file-selector.mjs` | MODIFY |
 | `web-ai/context-pack/builder.mjs` | MODIFY |
 | `package.json` | MODIFY (add `archiver` dep) |
+| `package-lock.json` | AUTO (updated by `npm install archiver`) |
 
 ## Problem
 
-When `--context-from-files` resolves multiple files and transport is `upload`, agbrowse writes a single `.md` concatenation. This excludes binary files (images, PDFs) and can exceed size limits. ChatGPT/Gemini/Grok all read zip contents natively.
+When transport is `upload`, agbrowse writes a `.md` text concatenation — regardless of file count. This has two issues:
+1. Binary files (images, PDFs) are excluded during text read
+2. Large text packages are uncompressed — slow upload via CDP file input
+
+Applies to ALL upload-transport packaging (multi-file AND single-file), not just multi-file scenarios. ChatGPT/Gemini/Grok all read zip contents natively.
 
 ## Diffs
 

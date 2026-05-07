@@ -1,6 +1,7 @@
 // @ts-check
-import { createTab, isTabAlive, getPageByTargetId, listManagedTabs } from '../skills/browser/tab-manager.mjs';
+import { createTab, isTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs } from '../skills/browser/tab-manager.mjs';
 import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
+import { waitForConversationReady } from './navigation-ready.mjs';
 
 /** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
 
@@ -37,8 +38,12 @@ export async function recoverSessionTab(deps, session) {
         if (page) {
             const currentUrl = page.url();
             if (currentUrl !== session.conversationUrl) {
-                // Navigate to correct URL
-                await page.goto(/** @type {string} */ (session.conversationUrl), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                await page.goto(/** @type {string} */ (session.conversationUrl), { waitUntil: 'load', timeout: 30_000 });
+                await waitForConversationReady(page, session.conversationUrl);
+                const finalUrl = page.url();
+                if (finalUrl !== session.conversationUrl) {
+                    await updateSession(session.sessionId, { conversationUrl: finalUrl });
+                }
             }
             return {
                 recovered: true,
@@ -50,10 +55,22 @@ export async function recoverSessionTab(deps, session) {
 
     // 2. Create new tab
     const newTab = await createTab(port, session.conversationUrl || 'about:blank');
+    let recoveredConversationUrl = session.conversationUrl;
+    if (session.conversationUrl && session.conversationUrl !== 'about:blank') {
+        const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
+        if (newPage) {
+            await waitForConversationReady(newPage, session.conversationUrl);
+            const finalUrl = /** @type {any} */ (newPage).url();
+            if (finalUrl !== session.conversationUrl) {
+                recoveredConversationUrl = finalUrl;
+            }
+        }
+    }
 
     // 3. Update session binding
     await updateSession(session.sessionId, {
         targetId: newTab.targetId,
+        conversationUrl: recoveredConversationUrl,
         tabState: {
             ...session.tabState,
             recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
@@ -195,7 +212,12 @@ export async function withSessionPage(deps, sessionId, fn) {
         const page = await getPageByTargetId(port, /** @type {string} */ (current.targetId));
         if (!page) throw new Error(`Session ${sessionId} page not found for targetId ${current.targetId}`);
         if (current.conversationUrl && page.url() !== current.conversationUrl) {
-            await page.goto(current.conversationUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+            await page.goto(current.conversationUrl, { waitUntil: 'load', timeout: 30_000 });
+            await waitForConversationReady(page, current.conversationUrl);
+            const finalUrl = page.url();
+            if (finalUrl !== current.conversationUrl) {
+                updateSession(sessionId, { conversationUrl: finalUrl });
+            }
         }
         return { page, targetId: current.targetId, session: current };
     }

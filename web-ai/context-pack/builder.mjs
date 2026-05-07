@@ -1,7 +1,9 @@
 // @ts-check
+import { createWriteStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
+import archiver from 'archiver';
 import { DEFAULT_INLINE_CHAR_LIMIT } from './constants.mjs';
 import { buildContextPack } from './file-selector.mjs';
 import { buildContextRenderResult } from './renderer.mjs';
@@ -54,7 +56,8 @@ export async function buildInlineContextOrFail(input = {}) {
 /** @param {BuilderInput} [input] */
 export async function prepareContextForBrowser(input = {}) {
     if (!hasContextPackaging(input)) return null;
-    const result = await buildContextPackageResult({ ...input, strict: true });
+    const selected = await buildContextPack({ ...input, strict: true });
+    const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
     if (result.budget.estimatedTokens > result.budget.maxInputTokens) {
         throw overBudgetError(result.budget);
     }
@@ -65,15 +68,17 @@ export async function prepareContextForBrowser(input = {}) {
         }
         return result;
     }
-    if (!result.attachmentText.trim()) throw new WebAiError({
+    const zipPaths = selected.allPaths?.length ? selected.allPaths : selected.files.map(f => f.path);
+    if (!zipPaths.length) throw new WebAiError({
         errorCode: 'context.over-budget',
         stage: 'context-preflight',
         retryHint: 'reduce-files',
         message: 'context package attachment is empty',
     });
     await fs.mkdir(PACKAGE_DIR, { recursive: true });
-    const filePath = join(PACKAGE_DIR, `web-ai-context-package-${Date.now()}.md`);
-    await fs.writeFile(filePath, `${result.attachmentText}\n`, 'utf8');
+    const cwd = input.cwd || process.cwd();
+    const filePath = join(PACKAGE_DIR, `web-ai-context-package-${Date.now()}.zip`);
+    await zipContextFiles(zipPaths, cwd, filePath);
     const stat = await fs.stat(filePath);
     result.attachments = [{
         path: filePath,
@@ -116,4 +121,26 @@ function inlineLimitError(length, limit) {
         message: `context package exceeds inline limit: ${length}/${limit} chars`,
         evidence: { length, limit },
     });
+}
+
+/**
+ * @param {string[]} filePaths
+ * @param {string} cwd
+ * @param {string} outputPath
+ */
+async function zipContextFiles(filePaths, cwd, outputPath) {
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    const output = createWriteStream(outputPath);
+    const done = new Promise((resolve, reject) => {
+        output.on('close', resolve);
+        archive.on('error', reject);
+    });
+    archive.pipe(output);
+    for (const absPath of filePaths) {
+        const stat = await fs.lstat(absPath).catch(() => null);
+        if (!stat?.isFile()) continue;
+        archive.file(absPath, { name: relative(cwd, absPath) });
+    }
+    await archive.finalize();
+    await done;
 }

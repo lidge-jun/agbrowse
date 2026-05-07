@@ -23,8 +23,8 @@ Eight UX blockers from real-world agbrowse usage. Fixes 1-6 went through 7 round
 | Fix | File(s) | Description |
 |-----|---------|-------------|
 | [Fix 2](p2-fix2-same-tab-reuse.md) | `cli.mjs` | Session-aware `--new-tab` default |
-| [Fix 6](p2-fix6-session-url-reuse.md) | `chatgpt.mjs`, `tab-recovery.mjs` | Selector wait + redirect URL persist |
-| [Fix 8](p2-fix8-zip-default.md) | `file-selector.mjs`, `builder.mjs` | Zip packaging for upload transport |
+| [Fix 6](p2-fix6-session-url-reuse.md) | `navigation-ready.mjs` (NEW), `chatgpt.mjs`, `tab-recovery.mjs` | Selector wait + redirect URL persist |
+| [Fix 8](p2-fix8-zip-default.md) | `file-selector.mjs`, `builder.mjs`, `package.json` | Auto-zip for all upload transport |
 
 ## Files Changed Summary
 

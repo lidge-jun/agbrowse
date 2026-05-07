@@ -47,7 +47,7 @@ export async function buildContextPack(input = {}) {
     }
 
     if (files.length === 0) warnings.push('no context files included');
-    return { files, excluded, warnings };
+    return { files, excluded, warnings, allPaths: paths };
 }
 
 /**

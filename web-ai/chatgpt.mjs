@@ -37,6 +37,7 @@ import { resolveTargetForIntent } from './target-resolver.mjs';
 import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTraceSteps } from './action-trace.mjs';
 import { appendTraceToSession } from './trace-persistence.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
+import { waitForConversationReady } from './navigation-ready.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 const ASSISTANT_SELECTORS = [
@@ -146,7 +147,12 @@ export async function sendWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
     if (input.url) {
         const page = await deps.getPage();
-        await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await page.goto(input.url, { waitUntil: 'load', timeout: 30_000 });
+        await waitForConversationReady(page, input.url);
+        const redirectedUrl = page.url();
+        if (redirectedUrl !== input.url) {
+            input.url = redirectedUrl;
+        }
     }
     const page = await requireChatGptPage(deps);
     const contextPack = await prepareContextForBrowser(input);

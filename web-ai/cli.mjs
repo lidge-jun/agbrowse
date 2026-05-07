@@ -440,7 +440,7 @@ async function runWebAiCliInner(argv = [], deps) {
         maxDepth: values['max-depth'],
         rootSelector: values['root-selector'],
         forceNewTab: values['new-tab'] === true || values.parallel === true,
-        newTab: values['new-tab'] === true || values.parallel === true || (['send', 'query'].includes(command) && values['reuse-tab'] !== true && process.env.AGBROWSE_REUSE_TAB !== '1'),
+        newTab: values['new-tab'] === true || values.parallel === true || (['send', 'query'].includes(command) && values['reuse-tab'] !== true && !values.session && process.env.AGBROWSE_REUSE_TAB !== '1'),
         reuseTab: values['reuse-tab'] === true || process.env.AGBROWSE_REUSE_TAB === '1',
         evalConfig: values.config,
         evalFixtures: values.fixtures,

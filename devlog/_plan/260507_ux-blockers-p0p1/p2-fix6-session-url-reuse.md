@@ -6,6 +6,7 @@
 
 | File | Action |
 |------|--------|
+| `web-ai/navigation-ready.mjs` | NEW |
 | `web-ai/chatgpt.mjs` | MODIFY |
 | `web-ai/tab-recovery.mjs` | MODIFY |
 
@@ -15,29 +16,43 @@ When navigating to an existing conversation URL (containing `/c/<id>`), agbrowse
 
 ## Diffs
 
-### MODIFY `web-ai/chatgpt.mjs` — Add exported helper (near `waitForStableAssistantCount`, ~line 650)
+### NEW `web-ai/navigation-ready.mjs` — Neutral module (avoids chatgpt↔tab-recovery circular import)
 
-```diff
-+const CONVERSATION_URL_PATTERN = /\/c\/[a-f0-9-]+/;
-+
-+/**
-+ * Wait for conversation page to be ready after navigation.
-+ * For existing conversations (URL contains /c/), waits for assistant message
-+ * selectors before counting. For new conversations, skips selector wait.
-+ * @param {any} page
-+ * @param {string} url
-+ */
-+export async function waitForConversationReady(page, url) {
-+    if (CONVERSATION_URL_PATTERN.test(url || '')) {
-+        await page.locator(ASSISTANT_SELECTORS[0]).first()
-+            .waitFor({ state: 'attached', timeout: 10_000 })
-+            .catch(() => undefined);
-+    }
-+    await waitForStableAssistantCount(page);
-+}
+```javascript
+// @ts-check
+const CONVERSATION_URL_PATTERN = /\/c\/[a-f0-9-]+/;
+const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+
+/**
+ * @param {any} page
+ * @param {string|null|undefined} url
+ */
+export async function waitForConversationReady(page, url) {
+    if (CONVERSATION_URL_PATTERN.test(url || '')) {
+        await page.locator(ASSISTANT_SELECTOR).first()
+            .waitFor({ state: 'attached', timeout: 10_000 })
+            .catch(() => undefined);
+    }
+    let previous = -1;
+    let stableReads = 0;
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+        const count = await page.locator(ASSISTANT_SELECTOR).count().catch(() => 0);
+        if (count === previous) stableReads++;
+        else stableReads = 0;
+        previous = count;
+        if (stableReads >= 2) return;
+        await page.waitForTimeout(500).catch(() => undefined);
+    }
+}
 ```
 
 ### MODIFY `web-ai/chatgpt.mjs` — Update `sendWebAi`'s `if (input.url)` block (~lines 141-144)
+
+Add import at top:
+```diff
++import { waitForConversationReady } from './navigation-ready.mjs';
+```
 
 ```diff
      if (input.url) {
@@ -60,7 +75,7 @@ When navigating to an existing conversation URL (containing `/c/<id>`), agbrowse
 ```
 
 ```diff
-+import { waitForConversationReady } from './chatgpt.mjs';
++import { waitForConversationReady } from './navigation-ready.mjs';
 ```
 
 ### MODIFY `web-ai/tab-recovery.mjs` — Path 1: `withSessionPage` existing-tab (~line 197-199)
@@ -114,7 +129,14 @@ When navigating to an existing conversation URL (containing `/c/<id>`), agbrowse
          tabState: {
 ```
 
-## Design notes
+## Design notes (updated after A-phase audit)
+
+`waitForConversationReady` lives in NEW neutral module `navigation-ready.mjs` to avoid circular imports:
+- `chatgpt.mjs` → `tab-recovery.mjs` (for `isPageDeathError`, P1 Fix #3)
+- `chatgpt.mjs` → `navigation-ready.mjs` (for `waitForConversationReady`)
+- `tab-recovery.mjs` → `navigation-ready.mjs` (for `waitForConversationReady`)
+
+No `chatgpt.mjs ← tab-recovery.mjs` reverse edge.
 
 All three navigation paths now:
 1. Use `waitUntil: 'load'` instead of `'domcontentloaded'`
