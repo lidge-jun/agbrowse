@@ -296,8 +296,7 @@ export async function pollWebAi(deps, input = {}) {
         });
     const baseline = (session && sessionToBaseline(session))
         || getBaseline(vendor, url)
-        || getLatestBaseline(vendor, { sameHostUrl: url })
-        || getLatestBaseline(vendor);
+        || getLatestBaseline(vendor, { sameHostUrl: url });
     if (!baseline) throw new WebAiError({
         errorCode: 'provider.poll-timeout',
         stage: 'poll',
@@ -313,6 +312,30 @@ export async function pollWebAi(deps, input = {}) {
     let stableText = '';
     let stableSince = 0;
     while (Date.now() <= deadline) {
+        if (session?.targetId) {
+            const currentTargetId = await deps.getTargetId?.().catch(() => null);
+            if (currentTargetId && currentTargetId !== session.targetId) {
+                return {
+                    ok: false, vendor, status: 'target-mismatch',
+                    url: page.url(), ...(session ? { sessionId: session.sessionId } : {}),
+                    answerText: '', baseline, usedFallbacks: [],
+                    warnings: [`poll target changed: ${session.targetId} → ${currentTargetId}`],
+                    error: 'target changed during poll',
+                };
+            }
+        } else {
+            const currentUrl = page.url();
+            const baselineConvoId = extractConversationId(baseline.url);
+            const currentConvoId = extractConversationId(currentUrl);
+            if (baselineConvoId !== currentConvoId || (!baselineConvoId && !currentConvoId && baseline.url !== currentUrl)) {
+                return {
+                    ok: false, vendor, status: 'conversation-mismatch',
+                    url: currentUrl, answerText: '', baseline, usedFallbacks: [],
+                    warnings: [`conversation changed: ${baselineConvoId || 'none'} → ${currentConvoId || 'none'}`],
+                    error: 'conversation changed during poll',
+                };
+            }
+        }
         const answers = await readAssistantMessages(page);
         const newAnswers = answers.slice(baseline.assistantCount).filter(isFinalAnswer);
         const latest = newAnswers.at(-1) || '';
@@ -679,6 +702,12 @@ async function readAssistantMessages(page) {
 /**
  * @param {any} text
  */
+function extractConversationId(url) {
+    if (!url) return null;
+    const match = url.match(/\/c\/([a-f0-9-]+)/);
+    return match ? match[1] : null;
+}
+
 function isFinalAnswer(text) {
     return !PLACEHOLDER_PATTERNS.some(pattern => pattern.test(text));
 }

@@ -142,10 +142,20 @@ export async function registerActiveCommand(input = {}) {
     return withActiveCommandLock(async () => {
         const store = readStore();
         const nowMs = Date.now();
+        let changed = false;
+        store.commands = store.commands.map(row => {
+            if (row.status !== 'running') return row;
+            const expiresMs = Date.parse(row.expiresAt || '');
+            if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
+                changed = true;
+                return { ...row, status: 'expired', completedAt: new Date(nowMs).toISOString() };
+            }
+            return row;
+        });
+        if (changed) writeStore(store);
         const targetConflict = command.targetId
             ? store.commands.find(row =>
                 row.status === 'running' &&
-                Date.parse(row.expiresAt || '') > nowMs &&
                 row.targetId === command.targetId &&
                 row.commandId !== command.commandId)
             : null;

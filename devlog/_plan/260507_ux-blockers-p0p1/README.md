@@ -246,22 +246,23 @@ Export `isPageDeathError` from `tab-recovery.mjs`. Add import + try/catch in pol
 +            if (currentTargetId && currentTargetId !== session.targetId) {
 +                return {
 +                    ok: false, vendor, status: 'target-mismatch',
-+                    sessionId: session.sessionId, answerText: '', baseline,
-+                    usedFallbacks: [], warnings: [`poll target changed: ${session.targetId} → ${currentTargetId}`],
++                    url: page.url(), ...(session ? { sessionId: session.sessionId } : {}),
++                    answerText: '', baseline, usedFallbacks: [],
++                    warnings: [`poll target changed: ${session.targetId} → ${currentTargetId}`],
++                    error: 'target changed during poll',
 +                };
 +            }
 +        } else {
 +            const currentUrl = page.url();
 +            const baselineConvoId = extractConversationId(baseline.url);
 +            const currentConvoId = extractConversationId(currentUrl);
-+            if (baselineConvoId !== currentConvoId) {
-+                if (baselineConvoId || currentConvoId) {
-+                    return {
-+                        ok: false, vendor, status: 'conversation-mismatch',
-+                        answerText: '', baseline, usedFallbacks: [],
-+                        warnings: [`conversation changed: ${baselineConvoId || 'none'} → ${currentConvoId || 'none'}`],
-+                    };
-+                }
++            if (baselineConvoId !== currentConvoId || (!baselineConvoId && !currentConvoId && baseline.url !== currentUrl)) {
++                return {
++                    ok: false, vendor, status: 'conversation-mismatch',
++                    url: currentUrl, answerText: '', baseline, usedFallbacks: [],
++                    warnings: [`conversation changed: ${baselineConvoId || 'none'} → ${currentConvoId || 'none'}`],
++                    error: 'conversation changed during poll',
++                };
 +            }
 +        }
          const answers = await readAssistantMessages(page);
