@@ -158,12 +158,15 @@ async function zipContextFiles(files, attachmentText, outputPath) {
 
 /** @param {string} relativePath */
 function safeZipEntryName(relativePath) {
-    const normalized = pathPosix.normalize(String(relativePath).replace(/\\/g, '/'));
+    const raw = String(relativePath).replace(/\\/g, '/');
+    const normalized = pathPosix.normalize(raw);
     if (
+        raw.split('/').includes('..') ||
         normalized === '.' ||
         normalized === '..' ||
         normalized.startsWith('../') ||
-        pathPosix.isAbsolute(normalized)
+        pathPosix.isAbsolute(normalized) ||
+        /^[A-Za-z]:(?:\/|$)/.test(normalized)
     ) {
         return null;
     }
