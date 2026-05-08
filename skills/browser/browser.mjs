@@ -2352,11 +2352,31 @@ try {
         }
         case 'tabs': {
             const json = process.argv.includes('--json');
+            const inspect = process.argv.includes('--inspect');
             const activeCommands = await listActiveCommands({
                 browserProfileKey: String(getPort()),
                 active: true,
             }).catch(() => []);
             const activeByTargetId = new Map(activeCommands.map(command => [command.targetId, command]));
+
+            if (inspect) {
+                const { collectTabs } = await import('../../web-ai/tab-inspect.mjs');
+                const activeTargetIds = new Set(activeCommands.map(c => c.targetId).filter(Boolean));
+                const inspected = await collectTabs(getPort(), { activeTargetIds });
+                if (json) {
+                    console.log(JSON.stringify(inspected.map((t, i) => ({ index: i + 1, ...t })), null, 2));
+                } else {
+                    inspected.forEach((t, i) => {
+                        const flags = [t.state, t.inUse ? 'in-use' : '', t.modelLabel || ''].filter(Boolean).join(', ');
+                        console.log(`${i + 1}. ${t.title || '(untitled)'} [${flags}]`);
+                        console.log(`   ${t.url}`);
+                        if (t.lastAssistantSnippet) console.log(`   snippet: ${t.lastAssistantSnippet.slice(0, 120)}...`);
+                    });
+                    console.log(`\ntotal ChatGPT tabs: ${inspected.length}`);
+                }
+                break;
+            }
+
             const tabs = (await listManagedTabs(getPort())).map(tab => {
                 const displayed = tabDisplayState(tab);
                 const activeCommand = activeCommandSummary(activeByTargetId.get(displayed.targetId));

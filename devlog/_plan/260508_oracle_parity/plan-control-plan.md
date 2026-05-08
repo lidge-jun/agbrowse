@@ -1,43 +1,61 @@
-# Plan: Browser Control Plan Output
+# Plan: Browser Control Summary
 
 **Issue: #76** | **Priority: P3** | **Status: planned**
 
 ## Problem
 
-agbrowse launches browser runs without preview. Oracle prints a control plan before execution.
+agbrowse launches browser runs without surfacing browser control state. Oracle's `controlPlan.ts` prints browser control mode info: attach-running, remote Chrome, headless, visible window, manual login, etc.
+
+## Reference Implementation
+
+Oracle `src/browser/controlPlan.ts`:
+- Describes browser control mode, not prompt/model preview
+- Reports: attach vs launch, headless vs visible, remote vs local, manual login needed
+- Printed on stderr for human guidance, never on stdout
 
 ## Files
 
 | File | Action | Description |
 |------|--------|-------------|
-| `web-ai/control-plan.mjs` | NEW | Pre-run plan formatting |
-| `web-ai/chatgpt.mjs` | MODIFY | Print plan before send |
-| `web-ai/cli.mjs` | MODIFY | `--dry-run` flag |
+| `web-ai/control-summary.mjs` | NEW | Browser control state summary |
+| `web-ai/cli.mjs` | MODIFY | `--control-summary` opt-in flag |
 
 ## Diff Plan
 
-### NEW `web-ai/control-plan.mjs`
+### NEW `web-ai/control-summary.mjs`
 
 ```javascript
-export function formatControlPlan({ vendor, model, prompt, files, followUps, research })
-// Return formatted plan string:
-// [plan] vendor=chatgpt model=gpt-5.5-pro
-// [plan] prompt: "..." (42 chars)
-// [plan] files: 2 (context.zip, spec.md)
-// [plan] follow-ups: 1
-// [plan] research: none
-// [plan] flow: type → submit → poll → finalize
+export function formatControlSummary({ cdpPort, tabSource, sessionReuse, recoveryUrl, chromeVisible })
+// Return formatted stderr summary:
+// [browser] cdp=localhost:9222 (attached to running Chrome)
+// [browser] tab=pooled (reusing warm session tab)
+// [browser] session=new | session=recovered from <url>
+// [browser] chrome=visible (may focus window)
+// Never include prompt text, file contents, or model name
+// Never output on stdout — stderr only
 ```
 
 ### MODIFY `web-ai/cli.mjs`
 
 ```javascript
-// --dry-run: print plan, exit without executing
-// Default: print plan, then execute
+// --control-summary: opt-in flag, prints browser control state to stderr before execution
+// Disabled by default — no breaking change to stdout/JSON contracts
+// Does NOT conflict with existing --dry-run (used by context commands)
+// Skipped entirely when --json is set
 ```
+
+## Guardrails
+
+- Opt-in only (`--control-summary`), never printed by default
+- Output goes to stderr, never stdout — preserves agent-piped contracts
+- No prompt text, file contents, or model info in output
+- Describes agbrowse-specific state: CDP port, tab pooling, session recovery, Chrome visibility
+- Does not conflict with existing `--dry-run` flag
 
 ## Test Plan
 
-1. Normal send → verify plan printed before execution
-2. --dry-run → verify plan printed, no execution
-3. With files and follow-ups → verify all details in plan
+1. `--control-summary` → verify summary on stderr, no stdout change
+2. Without flag → verify no summary printed
+3. `--json --control-summary` → verify summary suppressed
+4. Pooled tab reuse → verify "tab=pooled" in summary
+5. New session → verify "session=new" in summary

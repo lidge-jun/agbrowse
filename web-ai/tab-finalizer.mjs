@@ -1,6 +1,8 @@
 // @ts-check
 import { updateSession } from './session.mjs';
 import { poolTab } from './tab-pool.mjs';
+import { saveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
+import { resolveArchivePolicy, archiveConversation } from './chatgpt-archive.mjs';
 
 const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
 
@@ -31,6 +33,7 @@ const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
  * @property {string} [answerText]
  * @property {string} [status]
  * @property {unknown[]} [warnings]
+ * @property {string} [archiveFlag]
  */
 
 /**
@@ -49,6 +52,7 @@ export async function finalizeProviderTab(deps, {
     answerText,
     status = 'complete',
     warnings = [],
+    archiveFlag,
 } = {}) {
     if (!session?.sessionId || !session.targetId || !FINALIZABLE_STATUSES.has(status)) {
         return { finalized: false, reason: 'not-finalizable' };
@@ -61,6 +65,28 @@ export async function finalizeProviderTab(deps, {
         warnings,
         completedAt: new Date().toISOString(),
     });
+    if (answerText) {
+        try {
+            const desc = saveTranscript(session.sessionId, answerText);
+            appendArtifactRecord(session.sessionId, desc);
+        } catch (_) { /* artifact save is best-effort */ }
+    }
+
+    const { shouldArchive } = resolveArchivePolicy({
+        archiveFlag: archiveFlag || 'auto',
+        session: { ...session, conversationUrl, status: 'complete' },
+    });
+
+    if (shouldArchive && page) {
+        try {
+            const archiveResult = await archiveConversation(page, { conversationUrl });
+            if (archiveResult.ok) {
+                updateSession(session.sessionId, { archived: true });
+                return { finalized: true, pool: null, archived: true };
+            }
+        } catch { /* archive is best-effort, fall through to pool */ }
+    }
+
     const port = deps?.getPort?.() || 9222;
     const result = await poolTab(vendor || session.vendor || 'chatgpt', session.targetId, conversationUrl, {
         port,
@@ -68,5 +94,5 @@ export async function finalizeProviderTab(deps, {
         sessionType: 'send-poll',
         sessionId: session.sessionId,
     });
-    return { finalized: true, pool: result };
+    return { finalized: true, pool: result, archived: false };
 }

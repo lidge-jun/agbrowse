@@ -38,6 +38,9 @@ import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTraceSte
 import { appendTraceToSession } from './trace-persistence.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
+import { collectImages } from './chatgpt-images.mjs';
+import { resolveArtifactsDir } from './session-artifacts.mjs';
+import { sendDeepResearch } from './chatgpt-deep-research.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 const ASSISTANT_SELECTORS = [
@@ -374,8 +377,28 @@ export async function pollWebAi(deps, input = {}) {
                             warnings.push(`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`);
                         }
                     }
+                    if (session && input.outputImage !== undefined) {
+                        try {
+                            const cdp = await deps.getCdpSession?.();
+                            if (cdp) {
+                                try {
+                                    const imgResult = await collectImages(cdp, {
+                                        baselineAssistantCount: baseline?.assistantCount || 0,
+                                        outputPath: input.outputImage || null,
+                                        sessionId: input.outputImage ? null : session.sessionId,
+                                        waitTimeoutMs: 60_000,
+                                    });
+                                    if (imgResult.savedPaths.length) {
+                                        answerText += imgResult.markdownSuffix;
+                                    }
+                                } finally {
+                                    await cdp.detach?.().catch(() => undefined);
+                                }
+                            }
+                        } catch { /* image collection is best-effort */ }
+                    }
                     if (session) {
-                        await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings });
+                        await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -426,7 +449,7 @@ export async function pollWebAi(deps, input = {}) {
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
             if (session) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText });
+                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -488,6 +511,46 @@ export async function queryWebAi(deps, input = {}) {
         ...(result.traceSummary || sent.traceSummary ? { traceSummary: result.traceSummary || sent.traceSummary } : {}),
         usedFallbacks: [...(sent.usedFallbacks || []), ...(result.usedFallbacks || [])],
         warnings: [...(sent.warnings || []), ...(result.warnings || [])],
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ */
+export async function deepResearchWebAi(deps, input = {}) {
+    const envelope = normalizeEnvelope(input);
+    const page = await requireChatGptPage(deps);
+    const assistantCount = await countAssistantMessages(page);
+    const targetId = await deps.getTargetId?.().catch(() => null) || null;
+    const session = createSession(envelope, {
+        targetId,
+        originalUrl: input.url || page.url(),
+        conversationUrl: page.url(),
+        deadlineAt: resolveDeadlineAt(input, 'chatgpt'),
+        envelopeSummary: { ...summarizeEnvelope(input), assistantCount },
+    });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
+    if (targetId) await recordActiveLease({
+        owner: 'web-ai',
+        vendor: envelope.vendor,
+        sessionType: 'deep-research',
+        sessionId: session.sessionId,
+        targetId,
+        url: page.url(),
+        port: deps.getPort?.() || 9222,
+    });
+    const timeoutMs = Math.max(1, Number(input.timeout || 1200)) * 1000;
+    const result = await sendDeepResearch(page, deps, {
+        prompt: envelope.composerText || input.prompt,
+        session,
+        timeoutMs,
+    });
+    return {
+        ...result,
+        vendor: envelope.vendor,
+        url: page.url(),
+        usedFallbacks: [],
     };
 }
 

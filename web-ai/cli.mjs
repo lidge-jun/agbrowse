@@ -5,7 +5,7 @@
  * @typedef {any} Page
  */
 import { parseArgs } from 'node:util';
-import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi } from './chatgpt.mjs';
+import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi, deepResearchWebAi } from './chatgpt.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
 import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
@@ -19,7 +19,7 @@ import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/bro
 import { cleanupIdleTabs, isPinned } from '../skills/browser/tab-lifecycle.mjs';
 import { withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { listSessions } from './session.mjs';
+import { listSessions, getSession } from './session.mjs';
 import { listLeases } from './tab-lease-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
 import { runMcpServer } from './mcp-server.mjs';
@@ -45,6 +45,7 @@ const COMMANDS = new Set([
     'sessions', 'doctor',
     'context-dry-run', 'context-render',
     'mcp-server', 'eval', 'claim-audit',
+    'project-sources',
 ]);
 
 const BROWSER_REQUIRED_COMMANDS = new Set(['status', 'send', 'poll', 'query', 'stop', 'watch', 'snapshot', 'doctor']);
@@ -312,6 +313,9 @@ async function runWebAiCliInner(argv = [], deps) {
         else console.log(formatClaimAuditReport(report));
         return { ok: report.ok, status: report.ok ? 'claim-audit-pass' : 'claim-audit-fail', report };
     }
+    if (command === 'project-sources') {
+        return runProjectSourcesCommand(argv.slice(1), deps);
+    }
 
     const { values } = parseArgs({
         args: argv.slice(1),
@@ -338,6 +342,10 @@ async function runWebAiCliInner(argv = [], deps) {
             'source-audit-scope': { type: 'string' },
             'source-audit-date': { type: 'string' },
             file: { type: 'string' },
+            'output-image': { type: 'string' },
+            research: { type: 'string' },
+            archive: { type: 'string' },
+            'follow-up': { type: 'string', multiple: true },
             model: { type: 'string' },
             effort: { type: 'string' },
             'reasoning-effort': { type: 'string' },
@@ -358,6 +366,7 @@ async function runWebAiCliInner(argv = [], deps) {
             concurrency: { type: 'string' },
             'update-golden': { type: 'boolean', default: false },
             'dry-run': { type: 'string' },
+            'chatgpt-url': { type: 'string' },
             'older-than': { type: 'string' },
             status: { type: 'string' },
             limit: { type: 'string' },
@@ -377,6 +386,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'new-tab': { type: 'boolean', default: false },
             parallel: { type: 'boolean', default: false },
             'reuse-tab': { type: 'boolean', default: false },
+            'control-summary': { type: 'boolean', default: false },
         },
         strict: false,
     });
@@ -411,6 +421,10 @@ async function runWebAiCliInner(argv = [], deps) {
         navigate: values.navigate === true,
         attachmentPolicy: values.file ? 'upload' : 'inline-only',
         filePath: values.file,
+        outputImage: values['output-image'],
+        research: values.research,
+        archiveFlag: values.archive,
+        followUps: values['follow-up'] || [],
         thinkingTime: values['thinking-time'],
         model: values.model,
         reasoningEffort: values.effort || values['reasoning-effort'],
@@ -454,6 +468,18 @@ async function runWebAiCliInner(argv = [], deps) {
 
     await enforceCliPolicy(command, input);
     await ensureHeadedBrowserForWebAi(deps, command, argv);
+
+    if (values['control-summary'] && !values.json && BROWSER_REQUIRED_COMMANDS.has(command)) {
+        const { emitControlSummary } = await import('./control-summary.mjs');
+        const port = Number(deps?.getPort?.() || process.env.CDP_PORT || 9222);
+        emitControlSummary({
+            cdpPort: port,
+            tabSource: input.newTab ? 'new-tab' : input.reuseTab ? 'active' : 'pooled',
+            sessionReuse: !!input.session,
+            recoveryUrl: input.url || undefined,
+            chromeVisible: true,
+        }, { controlSummary: true, json: false });
+    }
 
     let result = command === 'watch'
         ? await watchSession(deps, input)
@@ -910,7 +936,32 @@ async function runCommand(command, deps, input) {
         case 'status': return statusWebAi(deps, input);
         case 'send': return withWebAiActiveCommand(command, deps, input, () => sendWebAi(deps, input));
         case 'poll': return runBoundCommand(command, deps, input, pollWebAi, stopWebAi);
-        case 'query': return withWebAiActiveCommand(command, deps, input, () => queryWebAi(deps, input));
+        case 'query': return withWebAiActiveCommand(command, deps, input, async () => {
+            if (input.research === 'deep') {
+                return deepResearchWebAi(deps, input);
+            }
+            const result = await queryWebAi(deps, input);
+            if (result.ok && input.followUps?.length && result.sessionId) {
+                const { sendMultiTurn } = await import('./chatgpt-multi-turn.mjs');
+                const session = getSession(result.sessionId);
+                if (session) {
+                    const page = await deps.getPage();
+                    const multiResult = await sendMultiTurn(page, deps, {
+                        followUps: input.followUps,
+                        session,
+                        timeoutPerTurn: (input.timeout || 120) * 1000,
+                    });
+                    return {
+                        ...result,
+                        answerText: multiResult.finalAnswer || result.answerText,
+                        turns: multiResult.turns,
+                        followUpCount: multiResult.turns.length,
+                        warnings: [...(result.warnings || []), ...multiResult.warnings],
+                    };
+                }
+            }
+            return result;
+        });
         case 'stop': return runBoundCommand(command, deps, input, pollWebAi, stopWebAi);
         default: throw new Error(`unknown web-ai command: ${command}`);
     }
@@ -1199,4 +1250,83 @@ function printHuman(command, result) {
         return;
     }
     console.log(`${result.status}: ${result.url || result.vendor}`);
+}
+
+/**
+ * @param {string[]} args
+ * @param {any} deps
+ */
+async function runProjectSourcesCommand(args, deps) {
+    const sub = args[0];
+    if (sub !== 'list' && sub !== 'add') {
+        throw new WebAiError({
+            errorCode: 'internal.unhandled',
+            stage: 'project-sources',
+            message: 'usage: project-sources list|add --chatgpt-url <url> [--file <path>...] [--dry-run summary] [--json]',
+        });
+    }
+    const { values } = parseArgs({
+        args: args.slice(1),
+        options: {
+            'chatgpt-url': { type: 'string' },
+            file: { type: 'string', multiple: true },
+            'dry-run': { type: 'string' },
+            json: { type: 'boolean', default: false },
+        },
+        strict: false,
+    });
+    const projectUrl = values['chatgpt-url'];
+    if (!projectUrl) {
+        throw new WebAiError({
+            errorCode: 'internal.unhandled',
+            stage: 'project-sources',
+            message: '--chatgpt-url is required for project-sources',
+        });
+    }
+    const { listProjectSources, addProjectSource } = await import('./chatgpt-project-sources.mjs');
+    const cdpSession = await deps.getCdpSession?.();
+    if (!cdpSession) {
+        throw new WebAiError({
+            errorCode: 'cdp.unreachable',
+            stage: 'project-sources',
+            retryHint: 'start-headed',
+            message: 'CDP session required for project-sources',
+        });
+    }
+    try {
+        if (sub === 'list') {
+            const result = await listProjectSources(cdpSession, { projectUrl });
+            if (values.json) console.log(JSON.stringify(result, null, 2));
+            else {
+                if (!result.sources.length) console.log('(no sources)');
+                else result.sources.forEach((/** @type {any} */ s) => console.log(`${s.name} (${s.type})`));
+            }
+            return result;
+        }
+        const filePaths = values.file || [];
+        if (!filePaths.length) {
+            throw new WebAiError({
+                errorCode: 'internal.unhandled',
+                stage: 'project-sources',
+                message: '--file is required for project-sources add',
+            });
+        }
+        const result = await addProjectSource(cdpSession, {
+            projectUrl,
+            filePaths,
+            dryRun: values['dry-run'] !== undefined,
+        });
+        if (values.json) console.log(JSON.stringify(result, null, 2));
+        else {
+            for (const u of result.uploads) {
+                console.log(`${u.uploaded ? '✓' : '○'} ${u.name}`);
+            }
+            if (result.errors.length) {
+                for (const e of result.errors) console.error(`[error] ${e}`);
+            }
+        }
+        return result;
+    } finally {
+        await cdpSession.detach?.().catch(() => undefined);
+    }
 }

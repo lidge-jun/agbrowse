@@ -208,6 +208,7 @@ export function createSession(envelope, meta = {}) {
         lastStreamingState: 'unknown',
         lastResponseCharCount: 0,
         trace: [],
+        artifacts: [],
     };
     return insertSession(session);
 }

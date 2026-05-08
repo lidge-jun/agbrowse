@@ -25,11 +25,28 @@ Feature gaps identified by comparing oracle 0.11.0 CHANGELOG + source against ag
 |------|-------|-------------|
 | [plan-project-sources](plan-project-sources.md) | #73 | ChatGPT Project Sources management |
 | [plan-archive](plan-archive.md) | #74 | Auto-archive one-shot runs |
-| [plan-heartbeat](plan-heartbeat.md) | #75 | Heartbeat/liveness during responses |
-| [plan-control-plan](plan-control-plan.md) | #76 | Browser control plan output |
+| [plan-control-plan](plan-control-plan.md) | #76 | Browser control summary output |
 
 ## Implementation Order
 
-Recommended: images (#68) → tab-harvest (#71) → multi-turn (#69) → artifacts (#72) → deep-research (#70) → rest
+Corrected order (artifacts-first, per GPT Pro review):
 
-Tab harvest is foundational for multi-turn and deep-research. Images can be done independently.
+1. **#72 artifacts** — establish artifact paths and session artifact metadata first
+2. **#68 images** — save images through artifact sink or explicit output path
+3. **#71 tab inspect/harvest** — useful infrastructure, can parallel with #68, must respect leases
+4. **#69 multi-turn** — requires real turns/session model work + artifacts
+5. **#70 Deep Research** — requires artifacts; tab harvest useful but not mandatory
+6. **#74 archive** — must run after artifacts, must know session type (project/deep/multi-turn)
+7. **#73 Project Sources** — independent after rewrite, file-upload semantics
+8. **#76 control summary** — opt-in stderr summary, independent
+
+Key dependency: artifacts (#72) must come before any feature that promises durable local outputs.
+
+## Review Status
+
+- GPT Pro Extended R1: FAIL (6 HOLD, 2 FAIL, 0 PASS)
+- R1 fixes applied: #73 rewritten (file-upload), #76 rewritten (browser control summary), all HOLDs addressed
+- GPT Pro Extended R2: **PASS with minor HOLD fixes** (3 PASS, 5 HOLD — implementation-precision, not rewrites)
+- R2 PASS: #71 tab-harvest, #70 deep-research, #76 control-summary
+- R2 HOLD fixes applied: #68 redirect guard + baseline clarification, #69 no intermediate finalization, #72 explicit artifact descriptors, #74 finalizer branch order + always semantics, #73 isolated tab + file validation
+- GPT Pro Extended R3: **PASS** — all 8 plans PASS on all 5 criteria (correctness, risks, dependency order, oracle divergence, over-engineering)
