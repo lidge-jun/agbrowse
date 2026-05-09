@@ -16,26 +16,26 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 ## 현재 구조 스냅샷
 
-마지막 측정: 2026-05-06.
+마지막 측정: 2026-05-09.
 
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 8 | 4116 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
+| `skills/browser/` | 9 | 5015 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 831 | screenshot to coordinate click helper |
-| `skills/web-ai/` | 1 | 365 | bundled agent workflow skill |
-| `web-ai/` | 69 | 14783 | provider automation, sessions, MCP, eval, policy, trace |
-| `web-ai/context-pack/` | 8 | 802 | file selection, token budget, context rendering |
+| `skills/web-ai/` | 1 | 375 | bundled agent workflow skill |
+| `web-ai/` | 88 | 18372 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/context-pack/` | 8 | 858 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 552 | offline provider DOM fixture harness |
-| `web-ai/policy/` | 4 | 204 | mutation and content-boundary guardrails |
-| `web-ai/trace/` | 4 | 299 | trace ID, redaction, report, writer helpers |
-| `scripts/` | 8 | 877 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 55 | 5775 | deterministic module tests |
-| `test/integration/` | 15 | 1571 | CLI, MCP, policy, provider fixture tests |
+| `web-ai/policy/` | 4 | 223 | mutation and content-boundary guardrails |
+| `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
+| `scripts/` | 9 | 1385 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
+| `test/unit/` | 69 | 6723 | deterministic module tests |
+| `test/integration/` | 15 | 1598 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
-| `docs/` | 8 | 1407 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs |
-| `devlog/` | 104 | 16008 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `docs/` | 8 | 1596 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs |
+| `devlog/` | 206 | 20688 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -43,16 +43,16 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
-| `skills/browser/browser.mjs` | 2341 | root CLI parser, Chrome lifecycle, browser primitive commands |
+| `skills/browser/browser.mjs` | 3069 | root CLI parser, Chrome lifecycle, browser primitive commands |
 | `skills/browser/tab-manager.mjs` | 446 | CDP target list, create, close, switch |
-| `skills/browser/tab-lifecycle.mjs` | 273 | idle cleanup, pinned target, duration parsing |
+| `skills/browser/tab-lifecycle.mjs` | 382 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 372 | bundled skill list/get/install |
-| `web-ai/cli.mjs` | 1151 | `web-ai` subcommand parser and command orchestration |
-| `web-ai/chatgpt.mjs` | 709 | ChatGPT provider send/poll/query/status |
-| `web-ai/gemini-live.mjs` | 722 | Gemini provider send/poll/query/status |
-| `web-ai/grok-live.mjs` | 558 | Grok provider send/poll/query/status |
-| `web-ai/mcp-server.mjs` | 321 | stdio JSON-RPC MCP bridge |
-| `web-ai/tool-schema.mjs` | 148 | MCP and AI SDK schema source |
+| `web-ai/cli.mjs` | 1334 | `web-ai` subcommand parser and command orchestration |
+| `web-ai/chatgpt.mjs` | 874 | ChatGPT provider send/poll/query/status |
+| `web-ai/gemini-live.mjs` | 738 | Gemini provider send/poll/query/status |
+| `web-ai/grok-live.mjs` | 574 | Grok provider send/poll/query/status |
+| `web-ai/mcp-server.mjs` | 354 | stdio JSON-RPC MCP bridge |
+| `web-ai/tool-schema.mjs` | 161 | MCP and AI SDK schema source |
 | `web-ai/answer-artifact.mjs` | 153 | provider poll result artifact normalization |
 | `web-ai/source-audit.mjs` | 183 | claim/source coverage audit helper |
 | `web-ai/ax-snapshot.mjs` | 376 | compact accessibility snapshot and refs |
@@ -60,9 +60,9 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/action-intent.mjs` | 99 | serializable semantic action intent contracts |
 | `web-ai/target-resolver.mjs` | 45 | explainable target resolver wrapper |
 | `scripts/run-web-ai-eval.mjs` | 59 | provider fixture eval CLI wrapper |
-| `scripts/release.sh` | 116 | latest release gate and publish script |
-| `scripts/release-preview.sh` | 100 | preview release gate and publish script |
-| `scripts/release-gates.mjs` | 178 | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) |
+| `scripts/release.sh` | 119 | latest release gate and publish script |
+| `scripts/release-preview.sh` | 103 | preview release gate and publish script |
+| `scripts/release-gates.mjs` | 596 | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) |
 | `scripts/check-strict-baseline.mjs` | 135 | strict-mode baseline guard for `tsc --noEmit` JSDoc opt-in surface |
 | `scripts/check-module-graph.mjs` | 210 | module dependency graph regression check |
 | `scripts/smoke-bins.mjs` | 60 | published bin smoke check used in release gate |

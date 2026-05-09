@@ -57,6 +57,9 @@ npm run test:mcp
 npm run test:source-audit
 npm run test:trace-policy
 
+echo "Refreshing structure counts..."
+npm run fix:counts
+
 echo "Running structure documentation gates..."
 npm run test:release-gates
 
@@ -81,7 +84,7 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
 fi
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  git add package.json package-lock.json
+  git add package.json package-lock.json structure/str_func.md
   git commit -m "[agent] chore: release $TAG"
 fi
 

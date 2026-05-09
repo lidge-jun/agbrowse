@@ -1,6 +1,6 @@
 {
   "name": "agbrowse",
-  "version": "0.1.5-preview.20260502224903",
+  "version": "0.1.5",
   "description": "Standalone Chrome/CDP browser automation and web-ai workflow skills for AI agents.",
   "license": "MIT",
   "private": false,
@@ -46,6 +46,7 @@
     "test:eval-fixtures": "node scripts/run-web-ai-eval.mjs --vendor chatgpt --fixtures test/fixtures/provider-dom --json",
     "docs:drift": "bash structure/check-doc-drift.sh",
     "docs:counts": "bash structure/verify-counts.sh",
+    "fix:counts": "node scripts/fix-counts.mjs",
     "eval:web-ai:fixtures": "node scripts/run-web-ai-eval.mjs --config test/fixtures/provider-dom/parallel-eval.json --concurrency 4 --json",
     "test:trace-policy": "vitest run test/unit/web-ai-trace*.test.mjs test/unit/web-ai-policy.test.mjs test/unit/content-boundary.test.mjs test/integration/web-ai-policy-cli.test.mjs test/integration/web-ai-policy-mcp.test.mjs test/integration/web-ai-trace-fixture.test.mjs",
     "test:mcp": "vitest run test/integration/web-ai-mcp-server.test.mjs test/integration/web-ai-policy-mcp.test.mjs test/unit/browser-tool-schema.test.mjs test/unit/web-ai-tool-schema.test.mjs",

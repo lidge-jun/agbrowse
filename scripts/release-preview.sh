@@ -52,6 +52,9 @@ npm run test:mcp
 npm run test:source-audit
 npm run test:trace-policy
 
+echo "Refreshing structure counts..."
+npm run fix:counts
+
 echo "Running structure documentation gates..."
 npm run test:release-gates
 
@@ -70,7 +73,7 @@ echo "Verifying package contents..."
 npm pack --dry-run >/dev/null
 npm publish --dry-run --tag preview --access public >/dev/null
 
-git add package.json package-lock.json
+git add package.json package-lock.json structure/str_func.md
 git commit -m "[agent] chore: preview release $TAG"
 git tag "$TAG"
 
