@@ -261,14 +261,10 @@ export async function sendWebAi(deps, input = {}) {
         await adapter.verifyPromptCommitted(rendered.composerText, commitBaseline);
         if (uploadPath) {
             const sentAttachment = await verifySentTurnAttachmentLive(page, fileInfoFromPath(uploadPath));
-            if (!sentAttachment.ok) throw new WebAiError({
-                errorCode: 'provider.attachment-evidence-missing',
-                stage: 'attachment-verify',
-                vendor: 'chatgpt',
-                retryHint: 're-upload',
-                message: sentAttachment.error,
-                mutationAllowed: true,
-            });
+            if (!sentAttachment.ok) {
+                usedFallbacks.push('sent-attachment-evidence-unavailable');
+                attachmentWarnings.push(`sent attachment evidence unavailable after submit: ${sentAttachment.error}`);
+            }
         }
         const finalUrl = page.url();
         if (session && finalUrl !== session.conversationUrl) {
@@ -291,7 +287,8 @@ export async function sendWebAi(deps, input = {}) {
                 ...(contextPack?.warnings || []),
                 ...(contextAttachmentPath ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
                 ...attachmentWarnings,
-                ...(selectedModel ? [`model selected: ${selectedModel.selected}${selectedModel.alreadySelected ? ' (already selected)' : ''}`] : []),
+                ...(selectedModel?.warnings || []),
+                ...(selectedModel?.selected ? [`model selected: ${selectedModel.selected}${selectedModel.alreadySelected ? ' (already selected)' : ''}`] : []),
                 ...(selectedModel?.effort ? [`reasoning effort selected: ${selectedModel.effort}`] : []),
             ],
         };

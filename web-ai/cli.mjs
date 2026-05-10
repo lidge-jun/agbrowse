@@ -823,7 +823,13 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
                     getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
                 };
                 return withWebAiActiveCommand(command, sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId }, async () => {
-                    if (command === 'poll') return pollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+                    if (command === 'poll') {
+                        const result = await pollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+                        if (isRecoverableTabCrash(result)) {
+                            throw new Error(result.error || 'target closed during session-bound web-ai command');
+                        }
+                        return result;
+                    }
                     if (command === 'stop') return stopFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
                 });
             });
@@ -832,6 +838,13 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
     if (command === 'poll') return withWebAiActiveCommand(command, deps, input, () => pollFn(deps, input));
     if (command === 'stop') return withWebAiActiveCommand(command, deps, input, () => stopFn(deps, input));
     throw new Error(`runBoundCommand: unsupported command ${command}`);
+}
+
+/**
+ * @param {any} result
+ */
+function isRecoverableTabCrash(result) {
+    return result?.recoverable === true && result?.status === 'tab-crashed';
 }
 
 /**

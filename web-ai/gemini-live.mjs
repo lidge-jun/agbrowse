@@ -601,8 +601,8 @@ async function clickDeepThinkMenuItem(page) {
  */
 async function openFreshGeminiChat(page, warnings) {
     const beforeUrl = page.url();
-    const newChatSel = await findFirstSelector(page, NEW_CHAT_SELECTORS, 5_000);
-    if (!newChatSel) {
+    const clicked = await clickFirstSelectorWithRetry(page, NEW_CHAT_SELECTORS, 8_000, warnings, 'gemini new chat');
+    if (!clicked) {
         if ((await countResponses(page)) === 0) return;
         throw new WebAiError({
             errorCode: 'provider.composer-not-visible',
@@ -613,7 +613,6 @@ async function openFreshGeminiChat(page, warnings) {
             selectorsTried: NEW_CHAT_SELECTORS,
         });
     }
-    await page.locator(newChatSel).first().click({ timeout: 5_000 });
     await page.waitForTimeout(1_000).catch(() => undefined);
     await findFirstSelector(page, INPUT_SELECTORS, 10_000);
     if (page.url() === beforeUrl && (await countResponses(page)) > 0) {
@@ -661,6 +660,34 @@ async function findFirstSelector(page, selectors, timeoutMs) {
         await page.waitForTimeout(250).catch(() => undefined);
     }
     return null;
+}
+
+/**
+ * @param {any} page
+ * @param {string[]} selectors
+ * @param {number} timeoutMs
+ * @param {string[]} warnings
+ * @param {string} label
+ * @returns {Promise<boolean>}
+ */
+async function clickFirstSelectorWithRetry(page, selectors, timeoutMs, warnings, label) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        for (const sel of selectors) {
+            const loc = page.locator(sel).first();
+            if (!await loc.isVisible().catch(() => false)) continue;
+            try {
+                await loc.click({ timeout: 2_000 });
+                return true;
+            } catch (e) {
+                const message = /** @type {{ message?: string }} */ (e)?.message || String(e);
+                if (!/detached|Timeout|not attached|not stable/i.test(message)) throw e;
+                warnings.push(`${label} click retry:${sel}:${message.split('\n')[0]}`);
+            }
+        }
+        await page.waitForTimeout(250).catch(() => undefined);
+    }
+    return false;
 }
 
 /**

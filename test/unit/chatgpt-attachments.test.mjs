@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { attachLocalFileLive } from '../../web-ai/chatgpt-attachments.mjs';
 
 describe('ChatGPT attachment upload surface', () => {
@@ -20,6 +22,14 @@ describe('ChatGPT attachment upload surface', () => {
         expect(result.fileCount).toBeGreaterThan(0);
         expect(page.clickedUploadSelector).toBe('button[aria-label*="Attach" i]');
         expect(page.filePath).toBe('/tmp/example.txt');
+    });
+
+    it('keeps polling when ChatGPT hides sent-turn attachment evidence after upload acceptance', () => {
+        const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
+
+        expect(chatgptSrc).toContain('sent-attachment-evidence-unavailable');
+        expect(chatgptSrc).toContain('sent attachment evidence unavailable after submit');
+        expect(chatgptSrc).not.toMatch(/if \\(!sentAttachment\\.ok\\) throw/);
     });
 });
 

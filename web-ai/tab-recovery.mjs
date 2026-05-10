@@ -28,6 +28,7 @@ export async function recoverSessionTab(deps, session) {
     if (!session) throw new Error('recoverSessionTab: session required');
 
     const port = deps.getPort();
+    const targetUrl = session.conversationUrl || session.originalUrl || 'about:blank';
 
     // 1. Check if original tab still exists
     const alive = await isTabAlive(port, /** @type {string} */ (session.targetId));
@@ -36,33 +37,46 @@ export async function recoverSessionTab(deps, session) {
         // Tab exists - verify URL by checking the actual page
         const page = await getPageByTargetId(port, /** @type {string} */ (session.targetId));
         if (page) {
-            const currentUrl = page.url();
-            if (currentUrl !== session.conversationUrl) {
-                await page.goto(/** @type {string} */ (session.conversationUrl), { waitUntil: 'load', timeout: 30_000 });
+            try {
+                const currentUrl = page.url();
+                if (shouldPreferCurrentProviderUrl(targetUrl, currentUrl)) {
+                    await updateSession(session.sessionId, { conversationUrl: currentUrl });
+                    return {
+                        recovered: true,
+                        strategy: 'existing-tab',
+                        targetId: session.targetId
+                    };
+                }
+                if (currentUrl !== targetUrl) {
+                    await page.goto(targetUrl, { waitUntil: 'load', timeout: 30_000 });
+                }
                 const finalUrl = page.url();
                 await waitForConversationReady(page, finalUrl);
-                if (finalUrl !== session.conversationUrl && isProviderUrl(finalUrl)) {
+                if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
                     await updateSession(session.sessionId, { conversationUrl: finalUrl });
                 }
+                return {
+                    recovered: true,
+                    strategy: 'existing-tab',
+                    targetId: session.targetId
+                };
+            } catch {
+                // CDP can report the target as alive while Playwright has already
+                // closed the page object. Fall through to a fresh tab recovery.
             }
-            return {
-                recovered: true,
-                strategy: 'existing-tab',
-                targetId: session.targetId
-            };
         }
     }
 
     // 2. Create new tab
-    const newTab = await createTab(port, session.conversationUrl || 'about:blank');
-    let recoveredConversationUrl = session.conversationUrl;
-    if (session.conversationUrl && session.conversationUrl !== 'about:blank') {
+    const newTab = await createTab(port, targetUrl);
+    let recoveredConversationUrl = session.conversationUrl || targetUrl;
+    if (targetUrl !== 'about:blank') {
         const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
         if (newPage) {
             await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
             const finalUrl = /** @type {any} */ (newPage).url();
             await waitForConversationReady(newPage, finalUrl);
-            if (finalUrl !== session.conversationUrl && isProviderUrl(finalUrl)) {
+            if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
                 recoveredConversationUrl = finalUrl;
             }
         }
@@ -107,6 +121,13 @@ export async function verifySessionTab(deps, session) {
     const alive = await isTabAlive(deps.getPort(), session.targetId);
 
     if (alive) {
+        const page = await getPageByTargetId(deps.getPort(), session.targetId).catch(() => null);
+        if (!page) return { valid: false, targetId: session.targetId, needsRecovery: true };
+        try {
+            page.url();
+        } catch {
+            return { valid: false, targetId: session.targetId, needsRecovery: true };
+        }
         return { valid: true, targetId: session.targetId, needsRecovery: false };
     }
 
@@ -197,7 +218,8 @@ export async function withSessionPage(deps, sessionId, fn) {
         const { valid, needsRecovery } = await verifySessionTab(deps, current);
 
         if (!valid || forceRecover) {
-            if (needsRecovery && current.conversationUrl) {
+            const recoveryTargetUrl = current.conversationUrl || current.originalUrl;
+            if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
                 const recovery = await recoverSessionTab(deps, current);
                 if (!recovery.recovered) {
                     throw new Error(`Session ${sessionId} tab recovery failed`);
@@ -213,6 +235,12 @@ export async function withSessionPage(deps, sessionId, fn) {
         const page = await getPageByTargetId(port, /** @type {string} */ (current.targetId));
         if (!page) throw new Error(`Session ${sessionId} page not found for targetId ${current.targetId}`);
         if (current.conversationUrl && page.url() !== current.conversationUrl) {
+            const currentUrl = page.url();
+            if (shouldPreferCurrentProviderUrl(current.conversationUrl, currentUrl)) {
+                updateSession(sessionId, { conversationUrl: currentUrl });
+                const updated = /** @type {WebAiSession} */ (getSession(sessionId));
+                return { page, targetId: current.targetId, session: updated };
+            }
             await page.goto(current.conversationUrl, { waitUntil: 'load', timeout: 30_000 });
             const finalUrl = page.url();
             await waitForConversationReady(page, finalUrl);
@@ -232,5 +260,28 @@ export async function withSessionPage(deps, sessionId, fn) {
         if (!isPageDeathError(err)) throw err;
         const recovered = await resolvePage(true);
         return fn(recovered);
+    }
+}
+
+/**
+ * When send records a provider root URL before the SPA assigns a concrete
+ * conversation URL, the bound tab may later move from "/" to "/c/..." (or
+ * provider equivalent). In that case the live tab is newer truth; do not
+ * navigate it back to the stale root.
+ * @param {string|null|undefined} savedUrl
+ * @param {string|null|undefined} currentUrl
+ */
+function shouldPreferCurrentProviderUrl(savedUrl, currentUrl) {
+    if (!savedUrl || !currentUrl || savedUrl === currentUrl) return false;
+    if (!isProviderUrl(savedUrl) || !isProviderUrl(currentUrl)) return false;
+    try {
+        const saved = new URL(savedUrl);
+        const current = new URL(currentUrl);
+        if (saved.origin !== current.origin) return false;
+        const savedPath = saved.pathname.replace(/\/+$/, '') || '/';
+        const currentPath = current.pathname.replace(/\/+$/, '') || '/';
+        return savedPath === '/' && currentPath !== '/';
+    } catch {
+        return false;
     }
 }

@@ -129,6 +129,23 @@ describe('web-ai cli session flags', () => {
         expect(cliSrc).toMatch(/const boundSendOrQuery = await runBoundSendOrQuery\(command, deps, input\)/);
     });
 
+    it('session-bound poll retries recoverable tab crashes through tab recovery', () => {
+        const recoverySrc = readFileSync(join(process.cwd(), 'web-ai/tab-recovery.mjs'), 'utf8');
+        expect(cliSrc).toContain('isRecoverableTabCrash');
+        expect(cliSrc).toContain('target closed during session-bound web-ai command');
+        expect(recoverySrc).toContain("session.conversationUrl || session.originalUrl || 'about:blank'");
+        expect(recoverySrc).toContain('(needsRecovery || forceRecover) && recoveryTargetUrl');
+        expect(recoverySrc).toContain('Fall through to a fresh tab recovery');
+    });
+
+    it('keeps live post-submit conversation URLs instead of navigating back to provider root', () => {
+        const recoverySrc = readFileSync(join(process.cwd(), 'web-ai/tab-recovery.mjs'), 'utf8');
+        expect(recoverySrc).toContain('shouldPreferCurrentProviderUrl');
+        expect(recoverySrc).toContain("savedPath === '/' && currentPath !== '/'");
+        expect(recoverySrc).toContain('do not');
+        expect(recoverySrc).toContain('navigate it back to the stale root');
+    });
+
     it('wraps session-bound and provider web-ai mutations in active command ownership', () => {
         expect(cliSrc).toContain("withActiveCommand } from './active-command-store.mjs'");
         expect(cliSrc).toMatch(/async function withWebAiActiveCommand\(command, deps, input, fn\)/);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -333,7 +333,15 @@ describe('web-ai ChatGPT model selector policy', () => {
                 genericEffortTexts: labelsOnlyProEffortTexts(),
             });
 
-            await expect(selectChatGptModel(page, 'thinking', { effort })).rejects.toThrow(/reasoning effort selector not found/);
+            const result = await selectChatGptModel(page, 'thinking', { effort });
+
+            expect(result).toMatchObject({
+                selected: 'thinking',
+                effort: null,
+                requestedEffort: effort,
+                warnings: [expect.stringContaining(`reasoning effort ${effort} was not enforced`)],
+            });
+            expect(result.usedFallbacks).toContain('reasoning-effort-unavailable-current-effort');
         }
     });
 
@@ -383,7 +391,15 @@ describe('web-ai ChatGPT model selector policy', () => {
             keyboardOpensEffort: false,
         });
 
-        await expect(selectChatGptModel(page, 'pro', { effort: 'standard' })).rejects.toThrow(/reasoning effort selector not found/);
+        const result = await selectChatGptModel(page, 'pro', { effort: 'standard' });
+
+        expect(result).toMatchObject({
+            selected: 'pro',
+            effort: null,
+            requestedEffort: 'standard',
+            warnings: [expect.stringContaining('reasoning effort standard was not enforced')],
+        });
+        expect(result.usedFallbacks).toContain('reasoning-effort-unavailable-current-effort');
     });
 
     it('opens visible-text-only effort controls without data-testid or aria-label hooks', async () => {
@@ -483,6 +499,75 @@ describe('web-ai ChatGPT model selector policy', () => {
         });
     });
 
+    it('falls back to the current ChatGPT model when the model picker disappears and no effort is requested', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                initialModelMenuOpen: false,
+                modelPickerUnavailable: true,
+                advanceClock: clock.advance,
+            });
+
+            const result = await selectChatGptModel(page, 'thinking');
+
+        expect(result).toMatchObject({
+            requested: 'thinking',
+            selected: null,
+            alreadySelected: true,
+            warnings: [expect.stringContaining('requested thinking was not enforced')],
+        });
+        expect(result.usedFallbacks).toContain('model-selector-unavailable-current-model');
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('keeps sending when the model picker disappears with reasoning effort and reports the unenforced effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                initialModelMenuOpen: false,
+                modelPickerUnavailable: true,
+                advanceClock: clock.advance,
+            });
+
+            const result = await selectChatGptModel(page, 'thinking', { effort: 'standard' });
+
+            expect(result).toMatchObject({
+                requested: 'thinking',
+                selected: null,
+                effort: null,
+                requestedEffort: 'standard',
+                warnings: [expect.stringContaining('requested effort standard was not enforced')],
+            });
+            expect(result.usedFallbacks).toContain('model-selector-unavailable-current-model');
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('opens the current hero effort pill before selecting a requested effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            initialModelMenuOpen: false,
+            initialSelectedEffort: 'extended',
+            activePillTexts: { extended: 'Extended' },
+            effortTexts: thinkingEffortTexts(),
+        });
+
+        const result = await selectChatGptModel(page, 'thinking', { effort: 'standard' });
+
+        expect(result).toMatchObject({
+            selected: 'thinking',
+            effort: 'standard',
+            requestedEffort: 'standard',
+        });
+        expect(result.usedFallbacks).toContain('composer-model-pill');
+    });
+
     it('wires ChatGPT effort options through the CLI surface', () => {
         const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
@@ -491,6 +576,7 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(cliSrc).toContain("'reasoning-effort': { type: 'string' }");
         expect(cliSrc).toContain('reasoningEffort: values.effort');
         expect(chatgptSrc).toContain("selectChatGptModel(page, input.model, { effort: input.reasoningEffort })");
+        expect(chatgptSrc).toContain('...(selectedModel?.warnings || [])');
     });
 });
 
@@ -526,6 +612,15 @@ function labelsOnlyProEffortTexts() {
     };
 }
 
+function useAdvancingClock() {
+    let now = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    return {
+        advance: ms => { now += Number(ms) || 0; },
+        restore: () => spy.mockRestore(),
+    };
+}
+
 function createFakeModelPage({
     model = 'thinking',
     effortTexts = {},
@@ -550,6 +645,8 @@ function createFakeModelPage({
     exactEffortTriggerText = 'Effort',
     strayModelMenuTexts = [],
     effortOptionRole = 'menuitemradio',
+    modelPickerUnavailable = false,
+    advanceClock = null,
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
     const state = {
@@ -636,7 +733,7 @@ function createFakeModelPage({
             move: async () => undefined,
             click: async () => openEffortRows('target'),
         },
-        waitForTimeout: async () => undefined,
+        waitForTimeout: async ms => { if (advanceClock) advanceClock(ms); },
         evaluate: async (_fn, arg) => {
             if (arg === exactTrigger.testId && state.exactEffortTrigger) return exactTrigger.rect;
             return null;
@@ -681,6 +778,7 @@ function createFakeModelPage({
     }
 
     function selectElements(selector) {
+        if (modelPickerUnavailable) return [];
         if (selector === 'button, [role="button"], [role="menuitem"]') return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'text' ? [...composerPills(), genericTrigger] : composerPills();
         if (selector.includes('__composer-pill')) return roleButtonPill ? composerPills() : [];
         if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));

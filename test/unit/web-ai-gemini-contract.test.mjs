@@ -43,6 +43,14 @@ describe('web-ai Gemini Deep Think contract constraints', () => {
         expect(liveSrc).toContain('model selected:');
     });
 
+    it('retries Gemini new-chat clicks when the Angular nav element detaches mid-click', () => {
+        const liveSrc = readFileSync(new URL('../../web-ai/gemini-live.mjs', import.meta.url), 'utf8');
+        expect(liveSrc).toContain('clickFirstSelectorWithRetry');
+        expect(liveSrc).toContain("'gemini new chat'");
+        expect(liveSrc).toContain('click retry:${sel}');
+        expect(liveSrc).toMatch(/detached\\|Timeout\\|not attached\\|not stable/);
+    });
+
     it('standalone runtime supports observed Gemini file upload with evidence checks', () => {
         const liveSrc = readFileSync(new URL('../../web-ai/gemini-live.mjs', import.meta.url), 'utf8');
         expect(liveSrc).toContain("page.waitForEvent('filechooser'");
