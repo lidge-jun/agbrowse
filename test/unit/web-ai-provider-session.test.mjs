@@ -177,4 +177,10 @@ describe('web-ai cli session flags', () => {
         expect(recoverySrc).toMatch(/current\.conversationUrl && page\.url\(\) !== current\.conversationUrl/);
         expect(recoverySrc).toMatch(/page\.goto\(current\.conversationUrl/);
     });
+
+    it('exports resolveSessionPage and gates doctor as a browser-required session subcommand', () => {
+        const recoverySrc = readFileSync(join(process.cwd(), 'web-ai/tab-recovery.mjs'), 'utf8');
+        expect(cliSrc).toContain("BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach', 'doctor'])");
+        expect(recoverySrc).toContain('export async function resolveSessionPage');
+    });
 });

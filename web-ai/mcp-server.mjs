@@ -221,7 +221,7 @@ async function callMcpTool(name, args, deps, state) {
     if (name === 'web_ai_copy_markdown') {
         const provider = providerFromArgs(args);
         const fallbackUrl = state.latestSnapshot?.url || args.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[provider];
-        const action = { url: fallbackUrl, clipboardRead: true };
+        const action = { url: fallbackUrl, clipboardWriteIntercept: true };
         enforcePolicy(policy, action);
         const page = await deps.getPage();
         enforcePolicy(policy, { ...action, url: page.url?.() || fallbackUrl });

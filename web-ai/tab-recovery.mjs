@@ -196,6 +196,189 @@ export function isPageDeathError(err) {
  */
 
 /**
+ * @typedef {Object} ResolveSessionPageOk
+ * @property {false} mismatch
+ * @property {unknown} page
+ * @property {string} targetId
+ * @property {WebAiSession} session
+ * @property {boolean} recovered
+ * @property {'existing-tab' | 'new-tab' | 'recovered'} strategy
+ * @property {string[]} warnings
+ * @property {string} url
+ * @property {string | null} conversationUrl
+ */
+
+/**
+ * @typedef {Object} ResolveSessionPageMismatch
+ * @property {true} mismatch
+ * @property {null} page
+ * @property {string | null} targetId
+ * @property {WebAiSession} session
+ * @property {false} recovered
+ * @property {'existing-tab' | 'new-tab' | 'recovered'} strategy
+ * @property {string[]} warnings
+ * @property {string | null} url
+ * @property {string | null} conversationUrl
+ */
+
+/** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch} ResolveSessionPageResult */
+
+/**
+ * @param {string|null|undefined} storedUrl
+ * @param {string|null|undefined} liveUrl
+ */
+function urlsCompatible(storedUrl, liveUrl) {
+    if (!storedUrl || !liveUrl) return false;
+    if (storedUrl === liveUrl) return true;
+    try {
+        const a = new URL(storedUrl);
+        const b = new URL(liveUrl);
+        if (a.hostname !== b.hostname) return false;
+        const aPath = a.pathname.replace(/\/+$/, '') || '/';
+        const bPath = b.pathname.replace(/\/+$/, '') || '/';
+        return aPath === bPath || aPath === '/' || bPath.startsWith(`${aPath}/`);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Resolve the page bound to a session.
+ *
+ * Returns either a populated `mismatch: false` result (page non-null) or a
+ * typed `mismatch: true` result (page null). Mismatch is only reported when
+ * `allowNavigate === false` AND either the resolved tab's URL drifted from
+ * the session's stored conversation/original URL, or the stored target is
+ * closed and a new tab would have to be opened to recover.
+ *
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @param {{ allowNavigate?: boolean, forceRecover?: boolean }} [options]
+ * @returns {Promise<ResolveSessionPageResult>}
+ */
+export async function resolveSessionPage(deps, sessionId, options = {}) {
+    const allowNavigate = options.allowNavigate !== false;
+    const forceRecover = options.forceRecover === true;
+
+    const session = getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    const port = deps.getPort();
+    const current = /** @type {WebAiSession} */ (session);
+    const storedUrl = current.conversationUrl || current.originalUrl || null;
+
+    const { valid, needsRecovery } = await verifySessionTab(deps, current);
+
+    if (!valid || forceRecover) {
+        if (!allowNavigate) {
+            // Stored tab is closed/dead and caller did not authorize navigation.
+            return {
+                mismatch: true,
+                page: null,
+                targetId: current.targetId || null,
+                session: current,
+                recovered: false,
+                strategy: needsRecovery ? 'new-tab' : 'recovered',
+                warnings: [`session ${sessionId} tab is not valid; pass --navigate to recover`],
+                url: null,
+                conversationUrl: current.conversationUrl || null,
+            };
+        }
+        const recoveryTargetUrl = storedUrl;
+        if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
+            const recovery = await recoverSessionTab(deps, current);
+            if (!recovery.recovered) {
+                throw new Error(`Session ${sessionId} tab recovery failed`);
+            }
+            const recovered = /** @type {WebAiSession} */ (getSession(sessionId));
+            const page = await getPageByTargetId(port, /** @type {string} */ (recovered.targetId));
+            if (!page) throw new Error(`Session ${sessionId} page not found after recovery`);
+            return {
+                mismatch: false,
+                page,
+                targetId: /** @type {string} */ (recovered.targetId),
+                session: recovered,
+                recovered: true,
+                strategy: recovery.strategy === 'new-tab' ? 'new-tab' : 'recovered',
+                warnings: [],
+                url: page.url?.() || recoveryTargetUrl,
+                conversationUrl: recovered.conversationUrl || null,
+            };
+        }
+        throw new Error(`Session ${sessionId} tab is not valid and cannot be recovered`);
+    }
+
+    const page = await getPageByTargetId(port, /** @type {string} */ (current.targetId));
+    if (!page) throw new Error(`Session ${sessionId} page not found for targetId ${current.targetId}`);
+
+    if (current.conversationUrl && page.url() !== current.conversationUrl) {
+        const liveUrl = page.url();
+        if (shouldPreferCurrentProviderUrl(current.conversationUrl, liveUrl)) {
+            updateSession(sessionId, { conversationUrl: liveUrl });
+            const updated = /** @type {WebAiSession} */ (getSession(sessionId));
+            return {
+                mismatch: false,
+                page,
+                targetId: /** @type {string} */ (current.targetId),
+                session: updated,
+                recovered: false,
+                strategy: 'existing-tab',
+                warnings: [],
+                url: liveUrl,
+                conversationUrl: updated.conversationUrl || null,
+            };
+        }
+        if (!allowNavigate) {
+            const drifted = !urlsCompatible(current.conversationUrl, liveUrl);
+            if (drifted) {
+                return {
+                    mismatch: true,
+                    page: null,
+                    targetId: /** @type {string} */ (current.targetId),
+                    session: current,
+                    recovered: false,
+                    strategy: 'existing-tab',
+                    warnings: [`current tab ${liveUrl} does not match session conversationUrl ${current.conversationUrl}; pass --navigate to switch tabs`],
+                    url: liveUrl,
+                    conversationUrl: current.conversationUrl,
+                };
+            }
+        } else {
+            await page.goto(current.conversationUrl, { waitUntil: 'load', timeout: 30_000 });
+            const finalUrl = page.url();
+            await waitForConversationReady(page, finalUrl);
+            if (finalUrl !== current.conversationUrl && isProviderUrl(finalUrl)) {
+                updateSession(sessionId, { conversationUrl: finalUrl });
+                const updated = /** @type {WebAiSession} */ (getSession(sessionId));
+                return {
+                    mismatch: false,
+                    page,
+                    targetId: /** @type {string} */ (current.targetId),
+                    session: updated,
+                    recovered: false,
+                    strategy: 'existing-tab',
+                    warnings: [],
+                    url: finalUrl,
+                    conversationUrl: updated.conversationUrl || null,
+                };
+            }
+        }
+    }
+
+    return {
+        mismatch: false,
+        page,
+        targetId: /** @type {string} */ (current.targetId),
+        session: current,
+        recovered: false,
+        strategy: 'existing-tab',
+        warnings: [],
+        url: page.url?.() || current.conversationUrl || current.originalUrl || '',
+        conversationUrl: current.conversationUrl || null,
+    };
+}
+
+/**
  * Execute operation with session's bound page
  * GPT Pro recommendation: resolve page directly, don't use active tab routing
  * Catches page death mid-operation and retries once after recovery
@@ -206,60 +389,15 @@ export function isPageDeathError(err) {
  * @returns {Promise<T>}
  */
 export async function withSessionPage(deps, sessionId, fn) {
-    const session = getSession(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-
-    const port = deps.getPort();
-
-    async function resolvePage(forceRecover = false) {
-        const current = getSession(sessionId);
-        if (!current) throw new Error(`Session not found: ${sessionId}`);
-
-        const { valid, needsRecovery } = await verifySessionTab(deps, current);
-
-        if (!valid || forceRecover) {
-            const recoveryTargetUrl = current.conversationUrl || current.originalUrl;
-            if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
-                const recovery = await recoverSessionTab(deps, current);
-                if (!recovery.recovered) {
-                    throw new Error(`Session ${sessionId} tab recovery failed`);
-                }
-                const recovered = /** @type {WebAiSession} */ (getSession(sessionId));
-                const page = await getPageByTargetId(port, /** @type {string} */ (recovered.targetId));
-                if (!page) throw new Error(`Session ${sessionId} page not found after recovery`);
-                return { page, targetId: recovered.targetId, session: recovered };
-            }
-            throw new Error(`Session ${sessionId} tab is not valid and cannot be recovered`);
-        }
-
-        const page = await getPageByTargetId(port, /** @type {string} */ (current.targetId));
-        if (!page) throw new Error(`Session ${sessionId} page not found for targetId ${current.targetId}`);
-        if (current.conversationUrl && page.url() !== current.conversationUrl) {
-            const currentUrl = page.url();
-            if (shouldPreferCurrentProviderUrl(current.conversationUrl, currentUrl)) {
-                updateSession(sessionId, { conversationUrl: currentUrl });
-                const updated = /** @type {WebAiSession} */ (getSession(sessionId));
-                return { page, targetId: current.targetId, session: updated };
-            }
-            await page.goto(current.conversationUrl, { waitUntil: 'load', timeout: 30_000 });
-            const finalUrl = page.url();
-            await waitForConversationReady(page, finalUrl);
-            if (finalUrl !== current.conversationUrl && isProviderUrl(finalUrl)) {
-                updateSession(sessionId, { conversationUrl: finalUrl });
-                const updated = /** @type {WebAiSession} */ (getSession(sessionId));
-                return { page, targetId: current.targetId, session: updated };
-            }
-        }
-        return { page, targetId: current.targetId, session: current };
-    }
-
-    const first = await resolvePage();
+    const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true });
+    if (first.mismatch) throw new Error(`Session ${sessionId} resolver returned mismatch with allowNavigate=true`);
     try {
-        return await fn(first);
+        return await fn(/** @type {ResolvedPage<T>} */ ({ page: first.page, targetId: first.targetId, session: first.session }));
     } catch (err) {
         if (!isPageDeathError(err)) throw err;
-        const recovered = await resolvePage(true);
-        return fn(recovered);
+        const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true });
+        if (recovered.mismatch) throw new Error(`Session ${sessionId} recovery resolver returned mismatch with allowNavigate=true`);
+        return fn(/** @type {ResolvedPage<T>} */ ({ page: recovered.page, targetId: recovered.targetId, session: recovered.session }));
     }
 }
 

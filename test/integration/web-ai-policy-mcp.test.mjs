@@ -17,7 +17,7 @@ async function withTempHome(fn) {
 }
 
 describe('web-ai policy MCP', () => {
-    it('denies copy markdown clipboard read before touching page', async () => {
+    it('denies provider copy markdown capture before touching page', async () => {
         const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
         const response = await handleMcpMessage({
             jsonrpc: '2.0',
@@ -26,7 +26,7 @@ describe('web-ai policy MCP', () => {
             params: { name: 'web_ai_copy_markdown', arguments: { provider: 'chatgpt' } },
         }, deps, {});
         expect(response.result.isError).toBe(true);
-        expect(response.result.content[0].text).toContain('clipboard read denied');
+        expect(response.result.content[0].text).toContain('provider copy capture denied');
         expect(deps.getPage).not.toHaveBeenCalled();
     });
 

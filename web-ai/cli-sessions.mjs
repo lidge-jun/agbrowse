@@ -9,8 +9,11 @@ import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
 import { WebAiError } from './errors.mjs';
 import { getSession, listSessions, pruneSessionsOlderThan } from './session.mjs';
+import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
+import { withSessionCommandLock } from './session-store.mjs';
+import { buildSessionDoctorReport } from './session-doctor.mjs';
 
-const SESSIONS_SUBCOMMANDS = new Set(['list', 'show', 'resume', 'reattach', 'prune']);
+const SESSIONS_SUBCOMMANDS = new Set(['list', 'show', 'resume', 'reattach', 'doctor', 'prune']);
 
 const SESSION_DURATION_RE = /^(\d+)\s*([smhdw]?)$/i;
 const DURATION_MS = { '': 1000, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
@@ -57,8 +60,8 @@ export async function runSessionsCommand(args, values, deps, input) {
         return {
             ok: true,
             status: 'help',
-            commands: ['list', 'show', 'resume', 'reattach', 'prune'],
-            usage: 'agbrowse web-ai sessions <list|show|resume|reattach|prune> [options]',
+            commands: ['list', 'show', 'resume', 'reattach', 'doctor', 'prune'],
+            usage: 'agbrowse web-ai sessions <list|show|resume|reattach|doctor|prune> [options]',
         };
     }
     if (!SESSIONS_SUBCOMMANDS.has(sub)) {
@@ -66,7 +69,7 @@ export async function runSessionsCommand(args, values, deps, input) {
             errorCode: 'internal.unhandled',
             stage: 'internal',
             retryHint: 'report',
-            message: `unknown sessions subcommand: ${sub} (expected list|show|resume|reattach|prune)`,
+            message: `unknown sessions subcommand: ${sub} (expected list|show|resume|reattach|doctor|prune)`,
         });
     }
     if (sub === 'list') {
@@ -97,7 +100,15 @@ export async function runSessionsCommand(args, values, deps, input) {
             allowCopyMarkdownFallback: input.allowCopyMarkdownFallback === true,
         };
         const pollFn = session.vendor === 'gemini' ? geminiPollWebAi : session.vendor === 'grok' ? grokPollWebAi : pollWebAi;
-        const result = await pollFn(deps, pollInput);
+        const result = await withSessionCommandLock(id, () => withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
+            const sessionDeps = {
+                ...deps,
+                getPage: async () => page,
+                getTargetId: async () => targetId,
+                getCdpSession: async () => /** @type {any} */ (page).context?.().newCDPSession?.(page),
+            };
+            return pollFn(sessionDeps, { ...pollInput, vendor: refreshed.vendor, session: refreshed.sessionId });
+        }));
         return { ...result, status: result.status || 'resumed' };
     }
     if (sub === 'reattach') {
@@ -105,27 +116,37 @@ export async function runSessionsCommand(args, values, deps, input) {
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions reattach <id> requires a sessionId' });
         const session = getSession(id);
         if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
-        const page = await deps.getPage();
-        const currentUrl = page?.url?.() || null;
         const targetUrl = session.conversationUrl || session.originalUrl;
         if (!targetUrl) {
             return { ok: false, status: 'reattach-failed', sessionId: id, error: 'session has no conversationUrl/originalUrl', warnings: [] };
         }
-        if (currentUrl !== targetUrl) {
-            if (input.navigate === true) {
-                await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-                return { ok: true, status: 'reattached', sessionId: id, url: targetUrl, warnings: [`navigated from ${currentUrl} to ${targetUrl}`] };
-            }
+        const resolved = await resolveSessionPage(deps, id, { allowNavigate: input.navigate === true });
+        if (resolved.mismatch) {
             return {
                 ok: false,
                 status: 'reattach-mismatch',
                 sessionId: id,
-                url: currentUrl,
-                conversationUrl: targetUrl,
-                warnings: [`current tab ${currentUrl} does not match session conversationUrl ${targetUrl}; pass --navigate to switch tabs`],
+                targetId: resolved.targetId,
+                url: resolved.url,
+                conversationUrl: resolved.conversationUrl,
+                warnings: resolved.warnings,
             };
         }
-        return { ok: true, status: 'reattached', sessionId: id, url: targetUrl, warnings: ['already on conversationUrl'] };
+        return {
+            ok: true,
+            status: 'reattached',
+            sessionId: id,
+            targetId: resolved.targetId,
+            url: /** @type {any} */ (resolved.page).url?.() || resolved.conversationUrl || targetUrl,
+            recovered: resolved.recovered === true,
+            strategy: resolved.strategy || 'existing-tab',
+            warnings: resolved.warnings || [],
+        };
+    }
+    if (sub === 'doctor') {
+        const id = rest[0] || values.session;
+        if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions doctor <id> requires a sessionId' });
+        return buildSessionDoctorReport(deps, id, { navigate: input.navigate === true });
     }
     if (sub === 'prune') {
         const olderThanMs = values['older-than']
@@ -172,6 +193,11 @@ export function printSessionsHuman(result) {
     if (result.status === 'reattach-mismatch') {
         console.log(`reattach mismatch: tab=${result.url} session=${result.conversationUrl}`);
         console.log('pass --navigate to switch tabs');
+        return;
+    }
+    if (result.status === 'session-doctor') {
+        console.log(`session ${result.sessionId}: ${result.summary}`);
+        for (const line of result.recommendations || []) console.log(`- ${line}`);
         return;
     }
     if (result.answerText) {

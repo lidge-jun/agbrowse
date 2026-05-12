@@ -174,6 +174,64 @@ describe('web-ai session API on top of the store', () => {
     });
 });
 
+describe('web-ai session command lock heartbeat + PID staleness', () => {
+    it('records pid, sessionId, acquiredAt, heartbeatAt, expiresAt metadata when acquired', async () => {
+        const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSION001';
+        const before = Date.now();
+        let snapshot;
+        await withSessionCommandLock(sessionId, async () => {
+            snapshot = readSessionCommandLock(sessionId);
+        }, { heartbeatMs: 0 });
+        expect(snapshot).toBeTruthy();
+        expect(snapshot.pid).toBe(process.pid);
+        expect(snapshot.sessionId).toBe(sessionId);
+        expect(Date.parse(snapshot.acquiredAt)).toBeGreaterThanOrEqual(before - 1);
+        expect(Date.parse(snapshot.heartbeatAt)).toBeGreaterThanOrEqual(Date.parse(snapshot.acquiredAt) - 1);
+        expect(Date.parse(snapshot.expiresAt)).toBeGreaterThan(Date.parse(snapshot.heartbeatAt));
+        expect(typeof snapshot.stale).toBe('boolean');
+        expect(readSessionCommandLock(sessionId)).toBeNull();
+    });
+
+    it('treats a command lock from a dead pid as stale and allows reacquire', async () => {
+        const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSION002';
+        const { writeFileSync, mkdirSync } = await import('node:fs');
+        const { dirname } = await import('node:path');
+        const lockPath = join(tmpHome, `web-ai-sessions.json.cmd.${sessionId}.lock`);
+        mkdirSync(dirname(lockPath), { recursive: true });
+        // Pick a PID guaranteed not to be alive: max valid pid value.
+        const deadPid = 2_147_483_646;
+        const now = Date.now();
+        writeFileSync(lockPath, JSON.stringify({
+            pid: deadPid,
+            sessionId,
+            acquiredAt: new Date(now).toISOString(),
+            heartbeatAt: new Date(now).toISOString(),
+            expiresAt: new Date(now + 60_000).toISOString(),
+        }));
+        const before = readSessionCommandLock(sessionId);
+        expect(before?.stale).toBe(true);
+
+        let executed = false;
+        await withSessionCommandLock(sessionId, async () => { executed = true; }, { heartbeatMs: 0 });
+        expect(executed).toBe(true);
+    });
+
+    it('does not treat a live command lock heartbeat as stale within ttl', async () => {
+        const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSION003';
+        // A short ttl so we observe expiresAt > now while heartbeat is fresh.
+        const lockPromise = withSessionCommandLock(sessionId, async () => {
+            const snapshot = readSessionCommandLock(sessionId);
+            expect(snapshot).toBeTruthy();
+            expect(snapshot.stale).toBe(false);
+            expect(Date.parse(snapshot.expiresAt) - Date.now()).toBeGreaterThan(0);
+        }, { ttlMs: 60_000, heartbeatMs: 0 });
+        await lockPromise;
+    });
+});
+
 describe('web-ai session-store concurrency', () => {
     it('serializes parallel insertSession calls without losing records', async () => {
         const { insertSession, listStoredSessions, generateSessionId } = await freshStore();

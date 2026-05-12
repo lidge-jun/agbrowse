@@ -50,7 +50,7 @@ describe('web-ai sessions CLI surface (source-string contracts)', () => {
 
     it('declares sessions in COMMANDS and a sessions subcommand whitelist', () => {
         expect(cliSrc).toMatch(/COMMANDS = new Set\(\[[\s\S]*?'sessions'/);
-        expect(sessionsSrc).toMatch(/SESSIONS_SUBCOMMANDS = new Set\(\['list', 'show', 'resume', 'reattach', 'prune'\]\)/);
+        expect(sessionsSrc).toMatch(/SESSIONS_SUBCOMMANDS = new Set\(\['list', 'show', 'resume', 'reattach', 'doctor', 'prune'\]\)/);
     });
 
     it('dispatches sessions before context and runCommand', () => {
@@ -58,13 +58,14 @@ describe('web-ai sessions CLI surface (source-string contracts)', () => {
     });
 
     it('list/show/resume/reattach/prune subcommands are handled', () => {
-        for (const sub of ['list', 'show', 'resume', 'reattach', 'prune']) {
+        for (const sub of ['list', 'show', 'resume', 'reattach', 'doctor', 'prune']) {
             expect(sessionsSrc).toMatch(new RegExp(`sub === '${sub}'`));
         }
     });
 
-    it('resume forwards to vendor-specific poll function', () => {
-        expect(sessionsSrc).toMatch(/session\.vendor === 'gemini' \? geminiPollWebAi : session\.vendor === 'grok' \? grokPollWebAi : pollWebAi/);
+    it('resume polls through withSessionPage and withSessionCommandLock', () => {
+        expect(sessionsSrc).toContain('withSessionPage');
+        expect(sessionsSrc).toContain('withSessionCommandLock');
     });
 
     it('reattach respects --navigate when conversationUrl differs', () => {

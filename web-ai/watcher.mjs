@@ -13,6 +13,7 @@ import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
 import { getSession, updateSession } from './session.mjs';
 import { withSessionPage } from './tab-recovery.mjs';
+import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
     defineCapability, runCapabilities,
@@ -134,6 +135,23 @@ export async function watchSessionOnce(deps, input = {}) {
         });
     }
 
+    if (session.status === 'timeout' && !isDeadlineExpired(session.deadlineAt)) {
+        // Promote a transient (pre-deadline) timeout back to polling under the
+        // session command lock so a concurrent live `poll --session` cannot
+        // clobber the status mid-flip.
+        await withSessionCommandLock(session.sessionId, async () => {
+            const refreshed = getSession(session.sessionId) || session;
+            if (refreshed.status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt)) {
+                updateSession(session.sessionId, {
+                    status: 'polling',
+                    warnings: appendUniqueWarning(refreshed.warnings || [], 'watcher-resumed-transient-timeout'),
+                });
+                session.status = 'polling';
+            } else {
+                session.status = refreshed.status;
+            }
+        }, { ttlMs: 30_000, heartbeatMs: 0 });
+    }
     if (TERMINAL_SESSION_STATUSES.has(session.status)) {
         return {
             ok: true, sessionId: session.sessionId, vendor,

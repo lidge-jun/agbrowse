@@ -24,13 +24,13 @@ describe('web-ai policy', () => {
     });
 
     it('denies risky actions before mutation', () => {
-        expect(() => enforcePolicy({}, { clipboardRead: true })).toThrow(/clipboard read denied/);
+        expect(() => enforcePolicy({}, { clipboardWriteIntercept: true })).toThrow(/provider copy capture denied/);
         expect(() => enforcePolicy({}, { evaluate: true })).toThrow(/evaluate denied/);
     });
 
     it('exposes ruleId in policy errors', () => {
         try {
-            enforcePolicy({}, { clipboardRead: true });
+            enforcePolicy({}, { clipboardWriteIntercept: true });
             throw new Error('expected policy failure');
         } catch (error) {
             expect(error.toJSON()).toMatchObject({
@@ -38,6 +38,28 @@ describe('web-ai policy', () => {
                 ruleId: 'allowClipboardRead',
                 evidence: { ruleId: 'allowClipboardRead' },
             });
+        }
+    });
+
+    it('accepts the legacy --unsafe-allow clipboard-read alias for one minor version', () => {
+        expect(
+            enforcePolicy({}, { clipboardWriteIntercept: true, unsafeAllow: ['clipboard-read'] }).ok,
+        ).toBe(true);
+    });
+
+    it('accepts the new clipboard-write-intercept unsafe allowance', () => {
+        expect(
+            enforcePolicy({}, { clipboardWriteIntercept: true, unsafeAllow: ['clipboard-write-intercept'] }).ok,
+        ).toBe(true);
+    });
+
+    it('copy fallback denial message no longer claims OS clipboard read', () => {
+        try {
+            enforcePolicy({}, { clipboardWriteIntercept: true });
+            throw new Error('expected denial');
+        } catch (error) {
+            expect(error.message).not.toMatch(/OS clipboard|clipboard read/i);
+            expect(error.message).toMatch(/provider copy capture/);
         }
     });
 

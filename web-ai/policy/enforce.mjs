@@ -10,7 +10,7 @@ import { loadPolicy, normalizePolicy, policyError } from './schema.mjs';
  *   url?: string,
  *   upload?: boolean,
  *   explicitUpload?: boolean,
- *   clipboardRead?: boolean,
+ *   clipboardWriteIntercept?: boolean,
  *   evaluate?: boolean,
  *   fileAccess?: boolean,
  *   unsafeAllow?: string[],
@@ -52,8 +52,13 @@ export function enforcePolicy(policyInput = {}, action = {}) {
     if (action.upload && policy.allowUploads !== true && policy.allowUploads !== 'explicit-only') {
         throw policyError('policy.upload-denied', 'policy-enforce', 'uploads denied by policy', { ruleId: 'allowUploads' });
     }
-    if (action.clipboardRead && policy.allowClipboardRead !== true && !action.unsafeAllow?.includes('clipboard-read')) {
-        throw policyError('policy.clipboard-read-denied', 'policy-enforce', 'clipboard read denied by policy', { ruleId: 'allowClipboardRead' });
+    if (
+        action.clipboardWriteIntercept
+        && policy.allowClipboardRead !== true
+        && !action.unsafeAllow?.includes('clipboard-read')
+        && !action.unsafeAllow?.includes('clipboard-write-intercept')
+    ) {
+        throw policyError('policy.clipboard-write-intercept-denied', 'policy-enforce', 'provider copy capture denied by policy', { ruleId: 'allowClipboardRead' });
     }
     if (action.evaluate && policy.allowEvaluate !== true && !action.unsafeAllow?.includes('evaluate')) {
         throw policyError('policy.evaluate-denied', 'policy-enforce', 'evaluate denied by policy', { ruleId: 'allowEvaluate' });

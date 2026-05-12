@@ -49,7 +49,7 @@ const COMMANDS = new Set([
 ]);
 
 const BROWSER_REQUIRED_COMMANDS = new Set(['status', 'send', 'poll', 'query', 'stop', 'watch', 'snapshot', 'doctor']);
-const BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach']);
+const BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach', 'doctor']);
 export const WEB_AI_USAGE = `
 Usage:
   agbrowse web-ai <command> --vendor <chatgpt|gemini|grok> [options]
@@ -63,7 +63,7 @@ Commands:
   stop                Send Escape to the active provider tab
   watch               Watch a persisted session until terminal status
   snapshot            Print a compact accessibility snapshot for the active provider tab
-  sessions <sub>      Manage persisted sessions: list | show | resume | reattach | prune
+  sessions <sub>      Manage persisted sessions: list | show | resume | reattach | doctor | prune
   context-dry-run     Build a context package without sending
   context-render      Render full prompt/context package text
   mcp-server          Run stdio MCP bridge exposing web-ai tools
@@ -154,6 +154,7 @@ Sessions subcommands:
   agbrowse web-ai sessions show   <sessionId> [--json]
   agbrowse web-ai sessions resume <sessionId> [--allow-copy-markdown-fallback] [--timeout <s>]
   agbrowse web-ai sessions reattach <sessionId> [--navigate]
+  agbrowse web-ai sessions doctor   <sessionId> [--navigate] [--json]
   agbrowse web-ai sessions prune  [--older-than 30d] [--status <s>]
                       Duration accepts s | m | h | d | w (default unit d).
 
@@ -618,11 +619,11 @@ async function enforceCliPolicy(command, input) {
         upload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
         explicitUpload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
         fileAccess: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
-        clipboardRead: input.allowCopyMarkdownFallback === true,
+        clipboardWriteIntercept: input.allowCopyMarkdownFallback === true,
         evaluate: false,
         unsafeAllow: input.unsafeAllow,
     };
-    if (!mutating && !action.clipboardRead && !input.unsafeAllow?.length) return null;
+    if (!mutating && !action.clipboardWriteIntercept && !input.unsafeAllow?.length) return null;
     const { policy, explicitKeys } = await loadPolicy(input.policyPath);
     const effective = applyProviderDefaults(provider, policy, { explicitKeys });
     enforcePolicy(effective, action);

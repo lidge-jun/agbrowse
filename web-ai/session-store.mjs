@@ -44,7 +44,9 @@ export const SESSION_STORE_VERSION = 1;
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const LOCK_RETRY_MS = 25;
 const LOCK_RETRY_LIMIT = 200;
-const STALE_LOCK_MS = 5 * 60 * 1000;
+const STORE_LOCK_STALE_MS = 5 * 60 * 1000;
+const SESSION_COMMAND_LOCK_HEARTBEAT_MS = 15_000;
+const DEFAULT_SESSION_COMMAND_LOCK_TTL_MS = 35 * 60 * 1000;
 
 function home() {
     return process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
@@ -149,7 +151,7 @@ export function withStoreLock(fn) {
             const e = /** @type {NodeJS.ErrnoException} */ (err);
             if (e?.code !== 'EEXIST') throw err;
             attempts += 1;
-            const stale = isStaleLock(path);
+            const stale = isStoreLockStale(path);
             if (stale) {
                 try { unlinkSync(path); } catch { /* races resolve naturally */ }
                 continue;
@@ -164,16 +166,82 @@ export function withStoreLock(fn) {
  * @param {string} path
  * @returns {boolean}
  */
-function isStaleLock(path) {
+function isStoreLockStale(path) {
     try {
         const raw = readFileSync(path, 'utf8');
         const parsed = JSON.parse(raw);
         const acquired = Date.parse(parsed?.acquiredAt || '');
         if (!Number.isFinite(acquired)) return true;
-        return Date.now() - acquired > STALE_LOCK_MS;
+        return Date.now() - acquired > STORE_LOCK_STALE_MS;
     } catch {
         return true;
     }
+}
+
+/**
+ * @param {string} sessionId
+ * @param {number} ttlMs
+ * @param {number} [acquiredAtMs]
+ */
+function commandLockMetadata(sessionId, ttlMs, acquiredAtMs = Date.now()) {
+    const ttl = Number(ttlMs || DEFAULT_SESSION_COMMAND_LOCK_TTL_MS);
+    const now = Date.now();
+    return {
+        pid: process.pid,
+        sessionId,
+        acquiredAt: new Date(acquiredAtMs).toISOString(),
+        heartbeatAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + ttl).toISOString(),
+    };
+}
+
+/**
+ * @param {string} path
+ */
+function readLockFile(path) {
+    if (!existsSync(path)) return null;
+    try {
+        return { path, ...JSON.parse(readFileSync(path, 'utf8')) };
+    } catch {
+        return { path, corrupt: true };
+    }
+}
+
+/**
+ * @param {number} pid
+ */
+function pidAlive(pid) {
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return (/** @type {any} */ (err))?.code === 'EPERM';
+    }
+}
+
+/**
+ * @param {string} path
+ */
+function isSessionCommandLockStale(path) {
+    const lock = readLockFile(path);
+    if (!lock || lock.corrupt) return true;
+    if (!pidAlive(Number(lock.pid))) return true;
+    const heartbeat = Date.parse(lock.heartbeatAt || lock.acquiredAt || '');
+    const expires = Date.parse(lock.expiresAt || '');
+    if (Number.isFinite(expires)) return expires <= Date.now();
+    return Number.isFinite(heartbeat) && Date.now() - heartbeat > DEFAULT_SESSION_COMMAND_LOCK_TTL_MS;
+}
+
+/**
+ * @param {string} sessionId
+ */
+export function readSessionCommandLock(sessionId) {
+    const path = sessionCommandLockPath(sessionId);
+    const raw = readLockFile(path);
+    if (!raw) return null;
+    if (raw.corrupt) return { ...raw, stale: true };
+    return { ...raw, stale: isSessionCommandLockStale(path) };
 }
 
 /** @param {number} ms */
@@ -197,26 +265,30 @@ function sessionCommandLockPath(sessionId) {
  * @template T
  * @param {string} sessionId
  * @param {() => Promise<T>} fn
+ * @param {{ ttlMs?: number, heartbeatMs?: number }} [options]
  * @returns {Promise<T>}
  */
-export async function withSessionCommandLock(sessionId, fn) {
+export async function withSessionCommandLock(sessionId, fn, options = {}) {
     const path = sessionCommandLockPath(sessionId);
     mkdirSync(dirname(path), { recursive: true });
     /** @type {number|null} */
     let fd = null;
     let attempts = 0;
+    const ttlMs = Number(options.ttlMs || DEFAULT_SESSION_COMMAND_LOCK_TTL_MS);
+    const heartbeatMs = Number(options.heartbeatMs ?? SESSION_COMMAND_LOCK_HEARTBEAT_MS);
+    const acquiredAtMs = Date.now();
     while (attempts < LOCK_RETRY_LIMIT) {
         try {
             fd = openSync(path, 'wx');
             try {
-                writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), sessionId }));
+                writeFileSync(fd, JSON.stringify(commandLockMetadata(sessionId, ttlMs, acquiredAtMs)));
             } catch { /* best-effort metadata write */ }
             break;
         } catch (err) {
             const e = /** @type {NodeJS.ErrnoException} */ (err);
             if (e?.code !== 'EEXIST') throw err;
             attempts += 1;
-            const stale = isStaleLock(path);
+            const stale = isSessionCommandLockStale(path);
             if (stale) {
                 try { unlinkSync(path); } catch { /* races resolve naturally */ }
                 continue;
@@ -227,9 +299,16 @@ export async function withSessionCommandLock(sessionId, fn) {
     if (fd === null) {
         throw new Error(`web-ai session command: failed to acquire lock for ${sessionId} after ${LOCK_RETRY_LIMIT} attempts`);
     }
+    const heartbeatTimer = heartbeatMs > 0
+        ? setInterval(() => {
+            try { writeFileSync(path, JSON.stringify(commandLockMetadata(sessionId, ttlMs, acquiredAtMs))); } catch { /* best effort */ }
+        }, Math.max(1000, heartbeatMs))
+        : null;
+    heartbeatTimer?.unref?.();
     try {
         return await fn();
     } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         try { closeSync(fd); } catch { /* already closed */ }
         try { unlinkSync(path); } catch { /* already gone */ }
     }
