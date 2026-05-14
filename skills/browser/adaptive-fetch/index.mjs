@@ -81,12 +81,23 @@ export async function runAdaptiveFetch(input, deps = {}) {
     /** @type {string[]} */
     const discoveredFeedUrls = [];
     for (const candidate of candidateUrls) {
-        const fetched = await fetchTextCandidate(candidate.url, {
-            maxBytes: options.maxBytes,
-            timeoutMs: options.timeoutMs,
-            allowPrivateNetwork: options.allowPrivateNetwork,
-            fetchImpl,
-        });
+        let fetched;
+        try {
+            fetched = await fetchTextCandidate(candidate.url, {
+                maxBytes: options.maxBytes,
+                timeoutMs: options.timeoutMs,
+                allowPrivateNetwork: options.allowPrivateNetwork,
+                fetchImpl,
+            });
+        } catch (error) {
+            appendAttempt(trace, {
+                source: candidate.source,
+                verdict: 'error',
+                url: candidate.url,
+                reason: (/** @type {any} */ (error)).message || 'fetch-candidate-error',
+            });
+            continue;
+        }
         fetchedUrls.add(fetched.finalUrl || candidate.url);
         const readerCandidate = fromFetchResult(fetched, {
             source: candidate.source,
@@ -109,12 +120,23 @@ export async function runAdaptiveFetch(input, deps = {}) {
     }
     if (options.browserMode !== 'required' && options.publicEndpoints) {
         for (const feedUrl of discoveredFeedUrls) {
-            const fetched = await fetchTextCandidate(feedUrl, {
-                maxBytes: options.maxBytes,
-                timeoutMs: options.timeoutMs,
-                allowPrivateNetwork: options.allowPrivateNetwork,
-                fetchImpl,
-            });
+            let fetched;
+            try {
+                fetched = await fetchTextCandidate(feedUrl, {
+                    maxBytes: options.maxBytes,
+                    timeoutMs: options.timeoutMs,
+                    allowPrivateNetwork: options.allowPrivateNetwork,
+                    fetchImpl,
+                });
+            } catch (error) {
+                appendAttempt(trace, {
+                    source: 'public_endpoint',
+                    verdict: 'error',
+                    url: feedUrl,
+                    reason: (/** @type {any} */ (error)).message || 'feed-candidate-error',
+                });
+                continue;
+            }
             fetchedUrls.add(fetched.finalUrl || feedUrl);
             const readerCandidate = fromFetchResult(fetched, {
                 source: 'public_endpoint',
@@ -134,12 +156,22 @@ export async function runAdaptiveFetch(input, deps = {}) {
         }
     }
     if (options.allowThirdPartyReader) {
-        const fetched = await fetchThirdPartyReaderCandidate(parsed.href, {
-            allowThirdPartyReader: true,
-            maxBytes: options.maxBytes,
-            timeoutMs: options.timeoutMs,
-            fetchImpl,
-        });
+        let fetched = null;
+        try {
+            fetched = await fetchThirdPartyReaderCandidate(parsed.href, {
+                allowThirdPartyReader: true,
+                maxBytes: options.maxBytes,
+                timeoutMs: options.timeoutMs,
+                fetchImpl,
+            });
+        } catch (error) {
+            appendAttempt(trace, {
+                source: 'third_party_reader',
+                verdict: 'error',
+                url: parsed.href,
+                reason: (/** @type {any} */ (error)).message || 'third-party-reader-error',
+            });
+        }
         if (fetched) {
             const readerCandidate = fromFetchResult(fetched, {
                 source: 'third_party_reader',
@@ -296,7 +328,7 @@ function positiveInteger(value, fallback) {
 function resultFromReaderCandidate(scored) {
     const candidate = scored.candidate;
     return {
-        ok: ['strong_ok', 'weak_ok'].includes(scored.verdict),
+        ok: candidate.ok !== false && ['strong_ok', 'weak_ok'].includes(scored.verdict),
         verdict: scored.verdict,
         source: candidate.source,
         finalUrl: candidate.finalUrl,
@@ -361,6 +393,7 @@ async function tryBrowserEscalation(url, options, deps, trace) {
             browserSession: options.browserSession,
             timeoutMs: options.timeoutMs,
             selector: options.selector,
+            allowPrivateNetwork: options.allowPrivateNetwork,
         });
         const scored = scoreReaderCandidate(fromBrowserResult(result));
         appendAttempt(trace, {

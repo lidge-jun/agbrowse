@@ -26,10 +26,7 @@ export async function getFetchBrowserPage(options = {}) {
     if (typeof deps.createIsolatedPage === 'function') {
         return deps.createIsolatedPage();
     }
-    if (typeof deps.getPage === 'function') {
-        return { page: await deps.getPage(), cleanup: async () => undefined, isolated: false };
-    }
-    throw new BrowserRequiredError('browser dependency is unavailable');
+    throw new BrowserRequiredError('isolated browser page dependency is unavailable');
 }
 
 /**
@@ -38,4 +35,3 @@ export async function getFetchBrowserPage(options = {}) {
 export async function closeFetchBrowserPage(pageRef) {
     if (typeof pageRef?.cleanup === 'function') await pageRef.cleanup();
 }
-

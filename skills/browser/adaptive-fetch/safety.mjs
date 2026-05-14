@@ -30,6 +30,26 @@ const SENSITIVE_HEADER_KEYS = new Set([
     'x-auth-token',
 ]);
 
+const SPECIAL_USE_IPV6_CIDRS = [
+    ['::', 128],
+    ['::1', 128],
+    ['::ffff:0:0', 96],
+    ['64:ff9b::', 96],
+    ['64:ff9b:1::', 48],
+    ['100::', 64],
+    ['2001::', 23],
+    ['2001:2::', 48],
+    ['2001:10::', 28],
+    ['2001:20::', 28],
+    ['2001:db8::', 32],
+    ['2002::', 16],
+    ['3fff::', 20],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['fec0::', 10],
+    ['ff00::', 8],
+];
+
 export class AdaptiveFetchInputError extends Error {
     /**
      * @param {string} message
@@ -111,12 +131,92 @@ export function isPrivateIpv4(ip) {
  */
 export function isPrivateIpv6(ip) {
     const normalized = ip.toLowerCase();
-    return normalized === '::'
-        || normalized === '::1'
-        || normalized.startsWith('fc')
-        || normalized.startsWith('fd')
-        || normalized.startsWith('fe80:')
-        || normalized.startsWith('ff');
+    const mapped = ipv4FromMappedIpv6(normalized);
+    if (mapped) return true;
+    return SPECIAL_USE_IPV6_CIDRS.some(([base, bits]) => ipv6CidrContains(String(base), Number(bits), normalized));
+}
+
+/**
+ * @param {string} ip
+ */
+function ipv4FromMappedIpv6(ip) {
+    const dotted = ip.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+    if (dotted) return dotted[1];
+    const hex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (!hex) return '';
+    const high = parseInt(hex[1], 16);
+    const low = parseInt(hex[2], 16);
+    if (![high, low].every(Number.isFinite)) return '';
+    return [
+        (high >> 8) & 255,
+        high & 255,
+        (low >> 8) & 255,
+        low & 255,
+    ].join('.');
+}
+
+/**
+ * @param {string} base
+ * @param {number} bits
+ * @param {string} ip
+ */
+function ipv6CidrContains(base, bits, ip) {
+    const baseValue = ipv6ToBigInt(base);
+    const ipValue = ipv6ToBigInt(ip);
+    if (baseValue === null || ipValue === null || bits < 0 || bits > 128) return true;
+    if (bits === 0) return true;
+    const shift = BigInt(128 - bits);
+    return (baseValue >> shift) === (ipValue >> shift);
+}
+
+/**
+ * @param {string} ip
+ * @returns {bigint|null}
+ */
+function ipv6ToBigInt(ip) {
+    const text = ip.toLowerCase();
+    if (text.includes('.')) return null;
+    const parts = text.split('::');
+    if (parts.length > 2) return null;
+    const head = parts[0] ? parts[0].split(':') : [];
+    const tail = parts.length === 2 && parts[1] ? parts[1].split(':') : [];
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0) return null;
+    const groups = [...head, ...Array(missing).fill('0'), ...tail];
+    if (groups.length !== 8) return null;
+    let value = 0n;
+    for (const group of groups) {
+        if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+        const number = parseInt(group, 16);
+        if (!Number.isInteger(number) || number < 0 || number > 0xffff) return null;
+        value = (value << 16n) + BigInt(number);
+    }
+    return value;
+}
+
+/**
+ * @param {string|URL} rawUrl
+ */
+export function hasSensitiveQueryParams(rawUrl) {
+    const parsed = rawUrl instanceof URL ? rawUrl : new URL(String(rawUrl));
+    for (const key of parsed.searchParams.keys()) {
+        if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) return true;
+    }
+    return false;
+}
+
+/**
+ * @param {string|URL} rawUrl
+ */
+export function validateThirdPartyReaderTarget(rawUrl) {
+    const parsed = validateFetchUrl(String(rawUrl), { allowPrivateNetwork: false });
+    if (hasSensitiveQueryParams(parsed)) {
+        throw new AdaptiveFetchInputError('third-party reader target contains sensitive query parameters', {
+            code: 'sensitive-query',
+            url: redactTraceValue(parsed.href),
+        });
+    }
+    return parsed;
 }
 
 /**
@@ -152,4 +252,3 @@ export function redactHeaders(headers = {}) {
     }
     return redacted;
 }
-

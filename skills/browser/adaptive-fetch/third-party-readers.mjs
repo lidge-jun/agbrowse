@@ -1,7 +1,7 @@
 // @ts-check
 
 import { fetchTextCandidate } from './fetcher.mjs';
-import { validateFetchUrl } from './safety.mjs';
+import { validateThirdPartyReaderTarget } from './safety.mjs';
 
 const JINA_READER_PREFIX = 'https://r.jina.ai/';
 
@@ -16,7 +16,7 @@ export function shouldUseThirdPartyReader(options = {}) {
  * @param {string} rawUrl
  */
 export function buildJinaReaderUrl(rawUrl) {
-    const target = validateFetchUrl(rawUrl, { allowPrivateNetwork: false });
+    const target = validateThirdPartyReaderTarget(rawUrl);
     return `${JINA_READER_PREFIX}${target.href}`;
 }
 
@@ -26,7 +26,7 @@ export function buildJinaReaderUrl(rawUrl) {
  */
 export async function fetchThirdPartyReaderCandidate(rawUrl, options = {}) {
     if (!shouldUseThirdPartyReader(options)) return null;
-    const target = validateFetchUrl(rawUrl, { allowPrivateNetwork: false });
+    const target = validateThirdPartyReaderTarget(rawUrl);
     const readerUrl = buildJinaReaderUrl(target.href);
     const fetched = await fetchTextCandidate(readerUrl, {
         maxBytes: options.maxBytes,
@@ -43,4 +43,3 @@ export async function fetchThirdPartyReaderCandidate(rawUrl, options = {}) {
         warnings: fetched.ok ? fetched.warnings : [...(fetched.warnings || []), 'third-party-reader-failed'],
     };
 }
-

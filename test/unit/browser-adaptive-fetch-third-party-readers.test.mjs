@@ -16,6 +16,8 @@ describe('adaptive fetch third-party readers', () => {
         expect(buildJinaReaderUrl('https://example.com/a')).toBe('https://r.jina.ai/https://example.com/a');
         expect(() => buildJinaReaderUrl('https://localhost/a')).toThrow(/private or local host/);
         expect(() => buildJinaReaderUrl('https://user:pass@example.com/a')).toThrow(/credential-bearing/);
+        expect(() => buildJinaReaderUrl('https://example.com/a?token=secret')).toThrow(/sensitive query/);
+        expect(() => buildJinaReaderUrl('https://example.com/a?api_key=secret')).toThrow(/sensitive query/);
     });
 
     it('fetches a third-party candidate only when explicitly allowed', async () => {
@@ -61,4 +63,3 @@ describe('adaptive fetch third-party readers', () => {
         expect(result.attempts.some(a => a.source === 'third_party_reader')).toBe(true);
     });
 });
-

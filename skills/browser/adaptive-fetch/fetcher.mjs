@@ -33,10 +33,11 @@ export async function fetchTextCandidate(rawUrl, options = {}) {
         if (contentLength > maxBytes) {
             return blockedResult(current, response.status, contentType, headers, 'content-length-exceeds-max-bytes');
         }
-        const text = await response.text();
-        if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+        const body = await readTextWithLimit(response, maxBytes);
+        if (!body.ok) {
             return blockedResult(current, response.status, contentType, headers, 'body-exceeds-max-bytes');
         }
+        const text = body.text;
         return {
             ok: response.ok,
             status: response.status,
@@ -44,11 +45,44 @@ export async function fetchTextCandidate(rawUrl, options = {}) {
             contentType,
             text,
             headers: redactHeaders(headers),
-            evidence: [`http-${response.status}`, contentType || 'unknown-content-type'],
-            warnings: [],
+            evidence: [`http-${response.status}`, contentType || 'unknown-content-type', body.streamed ? 'stream-limited' : null].filter(Boolean),
+            warnings: body.warning ? [body.warning] : [],
         };
     }
     return blockedResult(current, 0, '', {}, 'redirect-limit-exceeded');
+}
+
+/**
+ * @param {Response} response
+ * @param {number} maxBytes
+ */
+async function readTextWithLimit(response, maxBytes) {
+    const body = response.body;
+    if (!body || typeof body.getReader !== 'function') {
+        const text = await response.text();
+        return {
+            ok: Buffer.byteLength(text, 'utf8') <= maxBytes,
+            text,
+            streamed: false,
+            warning: 'body-read-without-stream-limit',
+        };
+    }
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let bytes = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value?.byteLength || 0;
+        if (bytes > maxBytes) {
+            await reader.cancel().catch(() => undefined);
+            return { ok: false, text: '', streamed: true, warning: null };
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return { ok: true, text: chunks.join(''), streamed: true, warning: null };
 }
 
 /**
@@ -70,4 +104,3 @@ function blockedResult(finalUrl, status, contentType, headers, reason) {
         warnings: [reason],
     };
 }
-

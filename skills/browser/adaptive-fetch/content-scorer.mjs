@@ -1,6 +1,6 @@
 // @ts-check
 
-import { findBoundaryMarkers } from './validators.mjs';
+import { classifyBoundarySignals, findBoundaryMarkers } from './validators.mjs';
 
 const SOURCE_TRUST = {
     public_endpoint: 20,
@@ -24,13 +24,36 @@ export function scoreReaderCandidate(candidate, options = {}) {
     const textLength = text.length;
     const density = computeTextDensity(text, Number(candidate.rawTextLength || textLength));
     const metadataEvidence = countMetadataEvidence(metadata);
+    const boundary = classifyBoundarySignals({
+        status: candidate.status,
+        text: `${title}\n${text}`,
+    });
     let score = 0;
     score += Math.min(45, Math.floor(textLength / 80));
     score += Math.min(20, Math.floor(density * 20));
     score += title.length >= 8 ? 8 : 0;
     score += Math.min(15, metadataEvidence * 5);
     score += SOURCE_TRUST[candidate.source] || 0;
-    if (!candidate.ok) score -= 30;
+    if (candidate.ok === false || Number(candidate.status || 0) >= 400) {
+        score = 0;
+        const verdict = boundary.verdict || 'blocked';
+        return {
+            candidate,
+            score,
+            verdict,
+            markers: boundary.markers || markers,
+            textLength,
+            density,
+            evidence: buildScoreEvidence(candidate, {
+                score,
+                textLength,
+                density,
+                metadataEvidence,
+                markers: boundary.markers || markers,
+                extra: ['candidate-not-ok', candidate.status ? `http-${candidate.status}` : null, boundary.reason],
+            }),
+        };
+    }
     for (const marker of markers) {
         if (marker.kind === 'challenge') score -= 25;
         if (marker.kind === 'auth') score -= 35;
@@ -99,7 +122,7 @@ function countMetadataEvidence(metadata) {
 
 /**
  * @param {any} candidate
- * @param {{ score: number, textLength: number, density: number, metadataEvidence: number, markers: any[] }} scored
+ * @param {{ score: number, textLength: number, density: number, metadataEvidence: number, markers: any[], extra?: any[] }} scored
  */
 function buildScoreEvidence(candidate, scored) {
     return [
@@ -109,6 +132,7 @@ function buildScoreEvidence(candidate, scored) {
         `density:${scored.density.toFixed(2)}`,
         scored.metadataEvidence ? `metadata:${scored.metadataEvidence}` : null,
         ...scored.markers.map(marker => `marker:${marker.kind}`),
+        ...(scored.extra || []),
         ...(candidate.evidence || []),
     ].filter(Boolean);
 }

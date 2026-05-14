@@ -21,7 +21,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 23 | 6637 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
+| `skills/browser/` | 23 | 6842 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 831 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 468 | bundled agent workflow skill |
 | `web-ai/` | 89 | 19633 | provider automation, sessions, MCP, eval, policy, trace |
@@ -30,8 +30,8 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/policy/` | 4 | 228 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 9 | 1385 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 84 | 7997 | deterministic module tests |
-| `test/integration/` | 16 | 1850 | CLI, MCP, policy, provider fixture tests |
+| `test/unit/` | 84 | 8004 | deterministic module tests |
+| `test/integration/` | 16 | 1951 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 8 | 1597 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs |
