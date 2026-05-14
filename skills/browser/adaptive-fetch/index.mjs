@@ -7,6 +7,7 @@ import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
 import { fromFetchResult } from './reader-adapters.mjs';
 import { chooseBestReaderCandidate, scoreReaderCandidate } from './content-scorer.mjs';
+import { fetchThirdPartyReaderCandidate } from './third-party-readers.mjs';
 
 /**
  * @typedef {'strong_ok'|'weak_ok'|'blocked'|'auth_required'|'challenge'|'paywall'|'browser_required'|'unsupported'|'error'} AdaptiveFetchVerdict
@@ -92,6 +93,31 @@ export async function runAdaptiveFetch(input, deps = {}) {
             warnings: readerCandidate.warnings,
         });
         if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
+    }
+    if (options.allowThirdPartyReader) {
+        const fetched = await fetchThirdPartyReaderCandidate(parsed.href, {
+            allowThirdPartyReader: true,
+            maxBytes: options.maxBytes,
+            timeoutMs: options.timeoutMs,
+            fetchImpl,
+        });
+        if (fetched) {
+            const readerCandidate = fromFetchResult(fetched, {
+                source: 'third_party_reader',
+                label: 'jina-reader',
+            });
+            const scored = scoreReaderCandidate(readerCandidate);
+            appendAttempt(trace, {
+                source: readerCandidate.source,
+                verdict: scored.verdict,
+                url: fetched.readerUrl || fetched.finalUrl,
+                status: fetched.status,
+                reason: `score:${scored.score}`,
+                evidence: scored.evidence,
+                warnings: readerCandidate.warnings,
+            });
+            if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
+        }
     }
     const best = chooseBestReaderCandidate(readerCandidates);
     if (best) return finishResult(resultFromReaderCandidate(best), options, trace);
