@@ -44,7 +44,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | `observe-actions` | Yes | snapshot을 캡처해 instruction-aware ActionCandidate 랭킹 반환 (G02) |
 | `upload <ref> <file...>` | Yes | file input ref에 file을 set (Playwright `setInputFiles`, G03) |
 | `sessions list` | No | persisted session 목록 |
-| `sessions show` | No | session 상세 |
+| `sessions show` | No | session 상세. URL, model selection evidence, structured warnings, artifact descriptors를 human output에 표시 |
 | `sessions resume` | Yes | 저장된 session target을 resolve/recover한 뒤 provider poll resume |
 | `sessions reattach` | Yes | 저장된 targetId 기반으로 session과 tab 다시 연결; active tab을 truth로 쓰지 않음 |
 | `sessions doctor` | Yes | session target/lock/active command/recovery recommendation 진단 |
@@ -185,6 +185,7 @@ tool description에도 그 제한을 명시한다.
 
 ## 변경 기록
 
+- 2026-05-14: `sessions show` human output이 ChatGPT model selection evidence와 structured warning을 표시하도록 command 계약을 갱신했다.
 - 2026-05-06: G03 — `agbrowse upload <ref> <file...>` CLI 추가. `web-ai/action-breadth.mjs`가 22개 local-CDP primitive (click/type/press/hover/select/check/uncheck/upload/drag/mouse-click/move-mouse/scroll/wait-for/wait-for-selector/wait-for-text/wait/navigate/reload/screenshot/snapshot/evaluate/text)를 카테고리화하고, `gate:browser-primitives-complete`가 모든 primitive에 CLI 핸들러가 wired되어 있는지를 검증한다.
 - 2026-05-06: G06 — `agbrowse observe-bundle`과 ObservationBundleV1 스키마를 추가했다. URL/title/viewport/DPR/refs/boxes/screenshot/text를 한 번에 묶어 multimodal benchmark step 재현성을 확보한다 (`gate:observation-bundle-fixtures`).
 - 2026-05-06: G02 — `agbrowse observe-actions <instruction>` CLI 추가. Pure `buildObserveActions(snapshot, instruction, opts)` API가 ranked `ActionCandidate[]`를 반환한다 (`gate:observe-actions-fixtures`).

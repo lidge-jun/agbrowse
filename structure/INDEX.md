@@ -22,6 +22,7 @@ aliases: [agbrowse 구조 허브, agbrowse source of truth, agbrowse architectur
 | [commands.md](commands.md) | `agbrowse` root CLI와 `web-ai` command surface | `skills/browser/browser.mjs`, `web-ai/cli.mjs` |
 | [runtime_contracts.md](runtime_contracts.md) | sessions, tabs, provider, policy, trace, MCP, eval runtime 계약 | `web-ai/`, `skills/browser/`, `devlog/_fin/mvp/04_eval_trace/13_phase12_trace_replay.md` 이후 |
 | [release_gates.md](release_gates.md) | ready/beta/experimental 라벨과 release 전 검증 | `package.json`, `scripts/release.sh`, `.github/workflows/release.yml` |
+| [stability-upgrade/00_index.md](stability-upgrade/00_index.md) | 실제 작동 취약점과 안정성 upgrade backlog | live smoke, provider DOM drift, session recovery, model evidence |
 | [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md) | Phase 22 capability/cli-jaw mirror truth table (single source of truth) | `web-ai/`, `cli-jaw/structure/CAPABILITY_TRUTH_TABLE.md` |
 | [phase_status.md](phase_status.md) | Phase 11+ 구현/미러/claim 상태 truth table | `devlog/00_index.md`, `web-ai/`, `cli-jaw` mirror |
 | [check-doc-drift.sh](check-doc-drift.sh) | 구조 문서의 최소 drift 검사 | `package.json`, `README.md`, `structure/*.md` |
@@ -42,7 +43,8 @@ Related release docs:
 4. [runtime_contracts.md](runtime_contracts.md)로 runtime contract와 fail-closed 경계를 확인한다.
 5. [phase_status.md](phase_status.md)로 어떤 phase가 ready/partial/deferred인지 확인한다.
 6. [release_gates.md](release_gates.md)로 어떤 주장이 검증됐는지 확인한다.
-7. `devlog/00_index.md`에서 장기 phase 계획과 mirror 요구를 확인한다.
+7. [stability-upgrade/00_index.md](stability-upgrade/00_index.md)로 실제 작동 취약점 backlog를 확인한다.
+8. `devlog/00_index.md`에서 장기 phase 계획과 mirror 요구를 확인한다.
 
 ## 시스템 맵
 
@@ -58,6 +60,7 @@ graph LR
     Scripts["scripts/"] --> Tests["test/unit<br/>test/integration<br/>test/e2e"]
     Structure["structure/"] --> Scripts
     Structure --> Devlog["devlog/"]
+    Structure --> Stability["stability-upgrade/"]
 ```
 
 ## 동기화 체크리스트
@@ -65,6 +68,7 @@ graph LR
 - [ ] `skills/browser/browser.mjs`의 command help 또는 parser가 바뀌면 [commands.md](commands.md)를 갱신한다.
 - [ ] `web-ai/cli.mjs`의 command, provider flag, session behavior가 바뀌면 [commands.md](commands.md)와 [str_func.md](str_func.md)를 갱신한다.
 - [ ] MCP tool schema가 바뀌면 [str_func.md](str_func.md)와 [release_gates.md](release_gates.md)를 갱신한다.
+- [ ] live smoke, provider DOM drift, session recovery, model evidence 같은 실제 작동 취약점이 발견되면 [stability-upgrade/](stability-upgrade/00_index.md)에 상태와 검증 방법을 남긴다.
 - [ ] release script, workflow, package `files` 목록이 바뀌면 [release_gates.md](release_gates.md)를 갱신한다.
 - [ ] public support label이 바뀌면 `README.md`, [phase_status.md](phase_status.md), [release_gates.md](release_gates.md), 관련 `devlog/` phase 문서를 같이 갱신한다.
 - [ ] benchmark 또는 comparison claim이 바뀌면 `docs/benchmarks.md`, `docs/comparison.md`, `docs/production-readiness.md`를 같이 갱신한다.
@@ -82,6 +86,7 @@ graph LR
 
 ## 변경 기록
 
+- 2026-05-14: Oracle follow-up 이후 실제 작동 취약점만 추적하는 [stability-upgrade/](stability-upgrade/00_index.md) 폴더를 source-of-truth에 추가했다.
 - 2026-05-06: strict-migration P02–P51 + Phase 22 머지 이후 `str_func.md` 스냅샷, `commands.md` root command 표(`new-tab`, `tab-close`), `release_gates.md`의 `gate:*` named release gate 표를 동기화했다. capability/claim 진실은 [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md)에 모았다.
 - 2026-05-05: Phase 11+ claim status를 [phase_status.md](phase_status.md)에 분리해 partial/deferred phase가 완료로 오해되지 않게 했다.
 - 2026-05-05: `cli-jaw/structure` 패턴을 `agbrowse`에 맞게 축소하지 않고 drift/count 검증 스크립트까지 포함한 source-of-truth 허브로 추가했다.

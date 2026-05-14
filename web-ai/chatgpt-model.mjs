@@ -8,6 +8,18 @@ import { WebAiError } from './errors.mjs';
 /** @typedef {{ testIds: string[], labels: string[] }} ModelOptionConfig */
 /** @typedef {{ triggerTestIds: string[], efforts: Readonly<Record<string, string>> }} EffortConfig */
 /** @typedef {{ x: number, y: number, width: number, height: number }} BoundingBox */
+/** @typedef {'already-selected'|'switched'|'switched-best-effort'|'unavailable'} ModelSelectionEvidenceStatus */
+/**
+ * @typedef {Object} BrowserModelSelectionEvidence
+ * @property {string|null} requestedModel
+ * @property {string|null} resolvedLabel
+ * @property {ModelChoice|null} normalizedModel
+ * @property {'select'} strategy
+ * @property {ModelSelectionEvidenceStatus} status
+ * @property {boolean} verified
+ * @property {'chatgpt-model-picker'} source
+ * @property {string} capturedAt
+ */
 
 export const CHATGPT_MODEL_SELECTOR_BUTTONS = [
     'button[data-testid="model-switcher-dropdown-button"]',
@@ -136,6 +148,7 @@ export function isChatGptEffortSupported(model, effort) {
  * @property {EffortChoice | null} requestedEffort
  * @property {string[]} usedFallbacks
  * @property {string[]} warnings
+ * @property {BrowserModelSelectionEvidence} modelSelection
  */
 
 /**
@@ -171,9 +184,17 @@ export async function selectChatGptModel(page, model, options = {}) {
             requestedEffort: requestedEffort || null,
             usedFallbacks: [...usedFallbacks, 'model-selector-unavailable-current-model'],
             warnings: [warning],
+            modelSelection: createModelSelectionEvidence({
+                requestedModel: requested || String(model || '') || null,
+                resolvedLabel: null,
+                normalizedModel: null,
+                status: 'unavailable',
+                verified: false,
+            }),
         };
     }
-    let currentModel = await readCheckedModel(page, requested || null);
+    let currentEvidence = await readCheckedModelEvidence(page, requested || null);
+    let currentModel = currentEvidence?.choice || null;
     const targetModel = requested || currentModel;
     let modelChanged = false;
     if (!targetModel) {
@@ -186,7 +207,8 @@ export async function selectChatGptModel(page, model, options = {}) {
         await option.click({ timeout: 5_000 });
         await page.waitForTimeout(750).catch(() => undefined);
         await openModelMenu(page, usedFallbacks);
-        currentModel = await readCheckedModel(page, requested);
+        currentEvidence = await readCheckedModelEvidence(page, requested);
+        currentModel = currentEvidence?.choice || null;
         modelChanged = true;
     }
     /** @type {{ requested: string, selected: string|null, changed: boolean } | null} */
@@ -202,12 +224,14 @@ export async function selectChatGptModel(page, model, options = {}) {
             await closeModelMenu(page);
         }
     }
-    const after = await readCheckedModel(page, targetModel);
+    const afterEvidence = await readCheckedModelEvidence(page, targetModel);
+    const after = afterEvidence?.choice || null;
     await closeModelMenu(page);
     if (after !== targetModel) {
         usedFallbacks.push('model-verification-unavailable-current-model');
         warnings.push(`model ${targetModel} was not verified; current detected model is ${after || 'unknown'}`);
     }
+    const verified = after === targetModel;
     return {
         requested: requested || targetModel,
         selected: after,
@@ -216,6 +240,36 @@ export async function selectChatGptModel(page, model, options = {}) {
         requestedEffort: requestedEffort || null,
         usedFallbacks,
         warnings,
+        modelSelection: createModelSelectionEvidence({
+            requestedModel: requested || targetModel || null,
+            resolvedLabel: afterEvidence?.label || after || null,
+            normalizedModel: after,
+            status: verified ? (modelChanged ? 'switched' : 'already-selected') : (modelChanged ? 'switched-best-effort' : 'unavailable'),
+            verified,
+        }),
+    };
+}
+
+/**
+ * @param {{
+ *   requestedModel: string|null,
+ *   resolvedLabel: string|null,
+ *   normalizedModel: ModelChoice|null,
+ *   status: ModelSelectionEvidenceStatus,
+ *   verified: boolean,
+ * }} input
+ * @returns {BrowserModelSelectionEvidence}
+ */
+function createModelSelectionEvidence(input) {
+    return {
+        requestedModel: input.requestedModel,
+        resolvedLabel: input.resolvedLabel,
+        normalizedModel: input.normalizedModel,
+        strategy: 'select',
+        status: input.status,
+        verified: input.verified,
+        source: 'chatgpt-model-picker',
+        capturedAt: new Date().toISOString(),
     };
 }
 
@@ -652,10 +706,24 @@ function requiredEffortMenuLabels(model, effort) {
  * @returns {Promise<ModelChoice | null>}
  */
 async function readCheckedModel(page, expectedModel = null) {
+    const evidence = await readCheckedModelEvidence(page, expectedModel);
+    return evidence?.choice || null;
+}
+
+/**
+ * @param {Page} page
+ * @param {ModelChoice | null} [expectedModel]
+ * @returns {Promise<{ choice: ModelChoice, label: string } | null>}
+ */
+async function readCheckedModelEvidence(page, expectedModel = null) {
     for (const [choice, option] of Object.entries(CHATGPT_MODEL_OPTIONS)) {
         for (const testId of option.testIds) {
-            const checked = await page.locator(`[role="menuitemradio"][data-testid="${testId}"][aria-checked="true"], [data-testid="${testId}"][aria-checked="true"]`).first().isVisible().catch(() => false);
-            if (checked) return /** @type {ModelChoice} */ (choice);
+            const row = page.locator(`[role="menuitemradio"][data-testid="${testId}"][aria-checked="true"], [data-testid="${testId}"][aria-checked="true"]`).first();
+            const checked = await row.isVisible().catch(() => false);
+            if (checked) {
+                const label = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+                return { choice: /** @type {ModelChoice} */ (choice), label: label || String(choice) };
+            }
         }
     }
     const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]').all().catch(() => /** @type {Locator[]} */ ([]));
@@ -663,10 +731,11 @@ async function readCheckedModel(page, expectedModel = null) {
         const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
         if (isStandaloneEffortLabel(text)) continue;
         const choice = modelChoiceFromText(text);
-        if (choice) return choice;
+        if (choice) return { choice, label: text || String(choice) };
     }
     const active = await readActiveModelPill(page, { allowStandaloneHeavy: expectedModel === 'pro' });
-    return modelChoiceFromText(active);
+    const choice = modelChoiceFromText(active);
+    return choice ? { choice, label: active || String(choice) } : null;
 }
 
 /**

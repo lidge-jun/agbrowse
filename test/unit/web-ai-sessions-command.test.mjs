@@ -134,6 +134,48 @@ describe('web-ai sessions list / show / prune via runSessionsCommand', () => {
         }
     });
 
+    it('human show prints model selection evidence and structured warnings', async () => {
+        const logs = [];
+        const originalLog = console.log;
+        console.log = (line = '') => logs.push(String(line));
+        try {
+            const { runWebAiCli } = await import('../../web-ai/cli.mjs');
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { patchSession } = await import('../../web-ai/session-store.mjs');
+            const s = createSession({ vendor: 'chatgpt', prompt: 'x', attachmentPolicy: 'inline-only' });
+            patchSession(s.sessionId, {
+                modelSelection: {
+                    requestedModel: 'pro',
+                    resolvedLabel: 'GPT-5.5 Pro',
+                    normalizedModel: 'pro',
+                    strategy: 'select',
+                    status: 'switched',
+                    verified: true,
+                    source: 'chatgpt-model-picker',
+                    capturedAt: '2026-05-14T00:00:00.000Z',
+                },
+                warnings: [
+                    'legacy warning string',
+                    {
+                        code: 'browser-pro-fast-large-run',
+                        severity: 'warning',
+                        message: 'Large browser Pro run completed quickly.',
+                    },
+                ],
+            });
+
+            await runWebAiCli(['sessions', 'show', s.sessionId]);
+
+            const output = logs.join('\n');
+            expect(output).toContain('Browser evidence:');
+            expect(output).toContain('model requested=pro; resolved=GPT-5.5 Pro; status=switched; strategy=select; verified=yes');
+            expect(output).toContain('warning browser-pro-fast-large-run: Large browser Pro run completed quickly.');
+            expect(output).not.toContain('legacy warning string');
+        } finally {
+            console.log = originalLog;
+        }
+    });
+
     it('prune --older-than 7d removes old sessions only', async () => {
         const { runWebAiCli } = await import('../../web-ai/cli.mjs');
         const { createSession } = await import('../../web-ai/session.mjs');

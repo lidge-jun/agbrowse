@@ -182,6 +182,11 @@ export function printSessionsHuman(result) {
         const session = result.session;
         console.log(`${session.sessionId}  ${session.vendor || 'unknown'}  ${session.status || 'unknown'}`);
         if (session.conversationUrl || session.originalUrl) console.log(`URL: ${session.conversationUrl || session.originalUrl}`);
+        const evidenceLines = formatBrowserEvidenceLines(session);
+        if (evidenceLines.length) {
+            console.log('Browser evidence:');
+            for (const line of evidenceLines) console.log(`- ${line}`);
+        }
         if (session.artifacts?.length) {
             console.log('Artifacts:');
             for (const artifact of session.artifacts) {
@@ -219,4 +224,26 @@ export function printSessionsHuman(result) {
         return;
     }
     console.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * @param {any} session
+ * @returns {string[]}
+ */
+function formatBrowserEvidenceLines(session) {
+    /** @type {string[]} */
+    const lines = [];
+    const evidence = session?.modelSelection;
+    if (evidence && typeof evidence === 'object') {
+        const requested = evidence.requestedModel ?? '(none)';
+        const resolved = evidence.resolvedLabel ?? '(unavailable)';
+        const strategy = evidence.strategy ?? '(default)';
+        const verified = evidence.verified ? 'yes' : 'no';
+        lines.push(`model requested=${requested}; resolved=${resolved}; status=${evidence.status || 'unknown'}; strategy=${strategy}; verified=${verified}`);
+    }
+    for (const warning of session?.warnings || []) {
+        if (!warning || typeof warning !== 'object' || !warning.code) continue;
+        lines.push(`warning ${warning.code}: ${warning.message || ''}`.trim());
+    }
+    return lines;
 }

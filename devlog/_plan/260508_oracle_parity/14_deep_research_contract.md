@@ -99,4 +99,3 @@ Two acceptable product choices:
 - Users and agents can discover the actual support status.
 - Report artifacts and session lifecycle are tested.
 - No hidden beta feature is presented as Oracle parity without tests.
-

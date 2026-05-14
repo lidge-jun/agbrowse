@@ -204,6 +204,35 @@ describe('web-ai ChatGPT model selector policy', () => {
         await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
             selected: 'pro',
             alreadySelected: false,
+            modelSelection: {
+                requestedModel: 'pro',
+                resolvedLabel: 'GPT-5.5 Pro',
+                normalizedModel: 'pro',
+                status: 'switched',
+                verified: true,
+                source: 'chatgpt-model-picker',
+            },
+        });
+    });
+
+    it('records model selection evidence when the requested model is already selected', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            effortTexts: proEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+            selected: 'pro',
+            alreadySelected: true,
+            modelSelection: {
+                requestedModel: 'pro',
+                resolvedLabel: 'GPT-5.5 Pro',
+                normalizedModel: 'pro',
+                strategy: 'select',
+                status: 'already-selected',
+                verified: true,
+            },
         });
     });
 
@@ -591,6 +620,7 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(cliSrc).toContain("'reasoning-effort': { type: 'string' }");
         expect(cliSrc).toContain('reasoningEffort: values.effort');
         expect(chatgptSrc).toContain("selectChatGptModel(page, input.model, { effort: input.reasoningEffort })");
+        expect(chatgptSrc).toContain('updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });');
         expect(chatgptSrc).toContain('...(selectedModel?.warnings || [])');
     });
 });

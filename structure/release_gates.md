@@ -82,6 +82,7 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | `npm run release` | latest release script | clean tree, install, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `npm run release:preview` | preview release script | preview version, audit, tests, structure gates, fixture evals, diff check, pack, publish dry-run, tag/publish |
 | `bash structure/verify-counts.sh` | structure count verifier | source map line/file counts drift 차단 |
+| `structure/stability-upgrade/` review | real operational weakness register | live-provider claim 전에 실제 작동 취약점 상태와 검증 방법을 확인 |
 
 ## 금지 Claim
 
@@ -95,6 +96,7 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 
 ## 변경 기록
 
+- 2026-05-14: stability-upgrade register review를 release 전 claim 점검 항목으로 추가했다. 이 register는 speculative security가 아니라 live 작동 취약점만 기록한다.
 - 2026-05-06: Phase 22 named release gates (`gate:all`, `gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`)와 strict-baseline / module-graph / bin smoke / pack dry-run 명령을 release path에 추가했다. capability 주장은 [CAPABILITY_TRUTH_TABLE.md](CAPABILITY_TRUTH_TABLE.md)가 단일 source of truth다.
 - 2026-05-05: MCP/source-audit/release-gate named scripts를 release path에 추가해 public claim gate가 `npm test` 안에 묻히지 않게 했다.
 - 2026-05-05: Phase 21 release gate 요구를 현재 npm scripts, package dry-run, support label 기준으로 정리했다.

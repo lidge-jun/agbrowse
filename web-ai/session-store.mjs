@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
  *   answer: unknown,
  *   lastError: unknown,
  *   warnings: unknown[],
+ *   modelSelection?: unknown,
  *   lastDomHash: string|null,
  *   lastAxHash: string|null,
  *   lastStreamingState?: string,

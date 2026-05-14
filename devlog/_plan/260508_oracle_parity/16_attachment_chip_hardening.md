@@ -95,4 +95,3 @@ export function sendButtonTimeoutMs(fileNames)
 - Attachment readiness matches Oracle #192's current DOM hardening where relevant.
 - Existing upload behavior remains green.
 - Tests cover behavior rather than source strings.
-

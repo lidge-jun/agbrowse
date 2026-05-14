@@ -112,4 +112,3 @@ JSON output should include the existing `artifacts` array unchanged.
 - Artifact records are visible in session inspection.
 - Artifact behavior has focused tests.
 - Future image, multi-turn, and Deep Research plans can rely on this contract.
-

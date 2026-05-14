@@ -190,6 +190,9 @@ export async function sendWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'chatgpt'),
         envelopeSummary: { ...summarizeEnvelope(input, contextPack), assistantCount },
     });
+    if (selectedModel?.modelSelection) {
+        updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });
+    }
     if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',

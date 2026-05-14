@@ -114,4 +114,3 @@ Do not leave the command hidden.
 - Dry-run is safe and browser-free.
 - Real add/list behavior has DOM evidence tests.
 - MCP stance is explicit, not accidental.
-
