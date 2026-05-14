@@ -5,9 +5,8 @@ import { validateFetchUrl, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safet
 import { appendAttempt, createAttemptTrace, summarizeAttempts } from './trace.mjs';
 import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
-import { extractMetadataFromHtml } from './metadata.mjs';
-import { htmlToReadableText, isHtmlContentType, normalizeWhitespace } from './transforms.mjs';
-import { classifyBoundarySignals, classifyHtmlStrength } from './validators.mjs';
+import { fromFetchResult } from './reader-adapters.mjs';
+import { chooseBestReaderCandidate, scoreReaderCandidate } from './content-scorer.mjs';
 
 /**
  * @typedef {'strong_ok'|'weak_ok'|'blocked'|'auth_required'|'challenge'|'paywall'|'browser_required'|'unsupported'|'error'} AdaptiveFetchVerdict
@@ -69,7 +68,8 @@ export async function runAdaptiveFetch(input, deps = {}) {
         })));
     }
     candidateUrls.push({ label: 'direct-fetch', url: parsed.href, source: 'fetch' });
-    let weakResult = null;
+    /** @type {any[]} */
+    const readerCandidates = [];
     for (const candidate of candidateUrls) {
         const fetched = await fetchTextCandidate(candidate.url, {
             maxBytes: options.maxBytes,
@@ -77,24 +77,24 @@ export async function runAdaptiveFetch(input, deps = {}) {
             allowPrivateNetwork: options.allowPrivateNetwork,
             fetchImpl,
         });
-        const result = resultFromFetchedText(fetched, {
+        const readerCandidate = fromFetchResult(fetched, {
             source: candidate.source,
             label: candidate.label,
-            options,
         });
+        const scored = scoreReaderCandidate(readerCandidate);
         appendAttempt(trace, {
-            source: result.source,
-            verdict: result.verdict,
+            source: readerCandidate.source,
+            verdict: scored.verdict,
             url: fetched.finalUrl,
             status: fetched.status,
-            reason: result.reason,
-            evidence: result.evidence,
-            warnings: result.warnings,
+            reason: `score:${scored.score}`,
+            evidence: scored.evidence,
+            warnings: readerCandidate.warnings,
         });
-        if (result.ok && result.verdict === 'strong_ok') return finishResult(result, options, trace);
-        if (result.ok && !weakResult) weakResult = result;
+        if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
     }
-    if (weakResult) return finishResult(weakResult, options, trace);
+    const best = chooseBestReaderCandidate(readerCandidates);
+    if (best) return finishResult(resultFromReaderCandidate(best), options, trace);
     return finishResult({
         ok: false,
         verdict: 'blocked',
@@ -210,53 +210,22 @@ function positiveInteger(value, fallback) {
 }
 
 /**
- * @param {any} fetched
- * @param {{ source: AdaptiveFetchSource, label?: string, options: any }} context
+ * @param {ReturnType<typeof scoreReaderCandidate>} scored
  */
-function resultFromFetchedText(fetched, context) {
-    const boundary = classifyBoundarySignals({
-        status: fetched.status,
-        headers: fetched.headers,
-        text: fetched.text,
-        url: fetched.finalUrl,
-    });
-    if (!fetched.ok) {
-        return {
-            ok: false,
-            verdict: boundary.verdict || 'blocked',
-            source: context.source,
-            finalUrl: fetched.finalUrl,
-            title: null,
-            content: '',
-            summary: `${context.label || context.source} failed: ${boundary.reason || fetched.warnings?.[0] || 'http-error'}`,
-            reason: boundary.reason || fetched.warnings?.[0] || 'http-error',
-            evidence: fetched.evidence || [],
-            warnings: fetched.warnings || [],
-        };
-    }
-    const isHtml = isHtmlContentType(fetched.contentType);
-    const metadata = isHtml ? extractMetadataFromHtml(fetched.text, fetched.finalUrl) : null;
-    const content = isHtml ? metadata.text : normalizeWhitespace(fetched.text);
-    const strength = classifyHtmlStrength({
-        html: isHtml ? fetched.text : '',
-        text: content,
-        title: metadata?.title || '',
-        positiveProof: metadata?.evidence || [],
-    });
-    const title = metadata?.title || null;
-    const evidence = [...(fetched.evidence || []), ...(metadata?.evidence || [])];
+function resultFromReaderCandidate(scored) {
+    const candidate = scored.candidate;
     return {
-        ok: strength.ok,
-        verdict: strength.verdict,
-        source: context.source,
-        finalUrl: fetched.finalUrl,
-        title,
-        content,
-        summary: `${context.label || context.source} produced ${strength.verdict}: ${strength.reason}`,
-        reason: strength.reason,
-        evidence,
-        warnings: fetched.warnings || [],
-        metadata: metadata?.metadata || null,
+        ok: ['strong_ok', 'weak_ok'].includes(scored.verdict),
+        verdict: scored.verdict,
+        source: candidate.source,
+        finalUrl: candidate.finalUrl,
+        title: candidate.title || null,
+        content: candidate.text || '',
+        summary: `${candidate.label || candidate.source} selected with ${scored.verdict} (score ${scored.score}).`,
+        reason: `score:${scored.score}`,
+        evidence: scored.evidence,
+        warnings: candidate.warnings || [],
+        metadata: candidate.metadata || null,
     };
 }
 
