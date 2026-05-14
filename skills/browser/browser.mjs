@@ -24,6 +24,7 @@
  *   press <key>                      Press key (Enter, Tab, Escape…)
  *   hover <ref>                      Hover element
  *   navigate <url>                   Go to URL
+ *   fetch <url> [--json] [--trace]   Adaptive URL reading (not generic search)
  *   reload                           Reload current page
  *   resize <w> <h> [--fullscreen]    Resize browser window or viewport
  *   tabs [--json]                    List open tabs
@@ -70,6 +71,7 @@ import { listActiveCommands } from '../../web-ai/active-command-store.mjs';
 import { enforcePolicy } from '../../web-ai/policy/enforce.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
 import { cleanupIdleTabs, planCleanupIdleTabs, pickCleanupCandidates, isPinned, parseDuration, DEFAULT_MAX_TABS } from './tab-lifecycle.mjs';
+import { runAdaptiveFetchCli } from './adaptive-fetch/index.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2057,6 +2059,9 @@ try {
         case 'web-ai':
             await runWebAiCli(process.argv.slice(3), browserDeps);
             break;
+        case 'fetch':
+            await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
+            break;
         case 'start': {
             const { values } = parseArgs({
                 args: process.argv.slice(3),
@@ -2807,6 +2812,7 @@ try {
   Quick start:
     agbrowse start --headed                  Launch a visible Chrome
     agbrowse navigate https://example.com    Open a URL
+    agbrowse fetch https://example.com --json Read one URL for agent evidence
     agbrowse snapshot --interactive          Get refs (e1, e2, …)
     agbrowse click e1                        Click ref e1
     agbrowse stop                            Close Chrome
@@ -2923,6 +2929,10 @@ try {
   Navigation:
     navigate <url>         Go to URL [--wait-until <commit|domcontentloaded|load>] [--timeout ms]
                               ex: agbrowse navigate https://github.com --wait-until commit
+    fetch <url>            Read one URL or search-result URL [--json] [--trace]
+                              [--browser auto|never|required]
+                              [--browser-session none|isolated|existing]
+                              Not generic search; use after a candidate URL exists.
     reload                 Reload current page
     resize <w> <h>         Resize browser window / viewport [--fullscreen]
      tabs                   List tabs [--json]
