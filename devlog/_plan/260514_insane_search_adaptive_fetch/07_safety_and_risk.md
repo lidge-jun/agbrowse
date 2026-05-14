@@ -10,9 +10,9 @@ tags: [jawdev, adaptive-fetch, safety, risk]
 
 | Risk | Why It Matters | Mitigation |
 | --- | --- | --- |
-| Overclaiming "bypass anything" | Creates unsafe expectations and support burden. | Describe as adaptive fetch/research; do not claim CAPTCHA/paywall/login bypass. |
+| Overclaiming "bypass anything" | Creates unsafe expectations and support burden. | Describe as adaptive fetch/research with maximum public/non-browser attempt coverage. |
 | Silent dependency installs | Mutates user machines and conflicts with fail-fast policy. | Use doctor output and explicit install instructions only. |
-| CAPTCHA or anti-abuse circumvention | Crosses a hard boundary for responsible tool behavior. | Detect and return `auth_required` or `unsupported`. |
+| CAPTCHA or anti-abuse circumvention | Crosses a hard action boundary for responsible tool behavior. | Do not solve/click-through/stealth/use private credentials; still try every public endpoint/RSS/metadata/non-browser/isolated-browser/network-candidate path first. |
 | Paywall/login-wall extraction | Can violate access controls or terms. | Stop unless the user explicitly owns an authenticated browser session and asks for visible-page summarization. |
 | Site-specific hardcoding | Becomes brittle and encourages scraping-by-exception. | Port upstream's no-site-name lint idea. |
 | High-volume probing | Can look abusive and degrade target services. | Bound attempts, jitter if needed, and require user confirmation for repeated collection. |
@@ -41,14 +41,22 @@ Ask or require explicit opt-in:
 - optional external tools such as `yt-dlp`;
 - authenticated browser-session reading.
 
-Out of scope:
+Out of scope actions:
 
-- CAPTCHA solving;
-- bypassing login;
-- bypassing paywalls;
+- challenge solving;
+- crossing login/paywall access;
 - credential harvesting;
 - stealth or hosted browser claims;
 - unrestricted scraping.
+
+Allowed boundary-safe attempts:
+
+- public endpoint reads;
+- RSS/Atom reads;
+- metadata/canonical reads;
+- non-browser fetches that do not use private credentials;
+- isolated browser reads that do not use private credentials;
+- trace-only network candidate reporting without repeated collection.
 
 ## Product Wording
 
@@ -78,4 +86,3 @@ declared algorithm and visible in the trace. That means:
 - no invisible dependency install;
 - no unreported switch from public fetch to browser cookies;
 - no "success" without a verdict and reasons.
-

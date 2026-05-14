@@ -135,7 +135,17 @@ Routing:
 
 ```text
 Weak or blocked read -> agbrowse fetch "<url>" --json --trace
-Boundary found -> stop and report boundary, no bypass
+Boundary marker found -> continue allowed public/non-browser attempts -> final boundary only if no legitimate path remains
+```
+
+Boundary nuance:
+
+```text
+CAPTCHA/challenge terms should not become an anti-pattern that stops the agent.
+They should trigger maximum safe attempts: public endpoint, RSS, metadata,
+non-browser fetch, isolated browser render, and network-candidate discovery. The
+final boundary verdict is only for cases where the remaining route requires
+solving, click-through, private credentials, or stealth.
 ```
 
 ## Frontmatter Phrase To Add
@@ -163,8 +173,12 @@ Search-adjacent routing:
   native search first.
 - If the user gives a URL, search result URL, source URL, citation URL, or says a
   fetched page is blocked/empty/weak, use `agbrowse fetch "<url>" --json --trace`.
-- Read the trace before retrying. Stop at login, CAPTCHA, paywall, credential,
-  or private membership boundaries.
+- Read the trace before retrying. Login, CAPTCHA, paywall, credential, or
+  private membership markers should trigger more allowed representation checks,
+  then a final boundary verdict only if no legitimate path remains.
+- If a CAPTCHA/challenge is detected, keep trying allowed public endpoint, RSS,
+  metadata, non-browser, isolated-browser, and network-candidate paths before
+  returning a final boundary verdict.
 ```
 
 ## Examples For Skill Docs
@@ -198,7 +212,9 @@ Agent: native search first, then agbrowse fetch selected result URLs
   search tool.
 - Browser skill examples cover Korean and English search-adjacent phrases.
 - `agbrowse fetch` remains URL-only.
-- No wording suggests CAPTCHA, login, paywall, or anti-bot bypass.
+- No wording suggests boundary words are stop signs by themselves.
+- Wording explicitly pushes maximum allowed attempts before a final boundary
+  verdict.
 
 ## Verification
 
@@ -208,4 +224,3 @@ After implementation:
 rg -n "search result|candidate URLs|citation|reference|검색 결과|출처|agbrowse fetch" skills/browser/SKILL.md README.md structure
 npm test -- test/integration/browser-fetch-command.test.mjs
 ```
-

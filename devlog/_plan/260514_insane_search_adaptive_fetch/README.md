@@ -47,6 +47,24 @@ Do not turn agbrowse into a generic search engine. This feature is a URL reader
 and evidence extractor for URLs that already exist, including URLs produced by a
 separate search tool.
 
+## Success Target
+
+The final agbrowse feature should see more legitimate surfaces than
+`insane-search`, not fewer. "Boundary-safe" does not mean "stop early"; it means
+keep trying every public or user-authorized representation before returning a
+boundary verdict.
+
+Target coverage:
+
+- public APIs and official endpoints;
+- RSS/Atom;
+- metadata, canonical links, JSON-LD, OpenGraph;
+- non-browser HTTP fetch;
+- optional third-party public readers;
+- isolated Chrome render;
+- network JSON candidate discovery;
+- existing profile/cookie reads only by explicit opt-in.
+
 ## Core Finding
 
 `insane-search` is not mainly a giant site-by-site scraper. Its strongest idea is
@@ -82,6 +100,11 @@ high-risk bypass behavior explicitly out of scope.
 | `13_cli_jaw_implementation_plan_baseline.md` | Copied baseline: proposed phased implementation for cli-jaw. |
 | `14_open_questions.md` | Decisions to settle before build. |
 | `15_skill_frontmatter_routing_baseline.md` | Copied baseline plus agbrowse routing notes. |
+| `16_gpt_pro_validation_report.md` | GPT Pro repo comparison and plan validation report with applied corrections. |
+| `17_grok_similar_repo_research.md` | Grok Expert similar-repository research and borrow/non-goal shortlist. |
+| `18_grok_borrowed_patterns_integration_plan.md` | Exact plan for folding non-insane-search Grok findings into agbrowse. |
+| `19_phased_diff_implementation_plan.md` | Phase 01-04 diff plan: core, readers, scorer, third-party reader. |
+| `20_phased_diff_browser_docs_closeout_plan.md` | Phase 05-07 diff plan: browser escalation, docs, gates, mirror readiness. |
 
 ## Recommended Shape
 
@@ -92,13 +115,24 @@ Start with a safe v1 in agbrowse:
 - `agbrowse fetch <url>` as the first user-facing CLI surface.
 - `--browser auto|never|required` to separate non-Chrome reader behavior from
   Chrome/CDP escalation.
+- `--browser-session none|isolated|existing` to separate Chrome rendering from
+  persistent-profile/cookie use.
 - A result schema with `ok`, `verdict`, `content`, `source`, `finalUrl`,
   `attempts`, `summary`, `browserMode`, `chromeUsed`, `chromeRequired`, and
   `safetyFlags`.
 - Phase 0 public endpoint resolvers for GitHub, Reddit, Hacker News, arXiv,
   Wikipedia, npm/PyPI, RSS, and media metadata when an installed tool exists.
-- Phase 1 neutral fetch/Jina/metadata extraction.
+- Phase 1 neutral fetch, metadata extraction, and opt-in third-party public
+  readers such as Jina Reader.
 - Phase 2 browser render and existing CDP network inspection.
+- Borrowed patterns beyond insane-search:
+  - intercept-mcp style fallback layering and URL-to-markdown normalization;
+  - agent-fetch style multi-extractor scoring before declaring success;
+  - Jina Reader style third-party reader as explicit opt-in, not default;
+  - Scrapling/crawl4ai as browser-fallback design references, not direct
+    dependencies.
+- Build order is locked in `19_phased_diff_implementation_plan.md`; research
+  notes alone are not sufficient for implementation.
 - Browser skill frontmatter triggers that point agents to `agbrowse fetch` only
   for URL reading, blocked fetches, empty pages, weak search-result pages,
   403/402, and "search result URL analysis" cases. Do not trigger it for every
@@ -107,7 +141,10 @@ Start with a safe v1 in agbrowse:
   search-result/source/citation/reference URL words route to `agbrowse fetch`
   after a URL exists.
 - No silent dependency installs.
-- No CAPTCHA solving, paywall bypass, credential bypass, or stealth claims.
+- No early stop just because a CAPTCHA/login/paywall marker appears. Keep trying
+  public endpoint, RSS, metadata, and non-browser reads first.
+- No challenge solving, credential use, or stealth claims when the only
+  remaining route requires crossing an access boundary.
 
 ## Current Recommendation
 

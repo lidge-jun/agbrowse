@@ -32,6 +32,11 @@ agbrowse fetch     -> validated content from one URL
 That boundary makes agbrowse useful as a search-tool helper without turning it
 into a search engine, crawler, or anti-blocking product.
 
+The implementation target is stronger than a conservative blocker: agbrowse
+should inspect more legitimate representations than insane-search where it can,
+while keeping challenge-solving, credential use, and stealth outside the action
+set.
+
 ## User-Facing Contract
 
 Primary command:
@@ -42,6 +47,7 @@ agbrowse fetch "<url>" --json
 agbrowse fetch "<url>" --json --trace
 agbrowse fetch "<url>" --browser never
 agbrowse fetch "<url>" --browser required
+agbrowse fetch "<url>" --browser auto --browser-session isolated
 ```
 
 Optional command flags for v1:
@@ -50,10 +56,13 @@ Optional command flags for v1:
 --json
 --trace
 --browser auto|never|required
+--browser-session none|isolated|existing
 --max-bytes <n>
 --timeout-ms <n>
 --selector <css>
 --no-public-endpoints
+--allow-third-party-reader
+--allow-archive
 ```
 
 Compatibility alias:
@@ -61,6 +70,19 @@ Compatibility alias:
 ```text
 --no-browser -> --browser never
 ```
+
+Default privacy posture:
+
+```text
+--browser auto
+--browser-session none or isolated
+third-party reader off
+archive off
+```
+
+`existing` browser session/cookie use must be explicit. The default must not
+quietly send logged-in cookies, private membership state, or signed URLs to a
+page just because non-Chrome fetch was weak.
 
 Deferred flags:
 
@@ -81,10 +103,15 @@ NEW:
 skills/browser/adaptive-fetch/index.mjs
 skills/browser/adaptive-fetch/validators.mjs
 skills/browser/adaptive-fetch/endpoint-resolvers.mjs
+skills/browser/adaptive-fetch/reader-adapters.mjs
+skills/browser/adaptive-fetch/content-scorer.mjs
 skills/browser/adaptive-fetch/fetcher.mjs
 skills/browser/adaptive-fetch/metadata.mjs
+skills/browser/adaptive-fetch/third-party-readers.mjs
 skills/browser/adaptive-fetch/transforms.mjs
 skills/browser/adaptive-fetch/browser-escalation.mjs
+skills/browser/adaptive-fetch/browser-runtime.mjs
+skills/browser/adaptive-fetch/challenge-detector.mjs
 skills/browser/adaptive-fetch/safety.mjs
 skills/browser/adaptive-fetch/trace.mjs
 ```
@@ -111,6 +138,9 @@ TEST:
 ```text
 test/unit/browser-adaptive-fetch-validators.test.mjs
 test/unit/browser-adaptive-fetch-endpoints.test.mjs
+test/unit/browser-adaptive-fetch-reader-adapters.test.mjs
+test/unit/browser-adaptive-fetch-content-scorer.test.mjs
+test/unit/browser-adaptive-fetch-third-party-readers.test.mjs
 test/unit/browser-adaptive-fetch-transforms.test.mjs
 test/unit/browser-adaptive-fetch-trace.test.mjs
 test/integration/browser-fetch-command.test.mjs
@@ -127,6 +157,11 @@ Build:
 - content-type classification;
 - redirect limit;
 - browser mode parsing (`auto`, `never`, `required`);
+- browser session parsing (`none`, `isolated`, `existing`);
+- SSRF/private-network defenses: scheme allowlist, credential-in-URL rejection,
+  localhost/private/link-local deny by default, DNS and redirect target
+  re-checks;
+- token/header redaction for URL, request, and network trace fields;
 - trace attempt recording;
 - human and JSON output.
 
@@ -144,13 +179,22 @@ Build:
 - RSS/Atom discovery;
 - canonical URL and OpenGraph metadata;
 - JSON endpoint candidate resolver for a small approved set;
-- clean text transform for HTML.
+- clean text transform for HTML;
+- intercept-mcp-style fallback layering where several reader attempts normalize
+  into one URL-to-markdown/text result shape;
+- agent-fetch-style content scoring using text length, text density, metadata
+  completeness, JSON-LD presence, title quality, and source trust;
+- Jina Reader-style third-party public reader support behind
+  `--allow-third-party-reader`, never as a default endpoint.
 
 Acceptance:
 
 - public endpoint success returns `source: "public_endpoint"`;
 - metadata-only results are marked `weak_ok`;
 - no third-party dependency is installed silently.
+- third-party readers such as Jina are not default public endpoints; they require
+  an explicit opt-in flag if included at all.
+- the selected result records why it won, not just that it returned text.
 
 ### Slice 3 — Browser Escalation
 
@@ -161,13 +205,23 @@ Build:
   `--browser auto`;
 - navigate after URL validation when `--browser required`;
 - never navigate when `--browser never`;
+- do not use existing persistent profile cookies unless
+  `--browser-session existing` is explicitly set;
 - collect title, visible text, DOM text, and network JSON candidates;
-- stop on login/CAPTCHA/paywall/challenge boundaries.
+- score browser-visible text and network JSON candidates through the same
+  content scorer used by non-browser reader attempts;
+- classify login/CAPTCHA/paywall/challenge markers and continue safe
+  public/non-browser attempts before returning a final boundary verdict.
 
 Acceptance:
 
 - empty SPA shells can become `strong_ok` after browser render;
-- login/challenge pages return a boundary verdict;
+- login/challenge pages do not force immediate stop;
+- CAPTCHA/challenge handling means: try every public endpoint, RSS, metadata,
+  non-browser, isolated-browser, and network-candidate path that does not solve,
+  click through, stealth, or use private credentials;
+- return a boundary verdict only when the remaining path requires crossing the
+  access boundary.
 - browser escalation is visible in `attempts`.
 
 ### Slice 4 — Skill, README, Structure Docs
@@ -184,7 +238,10 @@ Build:
 Acceptance:
 
 - docs say adaptive fetch is URL-only;
-- docs preserve "no stealth/bypass" positioning;
+- docs push agents to maximize allowed attempts instead of treating boundary
+  words as an immediate anti-pattern;
+- docs distinguish allowed non-browser/public endpoint reads from disallowed
+  challenge-solving, credential use, or stealth actions;
 - doc drift scripts pass.
 
 ## Result Schema
@@ -198,6 +255,7 @@ Use stable JSON keys from the first slice:
   "source": "browser",
   "finalUrl": "https://example.com/article",
   "browserMode": "auto",
+  "browserSession": "isolated",
   "chromeUsed": true,
   "chromeRequired": false,
   "title": "Example title",
@@ -252,9 +310,12 @@ research-reader logic during the first pass.
 
 ## Guardrails
 
-- Do not solve CAPTCHA.
-- Do not bypass login or paywalls.
-- Do not claim Cloudflare or anti-bot bypass.
+- Maximize all public and user-authorized read paths before giving up.
+- Treat public endpoints, RSS, metadata, non-browser fetch, and isolated browser
+  reads as normal attempts, even if the primary HTML page shows a challenge.
+- Return a boundary verdict only when the remaining path requires solving a
+  challenge, crossing login/paywall access, using private credentials, or using
+  stealth/anti-detection behavior.
 - Do not auto-install Python, curl impersonation libraries, or reader services.
 - Do not treat a broad search query as a URL.
 - Do not bulk crawl without explicit scope and rate limits.

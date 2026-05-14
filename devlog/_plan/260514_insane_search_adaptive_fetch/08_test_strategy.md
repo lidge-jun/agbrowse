@@ -15,6 +15,13 @@ Required:
 - validator returns `strong_ok` when positive proof matches;
 - validator returns `weak_ok` only when no negative proof exists;
 - metadata parser extracts OGP and JSON-LD without `innerHTML` assumptions;
+- reader adapters normalize fetch, metadata, public endpoint, third-party
+  reader, browser, and network candidates into one candidate shape;
+- content scorer prefers dense readable article text over metadata-only shells;
+- content scorer records the winning evidence so the trace can explain the
+  selection;
+- third-party readers remain disabled unless explicitly opted in;
+- third-party reader failures degrade to a trace warning, not a fake success;
 - transforms are domain-agnostic and deduplicate URLs;
 - endpoint resolver chooses public API only for supported platform shapes;
 - trace formatter redacts sensitive values.
@@ -31,6 +38,8 @@ Use local test servers, not live WAF targets:
 - RSS feed fixture;
 - JSON-LD product/article fixture;
 - redirect chain fixture.
+- reader race fixture where metadata succeeds weakly but article text wins
+  through scoring.
 
 ## Browser Tests
 
@@ -84,4 +93,3 @@ npm run gate:adaptive-fetch-bias
 - Authentication boundaries must return `auth_required`, not `challenge`.
 - Repeated pagination requires explicit user intent or command flags.
 - Trace output must be enough to debug without exposing secrets.
-

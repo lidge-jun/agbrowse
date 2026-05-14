@@ -47,6 +47,7 @@ Use one explicit flag instead of many ambiguous toggles:
 agbrowse fetch "<url>" --browser auto
 agbrowse fetch "<url>" --browser never
 agbrowse fetch "<url>" --browser required
+agbrowse fetch "<url>" --browser auto --browser-session isolated
 ```
 
 Semantics:
@@ -68,6 +69,27 @@ maps to:
 ```text
 --browser never
 ```
+
+## Browser Session Flag
+
+Chrome rendering and cookie/profile usage are separate decisions.
+
+```bash
+agbrowse fetch "<url>" --browser auto --browser-session none
+agbrowse fetch "<url>" --browser auto --browser-session isolated
+agbrowse fetch "<url>" --browser auto --browser-session existing
+```
+
+Semantics:
+
+| Mode | Cookie/profile behavior | Default candidate |
+| --- | --- | --- |
+| `none` | Do not render with Chrome; return `browser_required` if rendering is needed | safest non-browser default |
+| `isolated` | Use an isolated temporary browser context/profile | safest render default |
+| `existing` | Use the current persistent agbrowse Chrome profile | explicit opt-in only |
+
+`existing` can send user cookies and logged-in state to the target URL. It must
+never be the silent default for adaptive fetch.
 
 ## Non-Chrome Responsibilities
 
@@ -129,6 +151,7 @@ JSON output should include the boundary explicitly:
   "source": "browser",
   "finalUrl": "https://example.com/article",
   "browserMode": "auto",
+  "browserSession": "isolated",
   "chromeUsed": true,
   "chromeRequired": false,
   "chromeReason": "native fetch produced weak content",
@@ -185,7 +208,18 @@ Short warning under the command:
 
 ```text
 Use search tools to find candidate URLs first. Use fetch to read candidate URLs.
-Stops at login, CAPTCHA, paywall, credential, and private membership boundaries.
+Try public endpoint, RSS, metadata, non-browser, isolated browser, and network
+candidate paths before returning a boundary verdict.
+```
+
+Boundary note:
+
+```text
+CAPTCHA/challenge markers are not an early stop. They trigger maximum safe
+attempt coverage across public endpoint, RSS, metadata, non-browser fetch,
+isolated browser render, and network candidates. Return a boundary verdict only
+when the remaining route requires solving, clicking through, stealthing, or
+using private credentials.
 ```
 
 ## Why This Surface Works
@@ -193,6 +227,7 @@ Stops at login, CAPTCHA, paywall, credential, and private membership boundaries.
 - Users can run a cheap URL check without Chrome using `--browser never`.
 - Agents can use the default safely as a search-result helper.
 - Browser mutation is not hidden because the result says whether Chrome was used.
+- Cookie/profile risk is not hidden because the result says which browser
+  session mode was used.
 - Existing browser commands keep their current meaning.
 - cli-jaw can mirror the same contract later as `cli-jaw browser fetch`.
-

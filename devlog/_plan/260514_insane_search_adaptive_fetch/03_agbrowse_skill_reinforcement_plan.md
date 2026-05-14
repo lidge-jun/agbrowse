@@ -29,9 +29,10 @@ skills/browser/SKILL.md
 ```
 
 Current positioning already says agbrowse is a local Chrome/CDP runtime and not a
-hosted browser, stealth browser, CAPTCHA bypass tool, or cloud-session provider.
-The adaptive fetch wording should extend that positioning instead of weakening
-it.
+hosted browser or cloud-session provider. The adaptive fetch wording should
+extend that positioning with a positive rule: try every public, non-browser,
+metadata, isolated-browser, and network-candidate path before returning a
+boundary verdict.
 
 ## Proposed Frontmatter Change
 
@@ -90,8 +91,12 @@ Bad triggers:
 
 Boundary behavior:
 
-- stop at login, CAPTCHA, paywall, credential, or private membership walls;
-- do not claim bypass, stealth, or anti-detection;
+- login, CAPTCHA, paywall, credential, or private membership markers trigger
+  additional allowed representation checks;
+- keep trying public endpoint, RSS, metadata, non-browser fetch, isolated browser
+  render, and network-candidate discovery when those paths do not require
+  solving a challenge or using private credentials;
+- return a boundary verdict only after allowed representations are exhausted;
 - keep trace output redacted.
 ```
 ```
@@ -108,8 +113,11 @@ URL, run:
 
   agbrowse fetch "<url>" --json --trace
 
-Read the trace before retrying. Stop at login, CAPTCHA, paywall, or credential
-boundaries.
+Read the trace before retrying. If login, CAPTCHA, paywall, or credential markers
+appear, continue with public endpoint, RSS, metadata, non-browser, isolated
+browser, and network-candidate attempts. Return a boundary verdict only when the
+remaining path requires solving a challenge, crossing an access wall, or using
+private credentials.
 ```
 
 ## Skill Acceptance Criteria
@@ -120,8 +128,10 @@ boundaries.
 - The skill lists blocked/empty/SPA/network cases as good triggers.
 - The skill lists search-result/source/citation/reference URL cases as good
   triggers once a URL exists.
-- The skill explicitly rejects CAPTCHA, login, paywall, credential bypass, and
-  stealth claims.
+- The skill does not train agents to stop early when boundary words appear.
+- The skill tells agents to exhaust public, non-browser, metadata,
+  isolated-browser, and network-candidate paths before returning a boundary
+  verdict.
 - The skill examples include JSON and trace output.
 - No skill wording implies agbrowse can browse arbitrary blocked content without
   user-visible boundaries.
