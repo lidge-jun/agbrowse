@@ -25,7 +25,7 @@ function countPath(relPath) {
   const files = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.DS_Store') continue;
       const child = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(child);
       else if (entry.isFile()) files.push(child);
