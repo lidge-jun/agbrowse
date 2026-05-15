@@ -24,7 +24,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 23 | 7162 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics |
 | `skills/vision-click/` | 3 | 831 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 468 | bundled agent workflow skill |
-| `web-ai/` | 89 | 19633 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 89 | 19634 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 858 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 552 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 228 | mutation and content-boundary guardrails |

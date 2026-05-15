@@ -8,7 +8,7 @@
 
 /**
  * Resolve archive policy based on flag and session state.
- * @param {{ archiveFlag?: string, session: any, artifactStatus?: { required?: boolean, ok?: boolean, stage?: string, error?: string } }} opts
+ * @param {{ archiveFlag?: string, session: any, artifactStatus?: { required?: boolean, ok?: boolean, stage?: string, error?: string } | null }} opts
  * @returns {ArchivePolicyResult}
  */
 export function resolveArchivePolicy({ archiveFlag = 'auto', session, artifactStatus = null }) {

@@ -395,6 +395,7 @@ async function clickUploadButton(page, selector) {
 
 /**
  * @param {Page} page
+ * @param {AttachmentFile} file
  * @returns {Promise<string|null>}
  */
 async function findFirstFileInput(page, file) {
