@@ -582,7 +582,7 @@ export async function queryWebAi(deps, input = {}) {
     const sentAny = /** @type {any} */ (sent);
     return {
         ...resultAny,
-        sessionId: resultAny.sessionId || sentAny.sessionId,
+        sessionId: result.sessionId || sent.sessionId,
         ...(resultAny.traceSummary || sentAny.traceSummary ? { traceSummary: resultAny.traceSummary || sentAny.traceSummary } : {}),
         usedFallbacks: [...(sentAny.usedFallbacks || []), ...(resultAny.usedFallbacks || [])],
         warnings: [...(sentAny.warnings || []), ...(resultAny.warnings || [])],

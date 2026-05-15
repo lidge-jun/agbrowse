@@ -81,6 +81,10 @@ describe('adaptive fetch endpoint resolvers', () => {
             label: 'pypi-json',
             url: 'https://pypi.org/pypi/requests/json',
         });
+        expect(resolvePublicEndpointCandidates('https://pypi.org/project/requests%2Dcache/')[0]).toMatchObject({
+            label: 'pypi-json',
+            url: 'https://pypi.org/pypi/requests-cache/json',
+        });
         expect(resolvePublicEndpointCandidates('https://arxiv.org/abs/2402.03300')[0]).toMatchObject({
             label: 'arxiv-api',
             url: 'https://export.arxiv.org/api/query?id_list=2402.03300',
