@@ -89,3 +89,13 @@ flags changed from the original plan:
 | `DEFAULT_MAX_BYTES = 2MB` | `DEFAULT_MAX_BYTES = 1MB` | 1MB is sufficient for text content |
 
 Phase plan files retain original plan names for historical context.
+
+## Follow-up Hardening Plan
+
+Live hard-smoke testing after v2 implementation found one release-blocking output
+contract issue and several live classification divergences from the older v1
+observation table. The follow-up plan lives at:
+
+```
+devlog/_plan/260515_adaptive_fetch_v2_hardening/
+```
