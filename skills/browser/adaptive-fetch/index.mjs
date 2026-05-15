@@ -5,35 +5,48 @@ import { validateFetchUrl, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safet
 import { appendAttempt, createAttemptTrace, summarizeAttempts } from './trace.mjs';
 import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
-import { fromFetchResult } from './reader-adapters.mjs';
+import { fromFetchResult, fromHumanResolvedResult, fromUserSessionResult } from './reader-adapters.mjs';
 import { chooseBestReaderCandidate, scoreReaderCandidate } from './content-scorer.mjs';
 import { fetchThirdPartyReaderCandidate } from './third-party-readers.mjs';
 import { BrowserRequiredError } from './browser-runtime.mjs';
 import { collectBrowserCandidate, collectNetworkJsonCandidates } from './browser-escalation.mjs';
 import { fromBrowserResult, fromNetworkCandidate } from './reader-adapters.mjs';
+import { classifyChallengeType } from './challenge-detector.mjs';
+import { shouldTryUserSession, navigateInUserSession } from './browser-session.mjs';
+import { humanResolve } from './human-loop.mjs';
 
 /**
  * @typedef {'strong_ok'|'weak_ok'|'blocked'|'auth_required'|'challenge'|'paywall'|'browser_required'|'unsupported'|'error'} AdaptiveFetchVerdict
- * @typedef {'public_endpoint'|'fetch'|'reader'|'metadata'|'third_party_reader'|'browser'|'network_api'|'validation'} AdaptiveFetchSource
+ * @typedef {'public_endpoint'|'fetch'|'reader'|'metadata'|'third_party_reader'|'browser'|'browser_user'|'human_resolved'|'network_api'|'validation'} AdaptiveFetchSource
  * @typedef {'auto'|'never'|'required'} BrowserMode
- * @typedef {'none'|'isolated'|'existing'} BrowserSessionMode
+ * @typedef {'none'|'isolated'|'existing'|'user'|'interactive'} BrowserSessionMode
+ * @typedef {'auto'|'minimal'|'chrome'} IdentityMode
  */
 
 const BROWSER_MODES = new Set(['auto', 'never', 'required']);
-const BROWSER_SESSIONS = new Set(['none', 'isolated', 'existing']);
+const BROWSER_SESSIONS = new Set(['none', 'isolated', 'existing', 'user', 'interactive']);
+const IDENTITY_MODES = new Set(['auto', 'minimal', 'chrome']);
 
 /**
  * @param {Record<string, unknown>} raw
  */
 export function normalizeAdaptiveFetchOptions(raw = {}) {
     const browserMode = normalizeEnum(raw.browserMode || raw.browser, BROWSER_MODES, 'auto', 'browser');
-    const browserSession = normalizeEnum(raw.browserSession, BROWSER_SESSIONS, browserMode === 'never' ? 'none' : 'isolated', 'browserSession');
+    const rawSession = raw.browserSession;
+    const browserSession = normalizeEnum(rawSession, BROWSER_SESSIONS, browserMode === 'never' ? 'none' : 'isolated', 'browserSession');
+    const identity = normalizeEnum(raw.identity, IDENTITY_MODES, 'auto', 'identity');
+    const userSessionExplicit = browserSession === 'user' || browserSession === 'interactive';
+    const humanLoop = browserSession === 'interactive';
     return {
         url: typeof raw.url === 'string' ? raw.url : '',
         json: Boolean(raw.json),
         trace: Boolean(raw.trace),
         browserMode,
-        browserSession,
+        browserSession: userSessionExplicit ? 'existing' : browserSession,
+        identity,
+        userSessionExplicit,
+        humanLoop,
+        browserSessionRaw: browserSession,
         maxBytes: positiveInteger(raw.maxBytes, DEFAULT_MAX_BYTES),
         timeoutMs: positiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
         selector: typeof raw.selector === 'string' ? raw.selector : null,
@@ -41,6 +54,7 @@ export function normalizeAdaptiveFetchOptions(raw = {}) {
         allowPrivateNetwork: Boolean(raw.allowPrivateNetwork),
         allowThirdPartyReader: Boolean(raw.allowThirdPartyReader),
         allowArchive: Boolean(raw.allowArchive),
+        interactive: Boolean(raw.interactive),
         optionWarnings: raw.allowArchive ? ['archive-fallback-deferred'] : [],
     };
 }
@@ -54,7 +68,8 @@ export async function runAdaptiveFetch(input, deps = {}) {
     const trace = createAttemptTrace({
         url: options.url,
         browserMode: options.browserMode,
-        browserSession: options.browserSession,
+        browserSession: options.browserSessionRaw || options.browserSession,
+        identity: options.identity,
     });
     const fetchImpl = /** @type {typeof fetch | undefined} */ (deps.fetch || input.fetchImpl);
     const parsed = validateFetchUrl(options.url, { allowPrivateNetwork: options.allowPrivateNetwork });
@@ -64,6 +79,7 @@ export async function runAdaptiveFetch(input, deps = {}) {
         url: parsed.href,
         reason: 'url-valid',
     });
+
     /** @type {any[]} */
     const candidateUrls = [];
     if (options.browserMode !== 'required' && options.publicEndpoints) {
@@ -75,6 +91,8 @@ export async function runAdaptiveFetch(input, deps = {}) {
     if (options.browserMode !== 'required') {
         candidateUrls.push({ label: 'direct-fetch', url: parsed.href, source: 'fetch' });
     }
+
+    // Phase 0+1: public endpoints + direct fetch
     /** @type {any[]} */
     const readerCandidates = [];
     const fetchedUrls = new Set();
@@ -82,6 +100,9 @@ export async function runAdaptiveFetch(input, deps = {}) {
     const discoveredFeedUrls = [];
     /** @type {string[]} */
     const discoveredOembedUrls = [];
+    /** @type {any} */
+    let detectedChallenge = null;
+
     for (const candidate of candidateUrls) {
         let fetched;
         try {
@@ -89,6 +110,7 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 maxBytes: options.maxBytes,
                 timeoutMs: options.timeoutMs,
                 allowPrivateNetwork: options.allowPrivateNetwork,
+                identity: options.identity,
                 fetchImpl,
             });
         } catch (error) {
@@ -101,10 +123,34 @@ export async function runAdaptiveFetch(input, deps = {}) {
             continue;
         }
         fetchedUrls.add(fetched.finalUrl || candidate.url);
+
+        // Phase 04: classify challenge from response
+        if (candidate.source === 'fetch' && !fetched.ok) {
+            const challengeResult = classifyChallengeType({
+                status: fetched.status,
+                headers: fetched.headers,
+                body: fetched.text,
+            });
+            if (challengeResult.type) {
+                detectedChallenge = challengeResult;
+                appendAttempt(trace, {
+                    source: candidate.source,
+                    verdict: challengeResult.type,
+                    url: fetched.finalUrl,
+                    status: fetched.status,
+                    reason: `challenge:${challengeResult.type}`,
+                    waf: challengeResult.primary?.profile?.id,
+                });
+            }
+        }
+
         const readerCandidate = fromFetchResult(fetched, {
             source: candidate.source,
             label: candidate.label,
         });
+        if (detectedChallenge && candidate.source === 'fetch') {
+            readerCandidate.challenge = detectedChallenge;
+        }
         for (const feedUrl of readerCandidate.metadata?.feedUrls || []) {
             if (!fetchedUrls.has(feedUrl) && !discoveredFeedUrls.includes(feedUrl)) discoveredFeedUrls.push(feedUrl);
         }
@@ -123,6 +169,8 @@ export async function runAdaptiveFetch(input, deps = {}) {
         });
         if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
     }
+
+    // Phase 1b: discovered feeds + oEmbed
     if (options.browserMode !== 'required' && options.publicEndpoints) {
         for (const discovered of [
             ...discoveredFeedUrls.map(url => ({ url, label: 'rss-atom-discovered' })),
@@ -134,6 +182,7 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     maxBytes: options.maxBytes,
                     timeoutMs: options.timeoutMs,
                     allowPrivateNetwork: options.allowPrivateNetwork,
+                    identity: options.identity,
                     fetchImpl,
                 });
             } catch (error) {
@@ -163,6 +212,8 @@ export async function runAdaptiveFetch(input, deps = {}) {
             if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
         }
     }
+
+    // Phase 2: third-party readers (opt-in)
     if (options.allowThirdPartyReader) {
         let fetched = null;
         try {
@@ -198,18 +249,96 @@ export async function runAdaptiveFetch(input, deps = {}) {
             if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
         }
     }
+
     let best = chooseBestReaderCandidate(readerCandidates);
     if (shouldReturnWithoutBrowser(best, options)) return finishResult(resultFromReaderCandidate(best), options, trace);
-    const browserResult = await tryBrowserEscalation(parsed.href, options, deps, trace);
+
+    // Phase 3: isolated browser render + network API discovery
+    const browserResult = await tryBrowserEscalation(parsed.href, options, deps, trace, detectedChallenge);
     if (browserResult) {
         readerCandidates.push(fromBrowserResult(browserResult));
         for (const networkCandidate of collectNetworkJsonCandidates(browserResult)) {
             readerCandidates.push(fromNetworkCandidate(networkCandidate));
         }
         best = chooseBestReaderCandidate(readerCandidates);
-        if (best) return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: true });
+        if (best && best.verdict === 'strong_ok') {
+            const result = resultFromReaderCandidate(best);
+            if (options.userSessionExplicit) {
+                result.safetyFlags = [...(result.safetyFlags || []), 'user_session_used'];
+            }
+            return finishResult(result, options, trace, { chromeUsed: true });
+        }
     }
-    if (best) return finishResult(resultFromReaderCandidate(best), options, trace);
+
+    // Phase 4: user's browser session
+    const sessionDecision = shouldTryUserSession(readerCandidates, { ...options, browserDeps: deps });
+    if (sessionDecision === true) {
+        try {
+            const userResult = await navigateInUserSession(parsed.href, {
+                browserDeps: deps,
+                timeoutMs: options.timeoutMs,
+                selector: options.selector,
+                allowPrivateNetwork: options.allowPrivateNetwork,
+            });
+            readerCandidates.push(fromUserSessionResult(userResult));
+            appendAttempt(trace, {
+                source: 'browser_user',
+                verdict: 'strong_ok',
+                url: userResult.finalUrl,
+                reason: 'user-session-render',
+            });
+            best = chooseBestReaderCandidate(readerCandidates);
+            if (best && best.verdict === 'strong_ok') {
+                return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: true });
+            }
+        } catch (error) {
+            appendAttempt(trace, {
+                source: 'browser_user',
+                verdict: 'error',
+                url: parsed.href,
+                reason: (/** @type {any} */ (error)).message || 'user-session-error',
+            });
+        }
+    }
+
+    // Phase 5: human-in-the-loop resolution
+    if (options.humanLoop && hasUnresolvedChallenge(readerCandidates, best)) {
+        const challengeInfo = detectedChallenge || { type: 'challenge' };
+        try {
+            const humanResult = await humanResolve(parsed.href, {
+                ...options,
+                browserDeps: deps,
+            }, challengeInfo);
+            if (humanResult.ok !== false) {
+                readerCandidates.push(fromHumanResolvedResult(humanResult));
+                appendAttempt(trace, {
+                    source: 'human_resolved',
+                    verdict: 'strong_ok',
+                    url: humanResult.finalUrl || parsed.href,
+                    reason: 'human-resolved',
+                });
+                best = chooseBestReaderCandidate(readerCandidates);
+                if (best) return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: true });
+            } else {
+                appendAttempt(trace, {
+                    source: 'human_resolved',
+                    verdict: humanResult.verdict || 'blocked',
+                    url: parsed.href,
+                    reason: humanResult.actionMessage || 'human-action-needed',
+                });
+            }
+        } catch (error) {
+            appendAttempt(trace, {
+                source: 'human_resolved',
+                verdict: 'error',
+                url: parsed.href,
+                reason: (/** @type {any} */ (error)).message || 'human-loop-error',
+            });
+        }
+    }
+
+    // Final: best of all candidates
+    if (best) return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: Boolean(browserResult) });
     return finishResult({
         ok: false,
         verdict: options.browserMode === 'required' ? 'browser_required' : 'blocked',
@@ -238,6 +367,7 @@ export async function runAdaptiveFetchCli(args, deps = {}) {
             trace: { type: 'boolean', default: false },
             browser: { type: 'string', default: 'auto' },
             'browser-session': { type: 'string' },
+            identity: { type: 'string', default: 'auto' },
             'no-browser': { type: 'boolean', default: false },
             'max-bytes': { type: 'string' },
             'timeout-ms': { type: 'string' },
@@ -258,6 +388,7 @@ export async function runAdaptiveFetchCli(args, deps = {}) {
         trace: values.trace,
         browser: values['no-browser'] ? 'never' : values.browser,
         browserSession: values['browser-session'],
+        identity: values.identity,
         maxBytes: values['max-bytes'],
         timeoutMs: values['timeout-ms'],
         selector: values.selector,
@@ -275,16 +406,24 @@ export async function runAdaptiveFetchCli(args, deps = {}) {
 
 export function formatAdaptiveFetchHelp() {
     return `agbrowse fetch <url> [--json] [--trace] [--browser auto|never|required]
+            [--browser-session none|isolated|existing|user|interactive]
+            [--identity auto|minimal|chrome]
 
-Read one URL or search-result URL through public endpoints, fetch, metadata,
-optional public readers, and browser escalation. Not generic search.
+Read one URL through a 6-phase adaptive escalation ladder.
+Not generic search — use search tools to find URLs first.
 
 Options:
   --json                         Output JSON
   --trace                        Include attempt trace
   --browser auto|never|required  Browser escalation mode
   --no-browser                   Alias for --browser never
-  --browser-session none|isolated|existing
+  --browser-session <mode>       Session mode:
+      none       fresh cookie jar, no browser (HTTP phases)
+      isolated   fresh Chrome profile, no cookies (browser phases)
+      existing   reuse existing Chrome session
+      user       user's authenticated browser session (explicit opt-in)
+      interactive  user session + human-in-the-loop challenge resolution
+  --identity auto|minimal|chrome Request identity headers
   --max-bytes N                  Maximum response bytes per read
   --timeout-ms N                 Per-attempt timeout
   --selector CSS                 Browser text extraction selector
@@ -303,7 +442,7 @@ export function formatAdaptiveFetchHuman(result) {
         `verdict: ${result.verdict}`,
         `source: ${result.source}`,
         `final_url: ${result.finalUrl}`,
-        `browser: ${result.browserMode}/${result.browserSession}`,
+        `browser: ${result.browserMode}/${result.browserSession} identity=${result.identity}`,
         `summary: ${result.summary}`,
     ].join('\n');
 }
@@ -346,6 +485,7 @@ function resultFromReaderCandidate(scored) {
         reason: `score:${scored.score}`,
         evidence: scored.evidence,
         warnings: candidate.warnings || [],
+        safetyFlags: candidate.safetyFlags || [],
         metadata: candidate.metadata || null,
     };
 }
@@ -363,14 +503,15 @@ function finishResult(result, options, trace, runtime = {}) {
         source: result.source,
         finalUrl: result.finalUrl,
         browserMode: options.browserMode,
-        browserSession: options.browserSession,
+        browserSession: options.browserSessionRaw || options.browserSession,
+        identity: options.identity || 'auto',
         chromeUsed: Boolean(runtime.chromeUsed),
         chromeRequired: result.verdict === 'browser_required' || (options.browserMode === 'required' && !result.ok),
         title: result.title,
         content: result.content,
         summary: result.summary,
         attempts: options.trace ? trace.attempts : [],
-        safetyFlags: [],
+        safetyFlags: Array.isArray(result.safetyFlags) ? result.safetyFlags : [],
         evidence: result.evidence || [],
         warnings: [...(options.optionWarnings || []), ...(result.warnings || [])],
         metadata: result.metadata || null,
@@ -393,8 +534,9 @@ function shouldReturnWithoutBrowser(best, options) {
  * @param {any} options
  * @param {Record<string, unknown>} deps
  * @param {{ attempts: object[] }} trace
+ * @param {any} [challengeInfo]
  */
-async function tryBrowserEscalation(url, options, deps, trace) {
+async function tryBrowserEscalation(url, options, deps, trace, challengeInfo) {
     if (options.browserMode === 'never') return null;
     try {
         const result = await collectBrowserCandidate(url, {
@@ -403,6 +545,7 @@ async function tryBrowserEscalation(url, options, deps, trace) {
             timeoutMs: options.timeoutMs,
             selector: options.selector,
             allowPrivateNetwork: options.allowPrivateNetwork,
+            challengeInfo,
         });
         const scored = scoreReaderCandidate(fromBrowserResult(result));
         appendAttempt(trace, {
@@ -439,4 +582,17 @@ async function tryBrowserEscalation(url, options, deps, trace) {
         }
         throw error;
     }
+}
+
+/**
+ * @param {any[]} candidates
+ * @param {any} best
+ */
+function hasUnresolvedChallenge(candidates, best) {
+    if (best && best.verdict === 'strong_ok') return false;
+    return candidates.some(c =>
+        c.challenge?.type === 'challenge' ||
+        c.challenge?.type === 'auth_required' ||
+        c.challenge?.type === 'paywall'
+    ) || (best && ['challenge', 'auth_required', 'paywall', 'blocked'].includes(best.verdict));
 }

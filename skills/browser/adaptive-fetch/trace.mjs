@@ -3,13 +3,14 @@
 import { redactHeaders, redactTraceValue } from './safety.mjs';
 
 /**
- * @param {{ url?: string, browserMode?: string, browserSession?: string }} input
+ * @param {{ url?: string, browserMode?: string, browserSession?: string, identity?: string }} input
  */
 export function createAttemptTrace(input = {}) {
     return {
         url: typeof input.url === 'string' ? redactTraceValue(input.url) : null,
         browserMode: input.browserMode || 'auto',
         browserSession: input.browserSession || 'none',
+        identity: input.identity || 'auto',
         createdAt: new Date().toISOString(),
         attempts: [],
     };

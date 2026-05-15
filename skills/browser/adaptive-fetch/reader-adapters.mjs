@@ -91,6 +91,7 @@ export function normalizeReaderCandidate(result = {}) {
         metadata: result.metadata || null,
         evidence: Array.isArray(result.evidence) ? result.evidence.filter(Boolean) : [],
         warnings: Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [],
+        safetyFlags: Array.isArray(result.safetyFlags) ? result.safetyFlags : [],
         rawTextLength: Number(result.rawTextLength || String(result.text || '').length),
     };
 }
@@ -108,5 +109,37 @@ export function fromHtmlText(html, finalUrl) {
         contentType: 'text/html',
         status: 200,
         ok: true,
+    });
+}
+
+/**
+ * @param {any} result
+ * @returns {ReturnType<typeof normalizeReaderCandidate>}
+ */
+export function fromUserSessionResult(result) {
+    return normalizeReaderCandidate({
+        ...result,
+        source: 'browser_user',
+        label: result.label || 'browser-user-session',
+        safetyFlags: [...(result.safetyFlags || [])],
+    });
+}
+
+/**
+ * @param {any} result
+ */
+export function fromHumanResolvedResult(result) {
+    return normalizeReaderCandidate({
+        source: 'human_resolved',
+        label: 'human-resolved',
+        finalUrl: result.finalUrl ?? result.url ?? '',
+        title: result.title ?? '',
+        text: result.text ?? '',
+        contentType: result.contentType ?? 'text/html',
+        status: result.status ?? 200,
+        ok: true,
+        evidence: ['human-resolved-challenge'],
+        warnings: [],
+        safetyFlags: ['user_session_used', 'human_action_taken'],
     });
 }

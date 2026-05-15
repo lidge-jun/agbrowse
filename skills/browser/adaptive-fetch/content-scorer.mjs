@@ -6,7 +6,9 @@ import { classifyBoundarySignals, findBoundaryMarkers } from './validators.mjs';
 const SOURCE_TRUST = {
     public_endpoint: 20,
     network_api: 16,
+    human_resolved: 14,
     fetch: 12,
+    browser_user: 11,
     browser: 10,
     metadata: 6,
     third_party_reader: 5,

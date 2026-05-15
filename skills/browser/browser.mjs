@@ -24,7 +24,10 @@
  *   press <key>                      Press key (Enter, Tab, Escape…)
  *   hover <ref>                      Hover element
  *   navigate <url>                   Go to URL
- *   fetch <url> [--json] [--trace]   Adaptive URL reading (not generic search)
+ *   fetch <url> [--json] [--trace] [--browser auto|never|required]
+ *         [--browser-session none|isolated|existing|user|interactive]
+ *         [--identity auto|minimal|chrome]
+ *                                    Adaptive URL reading (6-phase ladder, not generic search)
  *   reload                           Reload current page
  *   resize <w> <h> [--fullscreen]    Resize browser window or viewport
  *   tabs [--json]                    List open tabs
@@ -2939,11 +2942,13 @@ try {
   Navigation:
     navigate <url>         Go to URL [--wait-until <commit|domcontentloaded|load>] [--timeout ms]
                               ex: agbrowse navigate https://github.com --wait-until commit
-    fetch <url>            Read one URL or search-result URL [--json] [--trace]
+    fetch <url>            Read one URL via 6-phase adaptive ladder [--json] [--trace]
                               [--browser auto|never|required]
-                              [--browser-session none|isolated|existing]
+                              [--browser-session none|isolated|existing|user|interactive]
+                              [--identity auto|minimal|chrome]
                               [--no-browser] [--max-bytes N] [--timeout-ms N]
                               [--selector CSS] [--allow-third-party-reader]
+                              [--no-public-endpoints] [--allow-archive]
                               Not generic search; use after a candidate URL exists.
     reload                 Reload current page
     resize <w> <h>         Resize browser window / viewport [--fullscreen]
