@@ -125,13 +125,16 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                         });
                     }
 
+                    const prevActive = /** @type {HTMLElement|null} */ (document.activeElement);
                     const init = { bubbles: true, cancelable: true, view: window };
                     button.dispatchEvent(new PointerEvent('pointerdown', init));
                     button.dispatchEvent(new MouseEvent('mousedown', init));
                     button.dispatchEvent(new PointerEvent('pointerup', init));
                     button.dispatchEvent(new MouseEvent('mouseup', init));
                     button.dispatchEvent(new MouseEvent('click', init));
-                    button.click?.();
+                    if (prevActive && prevActive !== document.activeElement) {
+                        try { prevActive.focus({ preventScroll: true }); } catch {}
+                    }
 
                     const deadline = Date.now() + timeoutMs;
                     while (Date.now() < deadline) {
