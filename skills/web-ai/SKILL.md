@@ -1,6 +1,18 @@
 ---
 name: web-ai
-description: "Standalone agbrowse web-ai workflow for ChatGPT, Gemini, and Grok with structured prompt envelopes, file/context uploads, model selection, polling, and opt-in copy-markdown fallback."
+description: >-
+  Ask AI web UIs (ChatGPT, Gemini, Grok) via standalone agbrowse browser automation.
+  Model selection, effort control, session resume, file/context upload, polling, copy-markdown fallback, and response extraction.
+  NOT for: generic page navigation or screenshots (use browser skill).
+  Triggers: web-ai, agbrowse, ChatGPT, GPT, GPT Pro, GPT Thinking, GPT Instant, GPT Heavy,
+  Gemini, Gemini Pro, Gemini Thinking, Gemini DeepThink, deep think, deepthink,
+  Grok, Grok Heavy, Grok Expert, Grok Fast, grok-4.3,
+  챗지피티, 제미나이, 그록, 딥씽크, GPT한테, AI한테, AI 물어봐, AI한테 물어봐,
+  heavy 모드, thinking 모드, pro 모드, expert 모드, extended effort, reasoning effort,
+  ask chatgpt, ask gemini, ask grok, query AI, AI 리뷰, AI 검증, AI 조사,
+  GPT한테 리뷰, GPT로 검증, 그록한테 물어봐, 제미나이로 분석,
+  ~한테 물어봐, ~한테 질문, ~에게 요청, ~로 물어봐, ~로 검증, ~로 분석,
+  web-ai query, web-ai send, web-ai poll, --vendor, --model, --effort
 ---
 
 # Web AI
