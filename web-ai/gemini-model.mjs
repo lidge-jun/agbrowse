@@ -55,6 +55,8 @@ const MODE_BUTTONS = [
     'button[aria-label*="mode picker" i]',
 ];
 
+const MODE_OPTION_SELECTOR = '[data-test-id^="bard-mode-option-"], [role="menuitem"], [role="option"]';
+
 /** @type {Record<string, { testId: string, labels: string[] }>} */
 const MODE_OPTIONS = {
     'flash-lite': { testId: 'bard-mode-option-fast', labels: ['Flash-Lite', 'Flash Lite'] },
@@ -111,7 +113,7 @@ export async function selectGeminiModel(page, model) {
  * @param {string[]} usedFallbacks
  */
 async function openGeminiModelMenu(page, usedFallbacks) {
-    const modeItems = page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"], [role="option"], button')
+    const modeItems = page.locator(MODE_OPTION_SELECTOR)
         .filter({ hasText: /Flash|Pro|Thinking/i });
     if (await modeItems.first().isVisible().catch(() => false)) return;
     const deadline = Date.now() + 5_000;
@@ -130,7 +132,7 @@ async function openGeminiModelMenu(page, usedFallbacks) {
     if (await textButton.isVisible().catch(() => false)) {
         await textButton.click({ timeout: 5_000 });
         await page.waitForTimeout(350).catch(() => undefined);
-        if (await page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"]').first().isVisible().catch(() => false)) return;
+        if (await modeItems.first().isVisible().catch(() => false)) return;
     }
     throw new WebAiError({
         errorCode: 'provider.model-mismatch',
@@ -153,7 +155,7 @@ async function findGeminiModelOption(page, choice) {
     while (Date.now() < deadline) {
         const byTestId = page.locator(`[data-test-id="${option.testId}"]`).first();
         if (await byTestId.isVisible().catch(() => false)) return byTestId;
-        const candidates = await page.locator('[role="menuitem"], [role="option"], button, [data-test-id^="bard-mode-option-"]').all().catch(() => []);
+        const candidates = await page.locator(MODE_OPTION_SELECTOR).all().catch(() => []);
         for (const label of option.labels) {
             const pattern = geminiModeLabelPattern(label);
             for (const candidate of candidates) {
@@ -199,7 +201,7 @@ export async function geminiModelCapabilityProbe(page, model) {
 /** @param {Page} page */
 async function closeGeminiModelMenu(page) {
     for (let i = 0; i < 3; i += 1) {
-        const menuVisible = await page.locator('[data-test-id^="bard-mode-option-"], [role="menuitem"], [role="option"], button')
+        const menuVisible = await page.locator(MODE_OPTION_SELECTOR)
             .filter({ hasText: /Flash|Pro|Thinking/i }).first().isVisible().catch(() => false);
         if (!menuVisible) return;
         await page.keyboard.press('Escape').catch(() => undefined);

@@ -38,6 +38,8 @@ describe('web-ai Gemini Deep Think contract constraints', () => {
         expect(modelSrc).toContain('bard-mode-option-fast');
         expect(modelSrc).toContain('bard-mode-option-thinking');
         expect(modelSrc).toContain('bard-mode-option-pro');
+        expect(modelSrc).toContain('MODE_OPTION_SELECTOR');
+        expect(modelSrc).not.toContain('[role="option"], button');
         expect(modelSrc).toContain('flash-lite');
         expect(modelSrc).toContain('deepthink');
         expect(modelSrc).toContain('isGeminiDeepThinkChoice');
@@ -50,6 +52,7 @@ describe('web-ai Gemini Deep Think contract constraints', () => {
         expect(normalizeGeminiModelChoice('flash-lite')).toBe('flash-lite');
         expect(normalizeGeminiModelChoice('3.1 Flash-Lite')).toBe('flash-lite');
         expect(normalizeGeminiModelChoice('3 Flash')).toBe('flash');
+        expect(normalizeGeminiModelChoice('3.5 Flash')).toBe('flash');
         expect(normalizeGeminiModelChoice('3.1 Pro')).toBe('pro');
         expect(normalizeGeminiModelChoice('3.2 Pro')).toBe('pro');
         expect(normalizeGeminiModelChoice('thinking')).toBe('pro');

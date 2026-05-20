@@ -2994,7 +2994,7 @@ try {
       Common flags:
         --vendor <chatgpt|gemini|grok>
         --model <alias>                ChatGPT: pro/thinking/instant
-                                       Gemini:  pro/thinking/fast + tool deepthink
+                                       Gemini:  flash-lite/flash/pro + tool deepthink
                                        Grok:    heavy/expert/thinking/fast/auto
         --effort <alias>               ChatGPT only; requires --model
                                        Pro: standard/extended
