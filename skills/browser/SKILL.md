@@ -63,6 +63,20 @@ agbrowse web-ai status --vendor chatgpt
 agbrowse web-ai query --vendor gemini --url https://gemini.google.com/app --inline-only --prompt "Reply exactly OK"
 ```
 
+For Runway, use the dedicated task-runner surface instead of `web-ai`.
+The initial Runway command is read-only except navigation, focuses Apps and
+Custom/tools, and never clicks `Generate`, `Run all`, payment, destructive, or
+submit-like controls. For live smoke tests where the user explicitly submits
+generation jobs, treat Runway Unlimited as a queue-capped task runner: allow at
+most 2 active jobs, then poll completion signals for up to 10 minutes per model.
+
+```bash
+agbrowse runway selectors --surface apps
+agbrowse runway status --surface auto --json
+agbrowse runway preflight --surface custom-tools --json
+agbrowse runway poll --timeout 600000 --interval 5000 --queue-limit 2 --json
+```
+
 ## Core Workflow
 
 > **Always follow this pattern:**

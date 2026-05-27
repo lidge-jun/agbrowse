@@ -14,6 +14,7 @@
  *   snapshot [--interactive] [--max-nodes N]  Accessibility tree with ref IDs
  *   observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]  ObservationBundleV1 (G06)
  *   observe-actions <instruction> [--json] [--top-n N] [--include-disabled]  Rank candidate next actions (G02)
+ *   runway <selectors|status|open|preflight|poll>  Runway Apps/Custom read-only preflight/poll
  *   screenshot [--full-page] [--ref eN] [--json]  Capture screenshot
  *   mouse-click <x> <y> [--double]  Click at pixel coordinates
  *   move-mouse <x> <y>               Move mouse without clicking
@@ -75,6 +76,7 @@ import { enforcePolicy } from '../../web-ai/policy/enforce.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
 import { cleanupIdleTabs, planCleanupIdleTabs, pickCleanupCandidates, isPinned, parseDuration, DEFAULT_MAX_TABS } from './tab-lifecycle.mjs';
 import { runAdaptiveFetchCli } from './adaptive-fetch/index.mjs';
+import { runRunwayCli } from './runway.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2070,6 +2072,9 @@ try {
         case 'web-ai':
             await runWebAiCli(process.argv.slice(3), browserDeps);
             break;
+        case 'runway':
+            await runRunwayCli(process.argv.slice(3), browserDeps);
+            break;
         case 'fetch':
             await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
             break;
@@ -2828,6 +2833,8 @@ try {
     agbrowse fetch https://example.com --json Read one URL for agent evidence
     agbrowse snapshot --interactive          Get refs (e1, e2, …)
     agbrowse click e1                        Click ref e1
+    agbrowse runway selectors --surface apps Print Runway selector contract
+    agbrowse runway poll --timeout 600000    Poll Runway queue/completion signals
     agbrowse stop                            Close Chrome
 
   Stuck? Run:
@@ -3043,6 +3050,18 @@ try {
         SID=$(agbrowse web-ai send --vendor chatgpt --inline-only \\
                 --prompt "long Pro prompt" --json | jq -r .sessionId)
         agbrowse web-ai poll --vendor chatgpt --session "$SID" --timeout 1800
+
+  Runway:
+    runway selectors       Print captured Runway selector contract [--surface apps|custom-tools|all] [--json]
+    runway status          Inspect current Runway tab [--surface auto|apps|custom-tools] [--json]
+    runway open            Navigate to Apps/Custom and inspect [--surface apps|custom-tools] [--json]
+    runway preflight       Alias for open + status; never submits a generation
+    runway poll            Poll queue/completion signals [--timeout 600000] [--interval 5000] [--queue-limit 2] [--json]
+
+      Safety:
+        Runway is a media task-runner surface, not web-ai. These commands focus
+        Apps and Custom/tools and never click Generate, Run all, payment,
+        destructive, or submit-like controls.
 
   Vision click:
     agbrowse-vision-click "<target description>" [--double] [--prepare-stable]

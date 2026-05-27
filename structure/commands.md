@@ -6,7 +6,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 
 # agbrowse Command Surface
 
-`agbrowse`의 command surface는 두 층으로 나뉜다. root command는 Chrome과 일반 브라우저 primitive를 다룬다. `web-ai` subcommand는 ChatGPT, Gemini, Grok 웹 UI를 provider workflow로 다룬다. 이 구분을 유지해야 agent가 관찰, 행동, 검증 순서를 잃지 않는다.
+`agbrowse`의 command surface는 세 층으로 나뉜다. root command는 Chrome과 일반 브라우저 primitive를 다룬다. `web-ai` subcommand는 ChatGPT, Gemini, Grok 웹 UI를 provider workflow로 다룬다. `runway` subcommand는 Runway Apps/Custom media task-runner surface를 read-only preflight로 다룬다. 이 구분을 유지해야 agent가 관찰, 행동, 검증 순서를 잃지 않는다.
 
 명령어를 사용할 때 기본 루프는 항상 같다. 먼저 `status`, `tabs`, `snapshot`으로 현재 상태를 본다. 그 다음 `click`, `type`, `press`, `web-ai send`처럼 필요한 최소 mutation만 실행한다. 마지막으로 다시 `snapshot`, `poll`, `console`, `network`, `trace`로 결과를 확인한다.
 
@@ -27,8 +27,29 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
 | Diagnostics | `console`, `network`, `evaluate` | console/network capture와 explicit unsafe JS evaluation |
 | Web AI | `web-ai` | provider workflow subcommand |
+| Runway | `runway` | Runway Apps/Custom selector contract, current-tab status, read-only preflight |
 
-## Web-AI Commands
+## Runway Commands
+
+`agbrowse runway`는 Runway를 `web-ai`처럼 prompt-response provider로
+취급하지 않는다. Apps/Custom/tools를 media task-runner surface로 보고,
+selector/status/preflight와 queue/completion poll을 제공한다.
+
+| 명령 | Browser 필요 | 역할 |
+| --- | ---: | --- |
+| `selectors` | No | 2026-05-21 selector capture 기반 static selector contract 출력 |
+| `status` | Yes | 현재 Runway tab의 surface, quota hint, selector presence를 읽음 |
+| `open` | Yes | Apps/Custom URL로 navigation 후 status inspect |
+| `preflight` | Yes | `open` + `status` alias. Generation submit 없음 |
+| `poll` | Yes | 현재 Runway tab의 active queue, queue gate toast, output count를 최대 `--timeout`까지 읽음 |
+
+Safety contract:
+
+- `Generate`, `Run all`, payment, destructive, submit-like controls는 클릭하지 않는다.
+- 모델 smoke runner는 submit 후 `poll --timeout 600000 --interval 5000 --queue-limit 2`를 기본값으로 삼는다.
+- Runway Unlimited smoke에서 active queue cap은 2개로 취급하고, 세 번째 제출은 `queue_full`/`queue-gate` terminal signal로 기록한다.
+- 첫 구현 focus는 `apps`, `custom-tools`다.
+- `agent`, `recents`, `workflow`, `characters`는 surface-only로 유지한다.
 
 ## Adaptive Fetch
 
@@ -68,6 +89,8 @@ automated challenge solving, stealth, private credential 사용은 금지한다.
 현재 known public endpoint resolver는 GitHub, Reddit, Hacker News, Wikipedia,
 npm, PyPI, arXiv, Bluesky, Mastodon-compatible statuses, Stack Exchange,
 dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed, X/Twitter oEmbed, HN Algolia, V2EX, Lobsters, generic oEmbed discovery를 포함한다.
+
+## Web-AI Commands
 
 | 명령 | Browser 필요 | 역할 |
 | --- | ---: | --- |

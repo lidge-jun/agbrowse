@@ -67,7 +67,11 @@ const rootCommands = [
   'tab-cleanup', 'scroll',
   'wait', 'wait-for-selector', 'wait-for-text', 'wait-for',
   'console', 'network', 'evaluate',
-  'web-ai', 'skills', 'install-skills',
+  'web-ai', 'runway', 'skills', 'install-skills',
+];
+
+const runwayCommands = [
+  'selectors', 'status', 'open', 'preflight', 'poll',
 ];
 
 const webAiCommands = [
@@ -92,6 +96,11 @@ for (const command of rootCommands) {
 for (const command of webAiCommands) {
   if (commandsDoc.includes(`\`${command}\``)) pass(`commands.md lists web-ai command ${command}`);
   else fail(`commands.md missing web-ai command ${command}`);
+}
+
+for (const command of runwayCommands) {
+  if (commandsDoc.includes(`\`${command}\``)) pass(`commands.md lists runway command ${command}`);
+  else fail(`commands.md missing runway command ${command}`);
 }
 
 for (const tool of mcpTools) {

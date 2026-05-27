@@ -35,6 +35,19 @@ describe.sequential('CLI help', () => {
         expect(result.stdout).toContain('AGBROWSE_WEB_AI_AUTO_START=0');
         expect(result.stdout).toContain('AGBROWSE_MAX_TABS');
         expect(result.stdout).toContain('--reuse-tab');
+        expect(result.stdout).toContain('runway selectors');
+        expect(result.stdout).toContain('runway poll');
+        expect(result.stdout).toContain('never submits a generation');
+    });
+
+    it('shows Runway help without touching the browser', async () => {
+        const result = await execBrowser(['runway', '--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('agbrowse runway <command>');
+        expect(result.stdout).toContain('selectors');
+        expect(result.stdout).toContain('preflight');
+        expect(result.stdout).toContain('poll');
+        expect(result.stdout).toContain('never click');
     });
 
     it('shows adaptive fetch help without touching the network', async () => {
