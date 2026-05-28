@@ -2,7 +2,7 @@
 
 import { parseArgs } from 'node:util';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, extname, resolve } from 'node:path';
 
 /**
  * @param {any} deps
@@ -14,27 +14,63 @@ function emit(deps, text) {
 }
 
 /**
+ * @param {string} url
+ * @param {string} [contentType]
+ * @returns {{ type: string, ext: string }}
+ */
+export function inferRunwayAssetType(url, contentType = '') {
+    const lowerType = String(contentType || '').toLowerCase();
+    const lowerUrl = String(url || '').toLowerCase();
+    if (lowerType.includes('video/') || /\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(lowerUrl)) {
+        return { type: 'video', ext: '.mp4' };
+    }
+    if (lowerType.includes('image/jpeg') || /\.jpe?g(?:[?#]|$)/i.test(lowerUrl)) {
+        return { type: 'image', ext: '.jpg' };
+    }
+    if (lowerType.includes('image/') || /\.(?:png|webp|gif)(?:[?#]|$)/i.test(lowerUrl)) {
+        return { type: 'image', ext: '.png' };
+    }
+    return { type: 'unknown', ext: '' };
+}
+
+/**
+ * @param {string} outputPath
+ * @param {{ ext: string }} asset
+ * @returns {string}
+ */
+export function normalizeRunwayOutputPath(outputPath, asset) {
+    if (!asset.ext) return outputPath;
+    const currentExt = extname(outputPath).toLowerCase();
+    if (!currentExt) return `${outputPath}${asset.ext}`;
+    if (currentExt === asset.ext) return outputPath;
+    return outputPath.slice(0, -currentExt.length) + asset.ext;
+}
+
+/**
  * Extract the most recent output asset URL from the Runway page.
  * @param {any} page
  * @param {number} [index] — 0-based index from most recent
+ * @param {{ expectedType?: string }} [options]
  * @returns {Promise<{ url: string | null, type: string, error?: string }>}
  */
-export async function extractRunwayOutputUrl(page, index = 0) {
+export async function extractRunwayOutputUrl(page, index = 0, options = {}) {
     try {
-        const result = await page.evaluate((/** @type {number} */ idx) => {
+        const result = await page.evaluate((/** @type {{ idx: number, expectedType?: string }} */ opts) => {
             const outputPattern = /(?:result|task_artifact|video-previews|generation|cdn\.runwayml)/i;
-            const videos = Array.from(document.querySelectorAll('video[src], video source[src]'))
-                .map(el => ({ src: el.getAttribute('src') || '', type: 'video' }))
+            const assets = Array.from(document.querySelectorAll('video[src], video source[src], img[src]'))
+                .map(el => ({
+                    src: el.getAttribute('src') || '',
+                    type: el.tagName.toLowerCase() === 'img' ? 'image' : 'video',
+                }))
                 .filter(v => v.src && outputPattern.test(v.src));
-            const images = Array.from(document.querySelectorAll('img[src]'))
-                .map(el => ({ src: el.getAttribute('src') || '', type: 'image' }))
-                .filter(v => v.src && outputPattern.test(v.src));
+            const typed = opts.expectedType ? assets.filter(asset => asset.type === opts.expectedType) : assets;
+            const all = typed.length ? typed : assets;
 
-            // Merge, most recent first (last in DOM = most recent)
-            const all = [...videos, ...images].reverse();
-            if (idx >= all.length) return { url: null, type: 'unknown' };
-            return { url: all[idx].src, type: all[idx].type };
-        }, index);
+            // Most recent first (last matching asset in DOM = most recent).
+            const recent = [...all].reverse();
+            if (opts.idx >= recent.length) return { url: null, type: 'unknown' };
+            return { url: recent[opts.idx].src, type: recent[opts.idx].type };
+        }, { idx: index, expectedType: options.expectedType });
         return result;
     } catch (error) {
         return { url: null, type: 'unknown', error: error instanceof Error ? error.message : String(error) };
@@ -49,16 +85,26 @@ export async function extractRunwayOutputUrl(page, index = 0) {
  */
 export async function downloadRunwayOutput(url, outputPath) {
     try {
-        const absPath = resolve(outputPath);
-        await mkdir(dirname(absPath), { recursive: true });
-
         const response = await fetch(url);
         if (!response.ok) {
             return { ok: false, error: `HTTP ${response.status}: ${response.statusText}` };
         }
+        const contentType = response.headers.get('content-type') || '';
+        const asset = inferRunwayAssetType(url, contentType);
+        const normalizedPath = normalizeRunwayOutputPath(outputPath, asset);
+        const absPath = resolve(normalizedPath);
+        const requestedPath = resolve(outputPath);
+        await mkdir(dirname(absPath), { recursive: true });
         const buffer = Buffer.from(await response.arrayBuffer());
         await writeFile(absPath, buffer);
-        return { ok: true, path: absPath, size: buffer.length };
+        return {
+            ok: true,
+            path: absPath,
+            requestedPath: requestedPath === absPath ? undefined : requestedPath,
+            size: buffer.length,
+            type: asset.type,
+            contentType: contentType || undefined,
+        };
     } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }

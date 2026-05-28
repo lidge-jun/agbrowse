@@ -16,12 +16,12 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 ## 현재 구조 스냅샷
 
-마지막 측정: 2026-05-27.
+마지막 측정: 2026-05-28.
 
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 29 | 8910 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, Runway task-runner preflight/poll |
+| `skills/browser/` | 36 | 11293 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, Runway task-runner preflight/poll |
 | `skills/vision-click/` | 3 | 831 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 1 | 493 | bundled agent workflow skill |
 | `web-ai/` | 90 | 20025 | provider automation, sessions, MCP, eval, policy, trace |
@@ -30,12 +30,12 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 9 | 1408 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 91 | 9126 | deterministic module tests |
+| `test/unit/` | 93 | 10068 | deterministic module tests |
 | `test/integration/` | 16 | 2186 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 8 | 1944 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs |
-| `devlog/` | 289 | 35272 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 296 | 36474 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -43,9 +43,9 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
-| `skills/browser/browser.mjs` | 3118 | root CLI parser, Chrome lifecycle, browser primitive commands |
-| `skills/browser/runway.mjs` | 500 | Runway Apps/Custom selector contract, status/open/preflight command surface |
-| `skills/browser/runway-monitor.mjs` | 320 | Runway read-only queue/completion poller and progress signal extraction |
+| `skills/browser/browser.mjs` | 3122 | root CLI parser, Chrome lifecycle, browser primitive commands |
+| `skills/browser/runway.mjs` | 598 | Runway Apps/Custom selector contract, status/open/preflight command surface |
+| `skills/browser/runway-monitor.mjs` | 363 | Runway read-only queue/completion poller and progress signal extraction |
 | `skills/browser/tab-manager.mjs` | 446 | CDP target list, create, close, switch |
 | `skills/browser/tab-lifecycle.mjs` | 382 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 372 | bundled skill list/get/install |

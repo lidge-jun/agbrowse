@@ -70,6 +70,50 @@ export const SURFACE_ALIASES = Object.freeze({
     character: 'characters',
 });
 
+export const RUNWAY_MODEL_CARD_LABELS = Object.freeze([
+    'Seedance 2.0 - Video',
+    'GPT Image 2 - Image',
+    'Grok Imagine - Image',
+    'Gen-4.5 - Video',
+    'Nano Banana 2 - Image',
+    'Kling O3 4K - Video + Audio',
+    'Kling O3 Pro - Video + Audio',
+    'Kling O3 Standard - Video + Audio',
+    'Kling 3.0 4K - Video + Audio',
+    'Kling 3.0 Pro - Video + Audio',
+    'Kling 3.0 Motion - Character Animation',
+    'FLUX.2 Max - Image',
+    'Seedream 5.0 - Image',
+    'Upscaler Precision v2 - Upscale Image',
+    'Upscaler Creative - Upscale Image',
+    'Style Transfer - Image to Image',
+    'FLUX.2 Klein - Image',
+    'Gen-4 - Video',
+    'Veo 3.1 - Video + Audio',
+    'Veo 3 - Video + Audio',
+    'Nano Banana Pro - Image',
+    'Nano Banana - Image',
+    'Gen-4 - Image',
+    'Gen-4 Turbo - Video',
+    'Gen-4 Turbo - Image',
+    'GPT Image 1.5 - Image',
+    'GPT Image 1 Mini - Image',
+    'HappyHorse 1.0 - Video',
+    'WAN 2.6 - Video + Audio',
+    'WAN 2.6 Flash - Video + Audio',
+    'Kling 3.0 Standard - Video + Audio',
+    'Kling 2.6 Pro - Video + Audio',
+    'Kling 2.5 Turbo Pro - Video',
+    'Kling 2.5 Turbo - Image to Video',
+]);
+
+export const RUNWAY_CUSTOM_BASE_MODEL_LABELS = Object.freeze([
+    'Seedance 2.0',
+    'WAN 2.2 Animate',
+    'WAN 2.6 Flash',
+    'WAN 2.6',
+]);
+
 /** @type {readonly RunwaySelector[]} */
 export const COMMON_SELECTORS = Object.freeze([
     {
@@ -103,8 +147,8 @@ export const SURFACE_SELECTORS = Object.freeze({
         },
         {
             name: 'model-card',
-            selector: 'role=button[name=/^Seedance 2\\.0 - Video$/]',
-            locator: 'page.getByRole(\'button\', { name: /^Seedance 2\\.0 - Video$/ })',
+            selector: 'role=button[name=/^(Seedance 2\\.0|Gen-4\\.5|Kling O3 4K) - /]',
+            locator: 'page.getByRole(\'button\', { name: /^(Seedance 2\\.0|Gen-4\\.5|Kling O3 4K) - / })',
             purpose: 'Representative Apps model card selector pattern',
         },
     ]),

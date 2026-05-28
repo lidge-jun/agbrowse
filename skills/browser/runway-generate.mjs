@@ -3,9 +3,10 @@
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { RUNWAY_SURFACES, buildRunwaySafety } from './runway-selectors.mjs';
-import { inspectRunwayPage, normalizeRunwaySurface } from './runway.mjs';
+import { buildRunwaySafety } from './runway-selectors.mjs';
+import { detectRunwaySurface, inspectRunwayPage, normalizeRunwaySurface } from './runway.mjs';
 import { waitForRunwayCompletion } from './runway-monitor.mjs';
+import { navigateRunwaySurface } from './runway-url.mjs';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 15000;
 const DEFAULT_GENERATE_TIMEOUT_MS = 600000;
@@ -17,6 +18,14 @@ const DEFAULT_GENERATE_INTERVAL_MS = 5000;
  */
 function clean(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function modelSearchKey(value) {
+    return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 /**
@@ -35,27 +44,43 @@ function emit(deps, text) {
  * @returns {Promise<{ selected: boolean, model: string, error?: string }>}
  */
 export async function selectRunwayModel(page, modelName) {
+    const current = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="select-base-model"]');
+        return el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : null;
+    });
+
     if (!modelName || modelName === 'auto') {
-        const current = await page.evaluate(() => {
-            const el = document.querySelector('[data-testid="select-base-model"]');
-            return el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : null;
-        });
         return { selected: true, model: current || 'auto (unchanged)' };
+    }
+
+    const requestedKey = modelSearchKey(modelName);
+    const currentKey = modelSearchKey(current);
+    if (current && requestedKey && (currentKey.includes(requestedKey) || requestedKey.includes(currentKey))) {
+        return { selected: true, model: current };
     }
 
     try {
         const selectEl = await page.waitForSelector('[data-testid="select-base-model"]', { timeout: 5000 });
-        await selectEl.click();
+        await selectEl.evaluate((/** @type {HTMLElement} */ el) => {
+            el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            el.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            el.click();
+        });
         await page.waitForTimeout(500);
 
         const matched = await page.evaluate((/** @type {string} */ target) => {
-            const lower = target.toLowerCase();
+            const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+            const key = (/** @type {unknown} */ value) => normalize(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const targetKey = key(target);
             const items = Array.from(document.querySelectorAll(
                 '[role="option"], [role="menuitem"], [role="listbox"] button, [class*="dropdown"] button, [class*="model-list"] button, [class*="ModelList"] button'
             ));
             for (const item of items) {
-                const text = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                if (text.includes(lower) || lower.includes(text)) {
+                const text = normalize(item.textContent || item.getAttribute('aria-label') || '');
+                const optionKey = key(text);
+                if (optionKey.includes(targetKey) || targetKey.includes(optionKey)) {
                     /** @type {HTMLElement} */ (item).click();
                     return text;
                 }
@@ -83,25 +108,83 @@ export async function selectRunwayModel(page, modelName) {
  */
 export async function setRunwayPrompt(page, promptText) {
     try {
-        const editor = await page.waitForSelector('div[aria-label="Prompt"]', { timeout: 5000 });
-        await editor.click();
+        await page.waitForSelector('div[aria-label="Prompt"]', { timeout: 5000 });
+        const focused = await page.evaluate(() => {
+            const editor = document.querySelector('div[aria-label="Prompt"]');
+            if (!editor) return false;
+            /** @type {HTMLElement} */ (editor).focus();
+            /** @type {HTMLElement} */ (editor).click();
+            return document.activeElement === editor || editor.contains(document.activeElement);
+        });
+        if (!focused) return { set: false, error: 'Prompt editor not found' };
         await page.waitForTimeout(200);
 
-        // Select all existing text and replace
-        const isMac = process.platform === 'darwin';
-        await page.keyboard.press(isMac ? 'Meta+a' : 'Control+a');
-        await page.waitForTimeout(100);
-
+        await page.keyboard.press('Meta+A');
+        await page.keyboard.press('Backspace');
         if (promptText) {
             await page.keyboard.type(promptText, { delay: 10 });
-        } else {
-            await page.keyboard.press('Backspace');
         }
 
         await page.waitForTimeout(200);
+        const actualValue = await page.evaluate(() => {
+            const editor = document.querySelector('div[aria-label="Prompt"]');
+            return String(editor?.textContent || '').replace(/\s+/g, ' ').trim();
+        });
+        const actualKnown = typeof actualValue === 'string';
+        const actual = actualKnown ? clean(actualValue) : '';
+        const expected = clean(promptText);
+        if (expected && actualKnown && actual !== expected) {
+            return { set: false, error: `Prompt verification failed: expected "${expected.slice(0, 80)}", saw "${actual.slice(0, 80)}"` };
+        }
         return { set: true };
     } catch (error) {
         return { set: false, error: error instanceof Error ? error.message : String(error) };
+    }
+}
+
+/**
+ * Select Image/Video/Audio mode in Custom Tools.
+ * @param {any} page
+ * @param {string} mode
+ * @returns {Promise<{ selected: boolean, mode: string, changed?: boolean, skipped?: boolean, error?: string }>}
+ */
+export async function setRunwayMode(page, mode) {
+    const requested = clean(mode).toLowerCase();
+    if (!requested || requested === 'auto') {
+        return { selected: true, mode: 'auto', skipped: true };
+    }
+    if (!['image', 'video', 'audio'].includes(requested)) {
+        return { selected: false, mode, error: `Unsupported mode: ${mode}` };
+    }
+
+    try {
+        const result = await page.evaluate((/** @type {string} */ target) => {
+            const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const controls = Array.from(document.querySelectorAll('[role="radio"], button, input[type="radio"]'));
+            for (const control of controls) {
+                const label = normalize(
+                    control.textContent
+                    || control.getAttribute('aria-label')
+                    || control.getAttribute('title')
+                    || control.getAttribute('value')
+                    || ''
+                );
+                if (label !== target) continue;
+                const selected = control.getAttribute('aria-checked') === 'true'
+                    || control.getAttribute('aria-selected') === 'true'
+                    || /** @type {HTMLInputElement} */ (control).checked === true;
+                if (!selected) {
+                    /** @type {HTMLElement} */ (control).click();
+                }
+                return { found: true, selected: true, changed: !selected };
+            }
+            return { found: false, selected: false, changed: false };
+        }, requested);
+        if (!result.found) return { selected: false, mode: requested, error: `Mode "${requested}" control not found` };
+        if (result.changed) await page.waitForTimeout(300);
+        return { selected: true, mode: requested, changed: Boolean(result.changed) };
+    } catch (error) {
+        return { selected: false, mode: requested, error: error instanceof Error ? error.message : String(error) };
     }
 }
 
@@ -118,18 +201,45 @@ export async function setRunwayParams(page, params) {
 
     if (params.duration != null) {
         try {
-            const durationText = `${params.duration}s`;
-            const found = await page.evaluate((/** @type {string} */ text) => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (const btn of buttons) {
-                    const label = String(btn.textContent || '').trim();
-                    if (label === text || label === String(text).replace('s', '')) {
+            const clickDuration = (/** @type {number} */ duration) => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const matchesDuration = (/** @type {unknown} */ value) => {
+                    const label = normalize(value);
+                    const escaped = String(duration).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    return new RegExp(`^${escaped}\\s*(?:s|sec|secs|second|seconds)?$`, 'i').test(label);
+                };
+                const choices = Array.from(document.querySelectorAll('button, [role="option"], [role="menuitem"]'));
+                for (const btn of choices) {
+                    const label = btn.textContent || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
+                    if (matchesDuration(label)) {
                         /** @type {HTMLElement} */ (btn).click();
                         return true;
                     }
                 }
                 return false;
-            }, durationText);
+            };
+            let found = await page.evaluate(clickDuration, params.duration);
+            if (!found) {
+                const opened = await page.evaluate(() => {
+                    const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const trigger = buttons.find(btn => {
+                        const labels = [
+                            btn.textContent,
+                            btn.getAttribute('aria-label'),
+                            btn.getAttribute('title'),
+                        ].map(normalize).filter(Boolean);
+                        return labels.includes('duration');
+                    });
+                    if (!trigger) return false;
+                    /** @type {HTMLElement} */ (trigger).click();
+                    return true;
+                });
+                if (opened) {
+                    await page.waitForTimeout(250);
+                    found = await page.evaluate(clickDuration, params.duration);
+                }
+            }
             if (found) setParams.push(`duration=${params.duration}`);
             else skipped.push(`duration=${params.duration} (button not found)`);
         } catch (e) {
@@ -216,7 +326,7 @@ export async function uploadRunwayFile(page, filePath) {
     }
 
     try {
-        const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 5000 });
+        const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 5000, state: 'attached' });
         await fileInput.setInputFiles(absPath);
         await page.waitForTimeout(1000);
         return { uploaded: true, filename };
@@ -226,21 +336,66 @@ export async function uploadRunwayFile(page, filePath) {
 }
 
 /**
+ * Remove stale custom-tools image references before uploading the intended seed/reference set.
+ * @param {any} page
+ * @returns {Promise<{ cleared: boolean, removed: number, labels: string[], error?: string }>}
+ */
+export async function clearRunwayReferences(page) {
+    try {
+        /** @type {string[]} */
+        const labels = [];
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+            const result = await page.evaluate(() => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+                const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const target = buttons.find(btn => {
+                    const label = normalize(btn.getAttribute('aria-label') || btn.textContent || '');
+                    return /^remove\s+img_\d+/i.test(label);
+                });
+                if (!target) return { clicked: false, label: null };
+                const label = normalize(target.getAttribute('aria-label') || target.textContent || 'Remove IMG reference');
+                /** @type {HTMLElement} */ (target).click();
+                return { clicked: true, label };
+            });
+            if (!result.clicked) break;
+            labels.push(result.label || `IMG_${labels.length + 1}`);
+            await page.waitForTimeout(300);
+        }
+        return { cleared: true, removed: labels.length, labels };
+    } catch (error) {
+        return {
+            cleared: false,
+            removed: 0,
+            labels: [],
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+/**
  * Ensure the UI is in Explore mode (Unlimited plan only).
  * @param {any} page
- * @returns {Promise<{ mode: string, switched: boolean, error?: string }>}
+ * @returns {Promise<{ mode: string, switched: boolean, inferred?: boolean, error?: string }>}
  */
 export async function ensureExploreMode(page) {
     try {
         const result = await page.evaluate(() => {
             const normalize = (/** @type {unknown} */ v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
             const buttons = Array.from(document.querySelectorAll('button'));
+            const visibleText = normalize(document.body?.innerText || '');
 
             // Look for Explore/Credits toggle
             const exploreBtn = buttons.find(b => /^explore$/i.test(normalize(b.textContent)));
-            const creditsBtn = buttons.find(b => /^credits$/i.test(normalize(b.textContent)));
 
-            if (!exploreBtn) return { mode: 'unknown', found: false };
+            if (!exploreBtn) {
+                const implicitUnlimited = /\bunlimited\b/i.test(visibleText)
+                    && !/\bcredits?\s*mode\b/i.test(visibleText)
+                    && !/view generation cost/i.test(visibleText);
+                if (implicitUnlimited) {
+                    return { mode: 'Explore', found: false, switched: false, inferred: true };
+                }
+                return { mode: 'unknown', found: false, switched: false, inferred: false };
+            }
 
             const isExploreActive = exploreBtn.getAttribute('aria-pressed') === 'true'
                 || exploreBtn.classList.contains('active')
@@ -252,6 +407,10 @@ export async function ensureExploreMode(page) {
             /** @type {HTMLElement} */ (exploreBtn).click();
             return { mode: 'Explore', found: true, switched: true };
         });
+
+        if (result.inferred) {
+            return { mode: result.mode, switched: false, inferred: true };
+        }
 
         if (!result.found) {
             return { mode: 'unknown', switched: false, error: 'Explore/Credits toggle not found. May not be an Unlimited plan.' };
@@ -306,24 +465,27 @@ export async function clickRunwayGenerate(page) {
  * @param {string} [options.seedImage]
  * @param {string} [options.endImage]
  * @param {string[]} [options.referenceImages]
+ * @param {boolean} [options.clearReferences]
  * @param {boolean} [options.explore]
  * @param {number} [options.count]
  * @returns {Promise<object>}
  */
 export async function setupRunwayGeneration(page, options) {
     const surface = options.surface || 'custom-tools';
-    const target = RUNWAY_SURFACES[normalizeRunwaySurface(surface)];
+    const requestedSurface = normalizeRunwaySurface(surface);
     const errors = [];
     const steps = {};
 
     // Navigate if needed
     const currentUrl = typeof page.url === 'function' ? page.url() : '';
-    if (!currentUrl.includes('runwayml.com') || !currentUrl.includes('mode=tools')) {
-        if (target?.url) {
-            await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: DEFAULT_WAIT_TIMEOUT_MS });
-            try { await page.waitForLoadState('networkidle', { timeout: 5000 }); } catch { /* ok */ }
-            steps.navigated = true;
-        }
+    const currentSurface = detectRunwaySurface(currentUrl, '');
+    if (!currentUrl.includes('runwayml.com') || currentSurface !== requestedSurface) {
+        await navigateRunwaySurface(page, requestedSurface, {
+            timeoutMs: DEFAULT_WAIT_TIMEOUT_MS,
+            discoverTeam: true,
+        });
+        try { await page.waitForLoadState('networkidle', { timeout: 5000 }); } catch { /* ok */ }
+        steps.navigated = true;
     }
 
     // Select model
@@ -336,6 +498,17 @@ export async function setupRunwayGeneration(page, options) {
         const exploreResult = await ensureExploreMode(page);
         steps.explore = exploreResult;
         if (exploreResult.error) errors.push(`explore: ${exploreResult.error}`);
+    }
+
+    // Select generation mode
+    const modeResult = await setRunwayMode(page, options.mode || 'auto');
+    steps.mode = modeResult;
+    if (!modeResult.selected) errors.push(`mode: ${modeResult.error}`);
+
+    if (options.clearReferences) {
+        const clearResult = await clearRunwayReferences(page);
+        steps.clearReferences = clearResult;
+        if (!clearResult.cleared) errors.push(`clearReferences: ${clearResult.error}`);
     }
 
     // Set prompt
@@ -391,6 +564,7 @@ export async function setupRunwayGeneration(page, options) {
         ok: errors.length === 0,
         command: 'setup',
         model: modelResult.model,
+        modelQuery: options.model || 'auto',
         prompt: options.prompt,
         mode: options.mode || 'auto',
         explore: Boolean(options.explore),
@@ -422,6 +596,7 @@ export async function setupRunwayGeneration(page, options) {
  * @param {string} [options.seedImage]
  * @param {string} [options.endImage]
  * @param {string[]} [options.referenceImages]
+ * @param {boolean} [options.clearReferences]
  * @param {boolean} [options.explore]
  * @param {string} [options.output]
  * @param {number} [options.timeout]
@@ -431,14 +606,21 @@ export async function setupRunwayGeneration(page, options) {
  * @returns {Promise<object>}
  */
 export async function executeRunwayGeneration(page, options) {
+    const expectedType = options.mode === 'video' ? 'video' : undefined;
     // Get baseline output count before generation
-    const baseline = await page.evaluate(() => {
+    const baseline = await page.evaluate((/** @type {string | undefined} */ type) => {
         const outputPattern = /\.(?:mp4|png|jpe?g)\b|\/(?:result|task_artifact|video-previews)\b|\b(?:use frame|reuse settings|see full prompt)\b/i;
+        const typedPattern = type === 'video'
+            ? /\.(?:mp4|webm|mov)\b|\/(?:task_artifact|video-previews)\b/i
+            : type === 'image'
+            ? /\.(?:png|jpe?g|webp)\b|\/result\b/i
+            : outputPattern;
         const labels = Array.from(document.querySelectorAll('img[src], video[src], source[src], button, [aria-label]'))
             .map(el => String(el.getAttribute('src') || el.textContent || el.getAttribute('aria-label') || '').trim())
-            .filter(l => outputPattern.test(l));
+            .filter(l => outputPattern.test(l))
+            .filter(l => typedPattern.test(l));
         return labels.length;
-    });
+    }, expectedType);
 
     // Setup
     const setupResult = await setupRunwayGeneration(page, options);
@@ -464,22 +646,54 @@ export async function executeRunwayGeneration(page, options) {
         timeoutMs: options.timeout || DEFAULT_GENERATE_TIMEOUT_MS,
         intervalMs: options.interval || DEFAULT_GENERATE_INTERVAL_MS,
         afterCount: baseline,
+        expectedType,
         sleep: options.sleep,
     });
 
-    // Extract output URL
-    const outputUrl = await page.evaluate(() => {
-        const videos = Array.from(document.querySelectorAll('video[src], video source[src]'));
-        const images = Array.from(document.querySelectorAll('img[src]'));
-        const all = [...videos, ...images];
-        for (const el of all) {
-            const src = el.getAttribute('src') || '';
-            if (/(?:result|task_artifact|video-previews|generation)/i.test(src)) return src;
-        }
-        const lastVideo = videos[videos.length - 1];
-        if (lastVideo) return lastVideo.getAttribute('src');
-        return null;
-    });
+    if (!pollResult.terminal || pollResult.state !== 'idle') {
+        return {
+            ok: false,
+            command: 'generate',
+            status: pollResult.state,
+            model: setupResult.model,
+            prompt: options.prompt,
+            explore: Boolean(options.explore),
+            outputUrl: null,
+            outputType: null,
+            outputFile: null,
+            download: null,
+            poll: {
+                polls: pollResult.polls,
+                waitedMs: pollResult.waitedMs,
+                timedOut: pollResult.timedOut,
+            },
+            safety: buildRunwaySafety(2),
+        };
+    }
+    if (expectedType && pollResult.submitEvidence?.acceptedAfterBaseline === false) {
+        return {
+            ok: false,
+            command: 'generate',
+            status: `no_new_${expectedType}_output`,
+            model: setupResult.model,
+            prompt: options.prompt,
+            explore: Boolean(options.explore),
+            outputUrl: null,
+            outputType: null,
+            outputFile: null,
+            download: null,
+            poll: {
+                polls: pollResult.polls,
+                waitedMs: pollResult.waitedMs,
+                timedOut: pollResult.timedOut,
+            },
+            safety: buildRunwaySafety(2),
+        };
+    }
+
+    const { extractRunwayOutputUrl } = await import('./runway-download.mjs');
+    const extracted = await extractRunwayOutputUrl(page, 0, { expectedType });
+    const outputUrl = extracted.url;
 
     // Download if --output specified
     let downloadResult = null;
@@ -500,7 +714,9 @@ export async function executeRunwayGeneration(page, options) {
         prompt: options.prompt,
         explore: Boolean(options.explore),
         outputUrl,
-        outputFile: downloadResult?.ok ? options.output : null,
+        outputType: downloadResult?.type || extracted.type,
+        outputFile: downloadResult?.ok ? downloadResult.path : null,
+        requestedOutputFile: downloadResult?.requestedPath || null,
         download: downloadResult,
         poll: {
             polls: pollResult.polls,
@@ -531,6 +747,7 @@ export async function runRunwayGenerateCli(command, args = [], deps = {}) {
             'seed-image': { type: 'string' },
             'end-image': { type: 'string' },
             'reference-images': { type: 'string', multiple: true },
+            'clear-references': { type: 'boolean', default: false },
             explore: { type: 'boolean', default: false },
             count: { type: 'string' },
             output: { type: 'string' },
@@ -568,6 +785,7 @@ export async function runRunwayGenerateCli(command, args = [], deps = {}) {
         seedImage: values['seed-image'] ? String(values['seed-image']) : undefined,
         endImage: values['end-image'] ? String(values['end-image']) : undefined,
         referenceImages: values['reference-images']?.map(String),
+        clearReferences: Boolean(values['clear-references']),
         explore: Boolean(values.explore),
         count: values.count ? Number(values.count) : undefined,
         output: values.output ? String(values.output) : undefined,

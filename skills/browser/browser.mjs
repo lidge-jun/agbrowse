@@ -3052,11 +3052,11 @@ try {
         agbrowse web-ai poll --vendor chatgpt --session "$SID" --timeout 1800
 
   Runway (run "agbrowse runway help" for full usage):
-    Level 0 — read-only (default):
+    Level 0 — read-only (default; never submits a generation):
       runway selectors       Print selector contract [--surface apps|custom-tools|recents|all] [--json]
       runway status          Inspect current tab: plan, model, mode, quota [--json]
       runway open            Navigate to a surface and inspect [--surface apps|custom-tools|recents]
-      runway preflight       Alias for open + status
+      runway preflight       Alias for open + status; never submits a generation
       runway poll            Poll queue/completion signals [--timeout 600000] [--interval 5000] [--json]
       runway recents         Parse asset cards from Recents [--limit 20] [--type image|video|all]
     Level 1 — mutation (requires --allow-mutation):
@@ -3066,6 +3066,7 @@ try {
       runway generate        Full pipeline: setup → Generate → poll → download [--prompt TEXT]
       runway multishot        Multi-scene video [--shots "s1" "s2" | --story TEXT]
       runway product-ad      Product marketing video [--prompt TEXT --product-url URL]
+      runway sequence        Custom Tools continuity chain [--story TEXT | --shots "s1" "s2"]
       runway download        Download latest generated asset [--index 0 --output PATH]
       runway screenshot      Screenshot current Runway tab [--output PATH]
 

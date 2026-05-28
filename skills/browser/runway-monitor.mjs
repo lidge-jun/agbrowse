@@ -48,6 +48,23 @@ function isOutputLabel(label) {
 
 /**
  * @param {string} label
+ * @param {string} type
+ * @returns {boolean}
+ */
+function isExpectedOutputType(label, type) {
+    if (type === 'video') {
+        return /\.(?:mp4|webm|mov)\b/i.test(label)
+            || /\/(?:task_artifact|video-previews)\b/i.test(label);
+    }
+    if (type === 'image') {
+        return /\.(?:png|jpe?g|webp)\b/i.test(label)
+            || /\/result\b/i.test(label);
+    }
+    return true;
+}
+
+/**
+ * @param {string} label
  * @returns {boolean}
  */
 function isActiveLabel(label) {
@@ -103,12 +120,13 @@ function defaultCompletionDomSummary() {
 
 /**
  * @param {any} page
- * @param {{ queueLimit?: number, afterCount?: number | null, expectedItem?: string | null }} [options]
+ * @param {{ queueLimit?: number, afterCount?: number | null, expectedItem?: string | null, expectedType?: string | null }} [options]
  */
 export async function inspectRunwayCompletionState(page, options = {}) {
     const queueLimit = positiveInt(options.queueLimit, DEFAULT_RUNWAY_QUEUE_LIMIT);
     const afterCount = Number.isFinite(options.afterCount) ? Number(options.afterCount) : null;
     const expectedItem = clean(options.expectedItem || '');
+    const expectedType = clean(options.expectedType || '');
     const errors = [];
     let url = '';
     let title = '';
@@ -177,7 +195,10 @@ export async function inspectRunwayCompletionState(page, options = {}) {
         errors.push(`completion-evaluate: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    const outputLabels = Array.isArray(dom.outputLabels) ? dom.outputLabels.map(clean).filter(isOutputLabel) : [];
+    const allOutputLabels = Array.isArray(dom.outputLabels) ? dom.outputLabels.map(clean).filter(isOutputLabel) : [];
+    const outputLabels = expectedType
+        ? allOutputLabels.filter(label => isExpectedOutputType(label, expectedType))
+        : allOutputLabels;
     const activeLabels = Array.isArray(dom.activeLabels) ? dom.activeLabels.map(clean).filter(isActiveLabel) : [];
     const progressTexts = extractProgressTexts([
         ...(Array.isArray(dom.progressTexts) ? dom.progressTexts : []),
@@ -188,12 +209,25 @@ export async function inspectRunwayCompletionState(page, options = {}) {
     const activeCountEstimate = Math.min(queueLimit, activeSignals.length);
     const queueGateVisible = isRunwayTab && Boolean(dom.queueGateText);
     const queueFull = isRunwayTab && (queueGateVisible || activeCountEstimate >= queueLimit);
-    const outputItemCount = Number.isFinite(Number(dom.outputItemCount)) ? Number(dom.outputItemCount) : outputLabels.length;
+    const outputItemCount = expectedType
+        ? outputLabels.length
+        : Number.isFinite(Number(dom.outputItemCount)) ? Number(dom.outputItemCount) : outputLabels.length;
     const expectedItemVisible = expectedItem
         ? outputLabels.some(label => label.includes(expectedItem)) || clean(dom.textSample).includes(expectedItem)
         : null;
     const acceptedAfterBaseline = afterCount === null ? null : outputItemCount > afterCount;
-    const state = !isRunwayTab ? 'not_runway' : queueGateVisible ? 'queue_full' : activeCountEstimate > 0 ? 'active' : 'idle';
+    const outputAccepted = Boolean(acceptedAfterBaseline || expectedItemVisible);
+    const staleLoadingOnly = outputAccepted
+        && activeSignals.length > 0
+        && activeSignals.every(label => /^loading animation$/i.test(label));
+    const effectiveActiveCount = staleLoadingOnly ? 0 : activeCountEstimate;
+    const state = !isRunwayTab
+        ? 'not_runway'
+        : queueGateVisible && !outputAccepted
+        ? 'queue_full'
+        : effectiveActiveCount > 0
+        ? 'active'
+        : 'idle';
     const terminal = state !== 'active';
     const completionSignal = state === 'not_runway'
         ? 'not-runway-tab'
@@ -215,7 +249,8 @@ export async function inspectRunwayCompletionState(page, options = {}) {
         completionSignal,
         queue: {
             limit: queueLimit,
-            activeCountEstimate,
+            activeCountEstimate: effectiveActiveCount,
+            rawActiveCountEstimate: activeCountEstimate,
             full: queueFull,
             gateText: dom.queueGateText || null,
             readyText: dom.readyText || null,
@@ -226,6 +261,7 @@ export async function inspectRunwayCompletionState(page, options = {}) {
             acceptedAfterBaseline,
             expectedItem: expectedItem || null,
             expectedItemVisible,
+            expectedType: expectedType || null,
         },
         controls: {
             hasGenerateButton: Boolean(dom.hasGenerateButton),
@@ -233,6 +269,7 @@ export async function inspectRunwayCompletionState(page, options = {}) {
         },
         activeLabels: activeSignals,
         outputLabels,
+        allOutputLabels,
         textSample: clean(dom.textSample).slice(0, 1200),
         errors,
     };
@@ -240,7 +277,7 @@ export async function inspectRunwayCompletionState(page, options = {}) {
 
 /**
  * @param {any} page
- * @param {{ timeoutMs?: number, intervalMs?: number, queueLimit?: number, afterCount?: number | null, expectedItem?: string | null, sleep?: (ms: number) => Promise<void> }} [options]
+ * @param {{ timeoutMs?: number, intervalMs?: number, queueLimit?: number, afterCount?: number | null, expectedItem?: string | null, expectedType?: string | null, sleep?: (ms: number) => Promise<void> }} [options]
  */
 export async function waitForRunwayCompletion(page, options = {}) {
     const timeoutMs = positiveInt(options.timeoutMs, DEFAULT_RUNWAY_POLL_TIMEOUT_MS);
@@ -253,7 +290,13 @@ export async function waitForRunwayCompletion(page, options = {}) {
     while (Date.now() - startedAt <= timeoutMs) {
         polls += 1;
         state = await inspectRunwayCompletionState(page, options);
-        if (state.terminal) break;
+        const waitingForExpectedOutput = Boolean(
+            options.expectedType
+            && options.afterCount != null
+            && state.state === 'idle'
+            && state.submitEvidence?.acceptedAfterBaseline === false
+        );
+        if (state.terminal && !waitingForExpectedOutput) break;
         await sleep(intervalMs);
     }
     const waitedMs = Date.now() - startedAt;

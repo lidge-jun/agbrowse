@@ -8,8 +8,11 @@ import {
     COMMON_SELECTORS,
     SURFACE_SELECTORS,
     BLOCKED_ACTIONS,
+    RUNWAY_MODEL_CARD_LABELS,
+    RUNWAY_CUSTOM_BASE_MODEL_LABELS,
     buildRunwaySafety,
 } from './runway-selectors.mjs';
+import { navigateRunwaySurface } from './runway-url.mjs';
 
 export {
     RUNWAY_SURFACES,
@@ -17,6 +20,8 @@ export {
     COMMON_SELECTORS,
     SURFACE_SELECTORS,
     BLOCKED_ACTIONS,
+    RUNWAY_MODEL_CARD_LABELS,
+    RUNWAY_CUSTOM_BASE_MODEL_LABELS,
     buildRunwaySafety,
 };
 
@@ -70,6 +75,11 @@ export function buildRunwaySelectorContract(surface = 'all') {
         source: 'devlog/_plan/260519_competitor_skill_trigger_research/16_runway_ui_selector_capture.md',
         focus: ['apps', 'custom-tools'],
         commonSelectors: COMMON_SELECTORS,
+        modelCatalog: {
+            source: 'live Chrome smoke 2026-05-29',
+            apps: RUNWAY_MODEL_CARD_LABELS,
+            customToolsBaseModels: RUNWAY_CUSTOM_BASE_MODEL_LABELS,
+        },
         surfaces,
         safety: buildRunwaySafety(0),
     };
@@ -148,6 +158,18 @@ export async function inspectRunwayPage(page, options = {}) {
             // Model detection
             const modelSelectEl = document.querySelector('[data-testid="select-base-model"]');
             const selectedModel = modelSelectEl ? normalize(modelSelectEl.textContent || '') : null;
+            const modelCatalog = Array.from(document.querySelectorAll('button[aria-label]'))
+                .map((button) => normalize(button.getAttribute('aria-label') || ''))
+                .filter((label) => / - (?:Video|Image|Video \+ Audio|Character Animation|Image to Video|Upscale Image|Image to Image)$/i.test(label))
+                .filter((label, index, all) => label && all.indexOf(label) === index)
+                .slice(0, 100);
+            const visibleModelOptions = Array.from(document.querySelectorAll(
+                '[role="option"], [role="menuitem"], [role="listbox"] button, [class*="dropdown"] button, [class*="model-list"] button, [class*="ModelList"] button'
+            ))
+                .map((item) => normalize(item.textContent || item.getAttribute('aria-label') || ''))
+                .filter((label) => /seedance|wan|kling|gen-|veo|flux|gpt image|nano banana|grok imagine|seedream/i.test(label))
+                .filter((label, index, all) => label && all.indexOf(label) === index)
+                .slice(0, 100);
 
             // Generation mode (Explore vs Credits)
             const exploreActive = Boolean(
@@ -159,6 +181,9 @@ export async function inspectRunwayPage(page, options = {}) {
             let generationMode = 'unknown';
             if (exploreActive || (hasExploreText && !hasCreditsText)) generationMode = 'Explore';
             else if (hasCreditsText) generationMode = 'Credits';
+            else if (/unlimited/i.test(visibleText.slice(0, 2000)) && !/view generation cost/i.test(visibleText.slice(0, 2000))) {
+                generationMode = 'Explore';
+            }
 
             return {
                 textSample: visibleText.slice(0, 1000),
@@ -201,6 +226,8 @@ export async function inspectRunwayPage(page, options = {}) {
                 },
                 model: {
                     selected: selectedModel,
+                    catalog: modelCatalog,
+                    visibleOptions: visibleModelOptions,
                 },
                 generation: {
                     mode: generationMode,
@@ -255,7 +282,7 @@ function defaultDomSummary() {
         actions: { hasGenerateButton: false, hasRunAllButton: false, buttonTexts: [] },
         plan: { type: 'unknown', credits: null },
         workspace: { name: null },
-        model: { selected: null },
+        model: { selected: null, catalog: [], visibleOptions: [] },
         generation: { mode: 'unknown' },
     };
 }
@@ -336,7 +363,7 @@ Commands (read-only, Level 0):
   open --surface apps|custom-tools|recents [--json] [--timeout ms]
       Navigate the current agbrowse tab to a supported Runway surface, then inspect.
   preflight --surface apps|custom-tools [--json] [--timeout ms]
-      Alias for open + status. It does not submit a generation.
+      Alias for open + status. It never submits a generation.
   poll [--timeout 600000] [--interval 5000] [--queue-limit 2] [--after-count N] [--expected-item TEXT] [--json]
       Poll the current Runway tab for queue/completion signals. Read-only.
   recents [--limit 20] [--type image|video|all] [--json]
@@ -362,13 +389,16 @@ Commands (submit, Level 2 — requires --allow-submit):
   product-ad --prompt TEXT [--product-url URL] [--duration N]
       [--output PATH] [--json]
       Product marketing video generation.
+  sequence --story TEXT | --shots "beat1" "beat2" [--target-duration 120]
+      [--shot-duration 10] [--seed-image PATH] [--explore] [--output PATH] [--json]
+      Custom Tools continuity chain: last frame of each clip seeds the next clip.
   download [--index 0] [--output PATH] [--json]
       Download the most recent generated asset.
   screenshot [--output PATH]
       Screenshot the current Runway tab.
 
 Safety Levels:
-  Level 0: Read-only (default). No mutation or submission.
+  Level 0: Read-only (default). No mutation or submission; never click Generate.
   Level 1: --allow-mutation. Prompt input, model selection, file upload.
   Level 2: --allow-submit. Generate button click allowed.`;
 }
@@ -387,6 +417,7 @@ export function formatRunwayStatus(result) {
         `credits: ${result.plan?.credits ?? 'n/a'}`,
         `workspace: ${result.workspace?.name || 'n/a'}`,
         `model: ${result.model?.selected || 'n/a'}`,
+        `modelsVisible: ${result.model?.catalog?.length || result.model?.visibleOptions?.length || 0}`,
         `generationMode: ${result.generation?.mode || 'unknown'}`,
         `unlimitedHint: ${result.quota?.hasUnlimitedText ? 'yes' : 'no'}`,
         `generationCostHint: ${result.quota?.hasGenerationCostText ? 'yes' : 'no'}`,
@@ -474,11 +505,12 @@ export async function runRunwayCli(args = [], deps = {}) {
         const page = await deps.getPage();
         const currentUrl = typeof page.url === 'function' ? page.url() : '';
         if (!/recents/i.test(currentUrl)) {
-            const target = RUNWAY_SURFACES.recents;
-            if (target?.url) {
-                await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: DEFAULT_WAIT_TIMEOUT_MS });
-                try { await page.waitForLoadState('networkidle', { timeout: 5000 }); } catch { /* ok */ }
-            }
+            const resolved = await navigateRunwaySurface(page, 'recents', {
+                timeoutMs: DEFAULT_WAIT_TIMEOUT_MS,
+                discoverTeam: true,
+            });
+            void resolved;
+            try { await page.waitForLoadState('networkidle', { timeout: 5000 }); } catch { /* ok */ }
         }
         const result = await inspectRunwayRecents(page, {
             limit: Number(values.limit) || 20,
@@ -503,10 +535,11 @@ export async function runRunwayCli(args = [], deps = {}) {
         const page = await deps.getPage();
         /** @type {string[]} */
         const warnings = [];
-        await page.goto(target.url, {
-            waitUntil: 'domcontentloaded',
-            timeout: Number(values.timeout || DEFAULT_WAIT_TIMEOUT_MS),
+        const resolved = await navigateRunwaySurface(page, surface, {
+            timeoutMs: Number(values.timeout || DEFAULT_WAIT_TIMEOUT_MS),
+            discoverTeam: true,
         });
+        warnings.push(...resolved.warnings);
         try {
             await page.waitForLoadState('networkidle', { timeout: 5000 });
         } catch (error) {
@@ -539,6 +572,10 @@ export async function runRunwayCli(args = [], deps = {}) {
     if (command === 'product-ad') {
         const { runRunwayProductAdCli } = await import('./runway-product-ad.mjs');
         return runRunwayProductAdCli(args.slice(1), deps);
+    }
+    if (command === 'sequence') {
+        const { runRunwaySequenceCli } = await import('./runway-sequence.mjs');
+        return runRunwaySequenceCli(args.slice(1), deps);
     }
     throw new Error(`${formatRunwayUsage()}\n\nUnknown runway command: ${command}`);
 }
