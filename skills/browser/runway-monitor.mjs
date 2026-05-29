@@ -104,6 +104,21 @@ function extractContextualProgressTexts(value) {
     return Array.from(new Set(found));
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function extractContextualActiveTexts(value) {
+    const text = clean(value);
+    const found = [];
+    if (/\bin queue\b/i.test(text)) found.push('in queue');
+    if (/\bgenerating\b/i.test(text)) found.push('generating');
+    if (/\bqueued\b/i.test(text)) found.push('queued');
+    if (/\bprocessing\b/i.test(text)) found.push('processing');
+    if (/\bloading animation\b/i.test(text)) found.push('loading animation');
+    return Array.from(new Set(found));
+}
+
 function defaultCompletionDomSummary() {
     return {
         textSample: '',
@@ -111,6 +126,7 @@ function defaultCompletionDomSummary() {
         outputLabels: [],
         activeLabels: [],
         progressTexts: [],
+        activeText: '',
         queueGateText: null,
         readyText: null,
         hasGenerateButton: false,
@@ -183,6 +199,7 @@ export async function inspectRunwayCompletionState(page, options = {}) {
                 outputLabels: outputLabels.filter(label => outputPattern.test(label)).slice(0, 40),
                 activeLabels: visibleLabels.filter(label => activePattern.test(label) || progressPattern.test(label)).slice(0, 40),
                 progressTexts: Array.from(new Set(progressTexts)).slice(0, 20),
+                activeText: activePattern.test(visibleText) ? visibleText.slice(0, 5000) : '',
                 queueGateText: /you're on a roll|please wait for your last generation|switch to credits mode/i.test(visibleText)
                     ? 'You are on a roll / wait for last generation / Credits Mode'
                     : null,
@@ -200,12 +217,15 @@ export async function inspectRunwayCompletionState(page, options = {}) {
         ? allOutputLabels.filter(label => isExpectedOutputType(label, expectedType))
         : allOutputLabels;
     const activeLabels = Array.isArray(dom.activeLabels) ? dom.activeLabels.map(clean).filter(isActiveLabel) : [];
+    const activeText = clean(dom.activeText);
     const progressTexts = extractProgressTexts([
         ...(Array.isArray(dom.progressTexts) ? dom.progressTexts : []),
         ...activeLabels,
         ...extractContextualProgressTexts(dom.textSample),
+        ...extractContextualProgressTexts(activeText),
     ]);
-    const activeSignals = Array.from(new Set([...activeLabels, ...progressTexts]));
+    const contextualActiveTexts = extractContextualActiveTexts(`${dom.textSample} ${activeText}`);
+    const activeSignals = Array.from(new Set([...activeLabels, ...progressTexts, ...contextualActiveTexts]));
     const activeCountEstimate = Math.min(queueLimit, activeSignals.length);
     const queueGateVisible = isRunwayTab && Boolean(dom.queueGateText);
     const queueFull = isRunwayTab && (queueGateVisible || activeCountEstimate >= queueLimit);
@@ -223,10 +243,10 @@ export async function inspectRunwayCompletionState(page, options = {}) {
     const effectiveActiveCount = staleLoadingOnly ? 0 : activeCountEstimate;
     const state = !isRunwayTab
         ? 'not_runway'
-        : queueGateVisible && !outputAccepted
-        ? 'queue_full'
         : effectiveActiveCount > 0
         ? 'active'
+        : queueGateVisible && !outputAccepted
+        ? 'queue_full'
         : 'idle';
     const terminal = state !== 'active';
     const completionSignal = state === 'not_runway'

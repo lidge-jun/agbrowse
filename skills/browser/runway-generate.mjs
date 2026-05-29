@@ -5,12 +5,21 @@ import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { buildRunwaySafety } from './runway-selectors.mjs';
 import { detectRunwaySurface, inspectRunwayPage, normalizeRunwaySurface } from './runway.mjs';
-import { waitForRunwayCompletion } from './runway-monitor.mjs';
+import { inspectRunwayCompletionState, waitForRunwayCompletion } from './runway-monitor.mjs';
 import { navigateRunwaySurface } from './runway-url.mjs';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 15000;
 const DEFAULT_GENERATE_TIMEOUT_MS = 600000;
 const DEFAULT_GENERATE_INTERVAL_MS = 5000;
+const FIRST_FRAME_BOOTSTRAP_TIMEOUT_MS = 600000;
+const FIRST_FRAME_BOOTSTRAP_INTERVAL_MS = 5000;
+const RUNWAY_PROMPT_SELECTOR = [
+    'div[aria-label="Prompt"]',
+    '[role="textbox"][aria-label="Prompt"]',
+    '[contenteditable="true"][aria-label="Prompt"]',
+    'textarea[aria-label="Prompt"]',
+    'textarea[placeholder*="Describe" i]',
+].join(', ');
 
 /**
  * @param {unknown} value
@@ -29,12 +38,63 @@ function modelSearchKey(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function modelLabelName(value) {
+    return clean(value).split(/[•|]/)[0].replace(/\s+-\s+.*$/, '').trim();
+}
+
+/**
+ * @param {unknown} label
+ * @param {unknown} requested
+ * @returns {boolean}
+ */
+function isRunwayModelLabelMatch(label, requested) {
+    const requestedKey = modelSearchKey(requested);
+    const labelKey = modelSearchKey(label);
+    const labelNameKey = modelSearchKey(modelLabelName(label));
+    if (!requestedKey || !labelKey) return false;
+    if (labelKey === requestedKey || labelNameKey === requestedKey) return true;
+    if (requestedKey.length >= 8 && (labelNameKey.includes(requestedKey) || requestedKey.includes(labelNameKey))) {
+        return true;
+    }
+    return false;
+}
+
+/**
  * @param {any} deps
  * @param {string} text
  */
 function emit(deps, text) {
     if (typeof deps.write === 'function') deps.write(text);
     else console.log(text);
+}
+
+/**
+ * Runway often leaves parameter popovers marked expanded after a DOM click.
+ * Close them before moving focus into the prompt editor.
+ * @param {any} page
+ */
+async function closeRunwayPopovers(page) {
+    try {
+        const closed = await page.evaluate(() => {
+            const expanded = Array.from(document.querySelectorAll('button[aria-expanded="true"], [role="button"][aria-expanded="true"]'));
+            for (const button of expanded) {
+                /** @type {HTMLElement} */ (button).click();
+            }
+            return expanded.length;
+        });
+        if (closed) await page.waitForTimeout(150);
+    } catch {
+        // Best effort only; the next explicit action will still verify state.
+    }
+    try {
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(100);
+    } catch {
+        // Best effort: some tests provide partial keyboard mocks.
+    }
 }
 
 /**
@@ -53,9 +113,7 @@ export async function selectRunwayModel(page, modelName) {
         return { selected: true, model: current || 'auto (unchanged)' };
     }
 
-    const requestedKey = modelSearchKey(modelName);
-    const currentKey = modelSearchKey(current);
-    if (current && requestedKey && (currentKey.includes(requestedKey) || requestedKey.includes(currentKey))) {
+    if (current && isRunwayModelLabelMatch(current, modelName)) {
         return { selected: true, model: current };
     }
 
@@ -72,15 +130,21 @@ export async function selectRunwayModel(page, modelName) {
 
         const matched = await page.evaluate((/** @type {string} */ target) => {
             const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+            const labelName = (/** @type {unknown} */ value) => normalize(value).split(/[•|]/)[0].replace(/\s+-\s+.*$/, '').trim();
             const key = (/** @type {unknown} */ value) => normalize(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const matches = (/** @type {unknown} */ value) => {
+                const optionKey = key(value);
+                const optionNameKey = key(labelName(value));
+                if (optionKey === targetKey || optionNameKey === targetKey) return true;
+                return targetKey.length >= 8 && (optionNameKey.includes(targetKey) || targetKey.includes(optionNameKey));
+            };
             const targetKey = key(target);
             const items = Array.from(document.querySelectorAll(
                 '[role="option"], [role="menuitem"], [role="listbox"] button, [class*="dropdown"] button, [class*="model-list"] button, [class*="ModelList"] button'
             ));
             for (const item of items) {
                 const text = normalize(item.textContent || item.getAttribute('aria-label') || '');
-                const optionKey = key(text);
-                if (optionKey.includes(targetKey) || targetKey.includes(optionKey)) {
+                if (matches(text)) {
                     /** @type {HTMLElement} */ (item).click();
                     return text;
                 }
@@ -108,7 +172,50 @@ export async function selectRunwayModel(page, modelName) {
  */
 export async function setRunwayPrompt(page, promptText) {
     try {
-        const editorHandle = await page.waitForSelector('div[aria-label="Prompt"]', { timeout: 5000 });
+        /** @type {Array<{ method: string, actual?: string | null, error?: string }>} */
+        const attempts = [];
+        await closeRunwayPopovers(page);
+        const editorHandle = await page.waitForSelector(RUNWAY_PROMPT_SELECTOR, { timeout: 10000 });
+        const readPromptText = async () => {
+            const actualValue = await page.evaluate((/** @type {string} */ selector) => {
+                const editor = document.querySelector(selector);
+                const field = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (editor);
+                const text = field?.value
+                    || /** @type {HTMLElement | null} */ (editor)?.innerText
+                    || editor?.textContent
+                    || '';
+                return String(text).replace(/\s+/g, ' ').trim();
+            }, RUNWAY_PROMPT_SELECTOR);
+            return typeof actualValue === 'string' ? clean(actualValue) : null;
+        };
+        const expected = clean(promptText);
+
+        if (typeof page.locator === 'function') {
+            try {
+                await page.locator(RUNWAY_PROMPT_SELECTOR).first().fill(promptText, { timeout: 5000 });
+                await page.waitForTimeout(200);
+                const actual = await readPromptText();
+                attempts.push({ method: 'locator.fill', actual });
+                if (!expected || actual === expected) return { set: true, method: 'locator.fill' };
+            } catch (error) {
+                attempts.push({ method: 'locator.fill', error: error instanceof Error ? error.message : String(error) });
+                // Fall through to ElementHandle/keyboard input for non-Playwright deps.
+            }
+        }
+
+        if (typeof editorHandle.fill === 'function') {
+            try {
+                await editorHandle.fill(promptText, { timeout: 5000 });
+                await page.waitForTimeout(200);
+                const actual = await readPromptText();
+                attempts.push({ method: 'element.fill', actual });
+                if (!expected || actual === expected) return { set: true, method: 'element.fill' };
+            } catch (error) {
+                attempts.push({ method: 'element.fill', error: error instanceof Error ? error.message : String(error) });
+                // Fall through to keyboard typing for older Playwright handles.
+            }
+        }
+
         try {
             await editorHandle.click();
         } catch {
@@ -117,17 +224,17 @@ export async function setRunwayPrompt(page, promptText) {
         try {
             await editorHandle.focus();
         } catch {
-            await page.evaluate(() => {
-                const editor = document.querySelector('div[aria-label="Prompt"]');
+            await page.evaluate((/** @type {string} */ selector) => {
+                const editor = document.querySelector(selector);
                 if (editor) /** @type {HTMLElement} */ (editor).focus();
-            });
+            }, RUNWAY_PROMPT_SELECTOR);
         }
-        const found = await page.evaluate(() => {
-            const editor = document.querySelector('div[aria-label="Prompt"]');
+        const found = await page.evaluate((/** @type {string} */ selector) => {
+            const editor = document.querySelector(selector);
             if (!editor) return false;
             /** @type {HTMLElement} */ (editor).focus();
             return true;
-        });
+        }, RUNWAY_PROMPT_SELECTOR);
         if (!found) return { set: false, error: 'Prompt editor not found' };
         await page.waitForTimeout(200);
 
@@ -138,17 +245,16 @@ export async function setRunwayPrompt(page, promptText) {
         }
 
         await page.waitForTimeout(200);
-        const actualValue = await page.evaluate(() => {
-            const editor = document.querySelector('div[aria-label="Prompt"]');
-            return String(editor?.textContent || '').replace(/\s+/g, ' ').trim();
-        });
-        const actualKnown = typeof actualValue === 'string';
-        const actual = actualKnown ? clean(actualValue) : '';
-        const expected = clean(promptText);
-        if (expected && actualKnown && actual !== expected) {
-            return { set: false, error: `Prompt verification failed: expected "${expected.slice(0, 80)}", saw "${actual.slice(0, 80)}"` };
+        const actual = await readPromptText();
+        attempts.push({ method: 'keyboard.type', actual });
+        if (expected && actual !== null && actual !== expected) {
+            return {
+                set: false,
+                error: `Prompt verification failed: expected "${expected.slice(0, 80)}", saw "${actual.slice(0, 80)}"`,
+                attempts,
+            };
         }
-        return { set: true };
+        return { set: true, method: 'keyboard.type', attempts };
     } catch (error) {
         return { set: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -213,6 +319,17 @@ export async function setRunwayParams(page, params) {
 
     if (params.duration != null) {
         try {
+            const alreadySet = await page.evaluate((/** @type {number} */ duration) => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const matchesDuration = (/** @type {unknown} */ value) => {
+                    const label = normalize(value);
+                    const escaped = String(duration).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    return new RegExp(`^${escaped}\\s*(?:s|sec|secs|second|seconds)?$`, 'i').test(label);
+                };
+                const trigger = Array.from(document.querySelectorAll('button'))
+                    .find(btn => normalize(btn.getAttribute('aria-label')) === 'duration');
+                return Boolean(trigger && matchesDuration(trigger.textContent || trigger.getAttribute('aria-label') || ''));
+            }, params.duration);
             const clickDuration = (/** @type {number} */ duration) => {
                 const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
                 const matchesDuration = (/** @type {unknown} */ value) => {
@@ -222,6 +339,7 @@ export async function setRunwayParams(page, params) {
                 };
                 const choices = Array.from(document.querySelectorAll('button, [role="option"], [role="menuitem"]'));
                 for (const btn of choices) {
+                    if (normalize(btn.getAttribute('aria-label')) === 'duration') continue;
                     const label = btn.textContent || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
                     if (matchesDuration(label)) {
                         /** @type {HTMLElement} */ (btn).click();
@@ -230,7 +348,8 @@ export async function setRunwayParams(page, params) {
                 }
                 return false;
             };
-            let found = await page.evaluate(clickDuration, params.duration);
+            let found = Boolean(alreadySet);
+            if (!found) found = await page.evaluate(clickDuration, params.duration);
             if (!found) {
                 const opened = await page.evaluate(() => {
                     const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -261,18 +380,47 @@ export async function setRunwayParams(page, params) {
 
     if (params.ratio) {
         try {
-            const found = await page.evaluate((/** @type {string} */ text) => {
+            let result = await page.evaluate((/** @type {string} */ text) => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
                 const buttons = Array.from(document.querySelectorAll('button'));
+                const trigger = buttons.find(btn => normalize(btn.getAttribute('aria-label')) === 'aspect ratio');
+                if (trigger && normalize(trigger.textContent) === normalize(text)) {
+                    return { found: true, opened: false };
+                }
                 for (const btn of buttons) {
                     const label = String(btn.textContent || '').trim();
+                    if (normalize(btn.getAttribute('aria-label')) === 'aspect ratio') continue;
                     if (label === text) {
                         /** @type {HTMLElement} */ (btn).click();
-                        return true;
+                        return { found: true, opened: false };
                     }
                 }
-                return false;
+                if (trigger) {
+                    /** @type {HTMLElement} */ (trigger).click();
+                    return { found: false, opened: true };
+                }
+                return { found: false, opened: false };
             }, params.ratio);
-            if (found) setParams.push(`ratio=${params.ratio}`);
+            if (result === true) result = { found: true, opened: false };
+            else if (result === false) result = { found: false, opened: false };
+            if (!result.found && result.opened) {
+                await page.waitForTimeout(250);
+                result = await page.evaluate((/** @type {string} */ text) => {
+                    const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const buttons = Array.from(document.querySelectorAll('button, [role="option"], [role="menuitem"]'));
+                    for (const btn of buttons) {
+                        if (normalize(btn.getAttribute('aria-label')) === 'aspect ratio') continue;
+                        if (String(btn.textContent || '').trim() === text) {
+                            /** @type {HTMLElement} */ (btn).click();
+                            return { found: true, opened: false };
+                        }
+                    }
+                    return { found: false, opened: false };
+                }, params.ratio);
+                if (result === true) result = { found: true, opened: false };
+                else if (result === false) result = { found: false, opened: false };
+            }
+            if (result.found) setParams.push(`ratio=${params.ratio}`);
             else skipped.push(`ratio=${params.ratio} (button not found)`);
         } catch (e) {
             errors.push(`ratio: ${e instanceof Error ? e.message : String(e)}`);
@@ -281,18 +429,47 @@ export async function setRunwayParams(page, params) {
 
     if (params.resolution) {
         try {
-            const found = await page.evaluate((/** @type {string} */ text) => {
+            let result = await page.evaluate((/** @type {string} */ text) => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
                 const buttons = Array.from(document.querySelectorAll('button'));
+                const trigger = buttons.find(btn => normalize(btn.getAttribute('aria-label')) === 'resolution');
+                if (trigger && normalize(trigger.textContent) === normalize(text)) {
+                    return { found: true, opened: false };
+                }
                 for (const btn of buttons) {
                     const label = String(btn.textContent || '').trim();
+                    if (normalize(btn.getAttribute('aria-label')) === 'resolution') continue;
                     if (label === text) {
                         /** @type {HTMLElement} */ (btn).click();
-                        return true;
+                        return { found: true, opened: false };
                     }
                 }
-                return false;
+                if (trigger) {
+                    /** @type {HTMLElement} */ (trigger).click();
+                    return { found: false, opened: true };
+                }
+                return { found: false, opened: false };
             }, params.resolution);
-            if (found) setParams.push(`resolution=${params.resolution}`);
+            if (result === true) result = { found: true, opened: false };
+            else if (result === false) result = { found: false, opened: false };
+            if (!result.found && result.opened) {
+                await page.waitForTimeout(250);
+                result = await page.evaluate((/** @type {string} */ text) => {
+                    const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const buttons = Array.from(document.querySelectorAll('button, [role="option"], [role="menuitem"]'));
+                    for (const btn of buttons) {
+                        if (normalize(btn.getAttribute('aria-label')) === 'resolution') continue;
+                        if (String(btn.textContent || '').trim() === text) {
+                            /** @type {HTMLElement} */ (btn).click();
+                            return { found: true, opened: false };
+                        }
+                    }
+                    return { found: false, opened: false };
+                }, params.resolution);
+                if (result === true) result = { found: true, opened: false };
+                else if (result === false) result = { found: false, opened: false };
+            }
+            if (result.found) setParams.push(`resolution=${params.resolution}`);
             else skipped.push(`resolution=${params.resolution} (button not found)`);
         } catch (e) {
             errors.push(`resolution: ${e instanceof Error ? e.message : String(e)}`);
@@ -320,6 +497,7 @@ export async function setRunwayParams(page, params) {
         }
     }
 
+    await closeRunwayPopovers(page);
     return { set: setParams, skipped, errors };
 }
 
@@ -391,34 +569,51 @@ export async function clearRunwayReferences(page) {
  */
 export async function ensureExploreMode(page) {
     try {
-        const result = await page.evaluate(() => {
+        const inspectOrSelectExplore = () => {
             const normalize = (/** @type {unknown} */ v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
             const buttons = Array.from(document.querySelectorAll('button'));
             const visibleText = normalize(document.body?.innerText || '');
 
-            // Look for Explore/Credits toggle
-            const exploreBtn = buttons.find(b => /^explore$/i.test(normalize(b.textContent)));
+            const isActive = (/** @type {Element} */ button) => button.getAttribute('aria-checked') === 'true'
+                || button.getAttribute('aria-pressed') === 'true'
+                || button.getAttribute('aria-selected') === 'true'
+                || button.classList.contains('active')
+                || button.closest('[aria-checked="true"], [aria-pressed="true"], [aria-selected="true"]') !== null;
 
-            if (!exploreBtn) {
-                const implicitUnlimited = /\bunlimited\b/i.test(visibleText)
-                    && !/\bcredits?\s*mode\b/i.test(visibleText)
-                    && !/view generation cost/i.test(visibleText);
-                if (implicitUnlimited) {
-                    return { mode: 'Explore', found: false, switched: false, inferred: true };
-                }
-                return { mode: 'unknown', found: false, switched: false, inferred: false };
+            const creditInfoButton = document.querySelector('[data-testid="credit-info-button"]');
+            const creditInfoText = normalize(creditInfoButton?.textContent || '');
+            if (/^unlimited$/i.test(creditInfoText)) {
+                return { mode: 'Explore', found: true, switched: false, inferred: true };
             }
 
-            const isExploreActive = exploreBtn.getAttribute('aria-pressed') === 'true'
-                || exploreBtn.classList.contains('active')
-                || exploreBtn.closest('[aria-pressed="true"]') !== null;
+            const exploreBtn = buttons.find(b => /^explore$/i.test(normalize(b.textContent)));
+            if (exploreBtn) {
+                const alreadyExplore = isActive(exploreBtn);
+                if (!alreadyExplore) {
+                    /** @type {HTMLElement} */ (exploreBtn).click();
+                }
+                return { mode: 'Explore', found: true, switched: !alreadyExplore };
+            }
 
-            if (isExploreActive) return { mode: 'Explore', found: true, switched: false };
+            if (creditInfoButton) {
+                /** @type {HTMLElement} */ (creditInfoButton).click();
+                return { mode: 'Explore', found: true, switched: false, opened: true };
+            }
 
-            // Click Explore button to switch
-            /** @type {HTMLElement} */ (exploreBtn).click();
-            return { mode: 'Explore', found: true, switched: true };
-        });
+            const implicitUnlimited = /\bunlimited\b/i.test(visibleText)
+                    && !/\bcredits?\s*mode\b/i.test(visibleText)
+                    && !/view generation cost/i.test(visibleText);
+            if (implicitUnlimited) {
+                return { mode: 'Explore', found: false, switched: false, inferred: true };
+            }
+            return { mode: 'unknown', found: false, switched: false, inferred: false };
+        };
+
+        let result = await page.evaluate(inspectOrSelectExplore);
+        if (result.opened) {
+            await page.waitForTimeout(250);
+            result = await page.evaluate(inspectOrSelectExplore);
+        }
 
         if (result.inferred) {
             return { mode: result.mode, switched: false, inferred: true };
@@ -429,6 +624,14 @@ export async function ensureExploreMode(page) {
         }
 
         if (result.switched) await page.waitForTimeout(500);
+        if (result.opened || result.switched) {
+            try {
+                await page.keyboard.press('Escape');
+                await page.waitForTimeout(100);
+            } catch {
+                // Best effort: close the credit-mode dropdown before prompt input.
+            }
+        }
         return { mode: result.mode, switched: Boolean(result.switched) };
     } catch (error) {
         return { mode: 'unknown', switched: false, error: error instanceof Error ? error.message : String(error) };
@@ -436,26 +639,193 @@ export async function ensureExploreMode(page) {
 }
 
 /**
+ * Some lower Custom Tools video models require a generated/uploaded first frame
+ * before the primary video Generate button is enabled.
+ * @param {any} page
+ * @param {{ timeoutMs?: number, intervalMs?: number, sleep?: (ms: number) => Promise<void> }} [options]
+ * @returns {Promise<{ needed: boolean, generated?: boolean, ready?: boolean | null, waitedMs?: number, error?: string, state?: object }>}
+ */
+export async function generateRunwayFirstFrameIfRequired(page, options = {}) {
+    const timeoutMs = Math.max(1000, Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : FIRST_FRAME_BOOTSTRAP_TIMEOUT_MS);
+    const intervalMs = Math.max(1000, Number.isFinite(options.intervalMs) ? Number(options.intervalMs) : FIRST_FRAME_BOOTSTRAP_INTERVAL_MS);
+    const sleep = options.sleep || (ms => page.waitForTimeout(ms));
+
+    const inspect = async () => page.evaluate(() => {
+        const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const bodyText = normalize(document.body?.innerText || '');
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const generateButtons = buttons
+            .map((button, index) => {
+                const text = normalize(button.textContent || button.getAttribute('aria-label') || '');
+                const rect = button.getBoundingClientRect();
+                const visible = Boolean(rect.width || rect.height || button.getClientRects().length);
+                const disabled = Boolean(
+                    /** @type {HTMLButtonElement} */ (button).disabled
+                    || button.getAttribute('aria-disabled') === 'true'
+                    || button.getAttribute('data-soft-disabled') === 'true'
+                );
+                return {
+                    button,
+                    index,
+                    text,
+                    disabled,
+                    visible,
+                    y: Math.round(rect.y),
+                };
+            })
+            .filter(item => /^generate$/i.test(item.text) && item.visible)
+            .sort((a, b) => (a.y - b.y) || (a.index - b.index));
+        const primary = generateButtons.at(-1) || null;
+        const helper = generateButtons.slice(0, -1).find(item => !item.disabled) || null;
+        const needsFirstFrame = /first\s+video\s+frame\s*\(required\)/i.test(bodyText);
+        const queueText = /\b(?:in queue|queued|generating|processing|you are on a roll|wait for last generation)\b/i.test(bodyText);
+        return {
+            needsFirstFrame,
+            primaryDisabled: primary ? primary.disabled : null,
+            primaryReady: primary ? !primary.disabled : null,
+            helperAvailable: Boolean(helper),
+            queueText,
+            generateButtonCount: generateButtons.length,
+        };
+    });
+
+    let state = await inspect();
+    if (!state.needsFirstFrame || state.primaryReady) {
+        return { needed: false, ready: state.primaryReady, state };
+    }
+    if (!state.helperAvailable) {
+        return {
+            needed: true,
+            ready: false,
+            state,
+            error: 'First video frame is required but no enabled first-frame Generate button was found',
+        };
+    }
+
+    const clicked = await page.evaluate(() => {
+        const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const generateButtons = buttons
+            .map((button, index) => {
+                const text = normalize(button.textContent || button.getAttribute('aria-label') || '');
+                const rect = button.getBoundingClientRect();
+                const visible = Boolean(rect.width || rect.height || button.getClientRects().length);
+                const disabled = Boolean(
+                    /** @type {HTMLButtonElement} */ (button).disabled
+                    || button.getAttribute('aria-disabled') === 'true'
+                    || button.getAttribute('data-soft-disabled') === 'true'
+                );
+                return { button, index, text, disabled, visible, y: Math.round(rect.y) };
+            })
+            .filter(item => /^generate$/i.test(item.text) && item.visible)
+            .sort((a, b) => (a.y - b.y) || (a.index - b.index));
+        const helper = generateButtons.slice(0, -1).find(item => !item.disabled);
+        if (!helper) return false;
+        /** @type {HTMLElement} */ (helper.button).click();
+        return true;
+    });
+
+    if (!clicked) {
+        return { needed: true, generated: false, ready: false, state, error: 'First-frame Generate click was not accepted' };
+    }
+
+    let waitedMs = 0;
+    while (waitedMs < timeoutMs) {
+        const delayMs = Math.min(intervalMs, timeoutMs - waitedMs);
+        await sleep(delayMs);
+        waitedMs += delayMs;
+        state = await inspect();
+        if (state.primaryReady) {
+            return { needed: true, generated: true, ready: true, waitedMs, state };
+        }
+        if (!state.queueText && state.needsFirstFrame && !state.helperAvailable && state.primaryDisabled) {
+            return {
+                needed: true,
+                generated: false,
+                ready: false,
+                waitedMs,
+                state,
+                error: 'First-frame generation did not enable the primary Generate button',
+            };
+        }
+    }
+
+    return {
+        needed: true,
+        generated: false,
+        ready: false,
+        waitedMs,
+        state,
+        error: 'Timed out waiting for first-frame generation to enable the primary Generate button',
+    };
+}
+
+/**
  * Click the Generate button. Level 2 only.
  * @param {any} page
- * @returns {Promise<{ clicked: boolean, error?: string }>}
+ * @param {{ afterCount?: number | null, expectedType?: string, attempts?: number, settleMs?: number }} [options]
+ * @returns {Promise<{ clicked: boolean, accepted?: boolean | null, attempts?: number, state?: string, error?: string }>}
  */
-export async function clickRunwayGenerate(page) {
+export async function clickRunwayGenerate(page, options = {}) {
+    const attempts = Math.max(1, Number.isFinite(options.attempts) ? Number(options.attempts) : 3);
+    const settleMs = Math.max(250, Number.isFinite(options.settleMs) ? Number(options.settleMs) : 1500);
+    const hasAcceptanceCheck = options.afterCount != null || Boolean(options.expectedType);
+    let lastState = null;
+
     try {
-        const btn = await page.waitForSelector('button', { timeout: 5000 });
-        const clicked = await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const genBtn = buttons.find(b => /^generate$/i.test(String(b.textContent || '').trim()));
-            if (!genBtn) return false;
-            if (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true') return false;
-            /** @type {HTMLElement} */ (genBtn).click();
-            return true;
-        });
-        if (!clicked) {
-            return { clicked: false, error: 'Generate button not found or disabled' };
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            await page.waitForSelector('button', { timeout: 5000 });
+            const clickResult = await page.evaluate(() => {
+                const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const candidates = buttons
+                    .map((button, index) => {
+                        const text = normalize(button.textContent || button.getAttribute('aria-label') || '');
+                        const rect = button.getBoundingClientRect();
+                        const visible = Boolean(rect.width || rect.height || button.getClientRects().length);
+                        return { button, index, text, visible, y: Math.round(rect.y) };
+                    })
+                    .filter(item => /^generate$/i.test(item.text) && item.visible)
+                    .sort((a, b) => (a.y - b.y) || (a.index - b.index));
+                const target = candidates.at(-1);
+                if (!target) return { clicked: false, error: 'Generate button not found' };
+                const genBtn = target.button;
+                const disabled = Boolean(
+                    genBtn.disabled
+                    || genBtn.getAttribute('aria-disabled') === 'true'
+                    || genBtn.getAttribute('data-soft-disabled') === 'true'
+                );
+                if (disabled) return { clicked: false, error: 'Generate button disabled' };
+                /** @type {HTMLElement} */ (genBtn).click();
+                return { clicked: true };
+            });
+            if (!clickResult.clicked) {
+                return { clicked: false, accepted: false, attempts: attempt, error: clickResult.error || 'Generate button not found or disabled' };
+            }
+
+            await page.waitForTimeout(settleMs);
+            if (!hasAcceptanceCheck) {
+                return { clicked: true, accepted: null, attempts: attempt };
+            }
+
+            lastState = await inspectRunwayCompletionState(page, {
+                afterCount: options.afterCount,
+                expectedType: options.expectedType || null,
+            });
+            const accepted = lastState.state === 'active'
+                || lastState.submitEvidence?.acceptedAfterBaseline === true
+                || lastState.submitEvidence?.expectedItemVisible === true;
+            if (accepted || lastState.state === 'queue_full') {
+                return { clicked: true, accepted, attempts: attempt, state: lastState.state };
+            }
         }
-        await page.waitForTimeout(1000);
-        return { clicked: true };
+        return {
+            clicked: false,
+            accepted: false,
+            attempts,
+            state: lastState?.state,
+            error: 'Generate click was not accepted by Runway',
+        };
     } catch (error) {
         return { clicked: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -564,11 +934,25 @@ export async function setupRunwayGeneration(page, options) {
     }
 
     const readyCheck = await page.evaluate(() => {
+        const normalize = (/** @type {unknown} */ value) => String(value || '').replace(/\s+/g, ' ').trim();
         const btns = Array.from(document.querySelectorAll('button'));
-        const genBtn = btns.find(b => /^generate$/i.test(String(b.textContent || '').trim()));
+        const candidates = btns
+            .map((button, index) => {
+                const text = normalize(button.textContent || button.getAttribute('aria-label') || '');
+                const rect = button.getBoundingClientRect();
+                const visible = Boolean(rect.width || rect.height || button.getClientRects().length);
+                return { button, index, text, visible, y: Math.round(rect.y) };
+            })
+            .filter(item => /^generate$/i.test(item.text) && item.visible)
+            .sort((a, b) => (a.y - b.y) || (a.index - b.index));
+        const genBtn = candidates.at(-1)?.button || null;
         return {
             hasGenerateButton: Boolean(genBtn),
-            generateEnabled: genBtn ? !genBtn.disabled && genBtn.getAttribute('aria-disabled') !== 'true' : false,
+            generateEnabled: genBtn
+                ? !genBtn.disabled
+                    && genBtn.getAttribute('aria-disabled') !== 'true'
+                    && genBtn.getAttribute('data-soft-disabled') !== 'true'
+                : false,
         };
     });
 
@@ -640,8 +1024,31 @@ export async function executeRunwayGeneration(page, options) {
         return { ...setupResult, command: 'generate', status: 'setup_failed' };
     }
 
+    let firstFrameBootstrap = null;
+    if (expectedType === 'video') {
+        firstFrameBootstrap = await generateRunwayFirstFrameIfRequired(page, {
+            timeoutMs: Math.min(options.timeout || DEFAULT_GENERATE_TIMEOUT_MS, FIRST_FRAME_BOOTSTRAP_TIMEOUT_MS),
+            intervalMs: Math.min(options.interval || DEFAULT_GENERATE_INTERVAL_MS, FIRST_FRAME_BOOTSTRAP_INTERVAL_MS),
+            sleep: options.sleep,
+        });
+        if (firstFrameBootstrap.error) {
+            return {
+                ok: false,
+                command: 'generate',
+                status: 'first_frame_failed',
+                error: firstFrameBootstrap.error,
+                setup: setupResult,
+                firstFrameBootstrap,
+                safety: buildRunwaySafety(2),
+            };
+        }
+    }
+
     // Click Generate
-    const genResult = await clickRunwayGenerate(page);
+    const genResult = await clickRunwayGenerate(page, {
+        afterCount: baseline,
+        expectedType,
+    });
     if (!genResult.clicked) {
         return {
             ok: false,
@@ -649,6 +1056,7 @@ export async function executeRunwayGeneration(page, options) {
             status: 'generate_failed',
             error: genResult.error,
             setup: setupResult,
+            firstFrameBootstrap,
             safety: buildRunwaySafety(2),
         };
     }
@@ -674,6 +1082,7 @@ export async function executeRunwayGeneration(page, options) {
             outputType: null,
             outputFile: null,
             download: null,
+            firstFrameBootstrap,
             poll: {
                 polls: pollResult.polls,
                 waitedMs: pollResult.waitedMs,
@@ -694,6 +1103,7 @@ export async function executeRunwayGeneration(page, options) {
             outputType: null,
             outputFile: null,
             download: null,
+            firstFrameBootstrap,
             poll: {
                 polls: pollResult.polls,
                 waitedMs: pollResult.waitedMs,
@@ -730,6 +1140,7 @@ export async function executeRunwayGeneration(page, options) {
         outputFile: downloadResult?.ok ? downloadResult.path : null,
         requestedOutputFile: downloadResult?.requestedPath || null,
         download: downloadResult,
+        firstFrameBootstrap,
         poll: {
             polls: pollResult.polls,
             waitedMs: pollResult.waitedMs,

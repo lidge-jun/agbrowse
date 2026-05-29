@@ -7,6 +7,7 @@ import {
     uploadRunwayFile,
     clearRunwayReferences,
     ensureExploreMode,
+    generateRunwayFirstFrameIfRequired,
     clickRunwayGenerate,
     setupRunwayGeneration,
     executeRunwayGeneration,
@@ -61,6 +62,30 @@ describe('selectRunwayModel', () => {
         const result = await selectRunwayModel(page, 'seedance-2');
         expect(result.selected).toBe(true);
         expect(result.model).toBe('Seedance 2.0');
+    });
+
+    it('does not treat WAN 2.6 Flash as an existing match for WAN 2.6', async () => {
+        let opened = false;
+        let currentRead = true;
+        const page = makePage({
+            waitForSelector: async () => ({
+                evaluate: async () => { opened = true; },
+            }),
+            waitForTimeout: async () => undefined,
+            evaluate: async (fn, arg) => {
+                if (currentRead) {
+                    currentRead = false;
+                    return 'WAN 2.6 Flash';
+                }
+                if (typeof arg === 'string') return 'WAN 2.6•Video + Audio';
+                return null;
+            },
+            keyboard: { press: async () => undefined },
+        });
+        const result = await selectRunwayModel(page, 'WAN 2.6');
+        expect(result.selected).toBe(true);
+        expect(result.model).toBe('WAN 2.6•Video + Audio');
+        expect(opened).toBe(true);
     });
 
     it('clicks dropdown and selects matching model', async () => {
@@ -122,6 +147,75 @@ describe('setRunwayPrompt', () => {
         const result = await setRunwayPrompt(page, 'A cat in space');
         expect(result.set).toBe(true);
         expect(typed).toContain('A cat in space');
+    });
+
+    it('verifies Lexical paragraph text with innerText spacing', async () => {
+        const prompt = 'Shot 1 of 2.\nEstablish the visual language.';
+        const page = makePage({
+            waitForSelector: async () => ({
+                click: async () => undefined,
+                focus: async () => undefined,
+                evaluate: async () => undefined,
+            }),
+            waitForTimeout: async () => undefined,
+            keyboard: {
+                press: async () => undefined,
+                type: async () => undefined,
+            },
+            evaluate: async (fn) => String(fn).includes('innerText')
+                ? 'Shot 1 of 2.\n\nEstablish the visual language.'
+                : true,
+        });
+        const result = await setRunwayPrompt(page, prompt);
+        expect(result.set).toBe(true);
+    });
+
+    it('uses Playwright fill for contenteditable prompt editors when available', async () => {
+        const prompt = 'Filled through contenteditable API';
+        const calls = [];
+        const page = makePage({
+            waitForSelector: async () => ({
+                fill: async (text) => calls.push(['fill', text]),
+                click: async () => calls.push(['click']),
+                focus: async () => calls.push(['focus']),
+                evaluate: async () => undefined,
+            }),
+            waitForTimeout: async () => undefined,
+            keyboard: {
+                press: async key => calls.push(['press', key]),
+                type: async text => calls.push(['type', text]),
+            },
+            evaluate: async (fn) => String(fn).includes('innerText') ? prompt : true,
+        });
+        const result = await setRunwayPrompt(page, prompt);
+        expect(result.set).toBe(true);
+        expect(calls).toContainEqual(['fill', prompt]);
+        expect(calls).not.toContainEqual(['type', prompt]);
+    });
+
+    it('finds prompt editors exposed as aria textboxes', async () => {
+        const prompt = 'Prompt through role textbox';
+        let selectorSeen = '';
+        const page = makePage({
+            waitForSelector: async (selector) => {
+                selectorSeen = selector;
+                return {
+                    fill: async () => undefined,
+                    click: async () => undefined,
+                    focus: async () => undefined,
+                    evaluate: async () => undefined,
+                };
+            },
+            waitForTimeout: async () => undefined,
+            keyboard: {
+                press: async () => undefined,
+                type: async () => undefined,
+            },
+            evaluate: async (fn) => String(fn).includes('innerText') ? prompt : true,
+        });
+        const result = await setRunwayPrompt(page, prompt);
+        expect(result.set).toBe(true);
+        expect(selectorSeen).toContain('[role="textbox"][aria-label="Prompt"]');
     });
 
     it('returns error on failure', async () => {
@@ -336,27 +430,194 @@ describe('ensureExploreMode', () => {
         expect(result.inferred).toBe(true);
         expect(result.error).toBeUndefined();
     });
+
+    it('accepts the credit-info Unlimited button as Explore despite queue CTA text', async () => {
+        const originalDocument = globalThis.document;
+        globalThis.document = {
+            body: { innerText: "You're on a roll! Please wait or switch to Credits Mode." },
+            querySelectorAll: () => [{
+                textContent: 'Credits Mode.',
+                getAttribute: () => null,
+                classList: { contains: () => false },
+                closest: () => null,
+                click: () => undefined,
+            }],
+            querySelector: selector => selector === '[data-testid="credit-info-button"]'
+                ? {
+                    textContent: 'Unlimited',
+                    getAttribute: () => null,
+                    classList: { contains: () => false },
+                    closest: () => null,
+                    click: () => undefined,
+                }
+                : null,
+        };
+        try {
+            const page = makePage({
+                evaluate: async fn => fn(),
+            });
+            const result = await ensureExploreMode(page);
+            expect(result.mode).toBe('Explore');
+            expect(result.inferred).toBe(true);
+            expect(result.error).toBeUndefined();
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
+    it('opens the credit info menu and switches from Credits to Explore', async () => {
+        const results = [
+            { mode: 'Explore', found: true, switched: false, opened: true },
+            { mode: 'Explore', found: true, switched: true },
+        ];
+        const page = makePage({
+            evaluate: async () => results.shift(),
+            waitForTimeout: async () => undefined,
+        });
+        const result = await ensureExploreMode(page);
+        expect(result.mode).toBe('Explore');
+        expect(result.switched).toBe(true);
+        expect(results).toEqual([]);
+    });
+});
+
+describe('generateRunwayFirstFrameIfRequired', () => {
+    it('clicks the first-frame Generate button and waits for primary Generate', async () => {
+        const originalDocument = globalThis.document;
+        let helperClicked = false;
+        let primarySoftDisabled = true;
+        const makeButton = (y, attrs = {}) => ({
+            textContent: 'Generate',
+            disabled: false,
+            getAttribute: name => attrs[name] ?? null,
+            getBoundingClientRect: () => ({ x: 0, y, width: 80, height: 30 }),
+            getClientRects: () => [1],
+            click: () => {
+                if (y < 500) helperClicked = true;
+            },
+        });
+        globalThis.document = {
+            body: { innerText: 'First Video Frame (required)' },
+            querySelectorAll: () => [
+                makeButton(100),
+                makeButton(700, { 'data-soft-disabled': primarySoftDisabled ? 'true' : 'false' }),
+            ],
+        };
+        try {
+            const page = makePage({
+                evaluate: async fn => fn(),
+                waitForTimeout: async () => {
+                    primarySoftDisabled = false;
+                },
+            });
+            const result = await generateRunwayFirstFrameIfRequired(page, {
+                timeoutMs: 1000,
+                intervalMs: 100,
+            });
+            expect(result.needed).toBe(true);
+            expect(result.generated).toBe(true);
+            expect(result.ready).toBe(true);
+            expect(helperClicked).toBe(true);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
 });
 
 describe('clickRunwayGenerate', () => {
     it('clicks generate button', async () => {
         const page = makePage({
             waitForSelector: async () => ({}),
-            evaluate: async () => true,
+            evaluate: async () => ({ clicked: true }),
             waitForTimeout: async () => undefined,
         });
         const result = await clickRunwayGenerate(page);
         expect(result.clicked).toBe(true);
     });
 
+    it('clicks the lower primary Generate button when a first-frame Generate is also visible', async () => {
+        const originalDocument = globalThis.document;
+        let helperClicked = false;
+        let primaryClicked = false;
+        const makeButton = (y, onClick) => ({
+            textContent: 'Generate',
+            disabled: false,
+            getAttribute: () => null,
+            getBoundingClientRect: () => ({ x: 0, y, width: 80, height: 30 }),
+            getClientRects: () => [1],
+            click: onClick,
+        });
+        globalThis.document = {
+            querySelectorAll: () => [
+                makeButton(100, () => { helperClicked = true; }),
+                makeButton(700, () => { primaryClicked = true; }),
+            ],
+        };
+        try {
+            const page = makePage({
+                waitForSelector: async () => ({}),
+                evaluate: async fn => fn(),
+                waitForTimeout: async () => undefined,
+            });
+            const result = await clickRunwayGenerate(page);
+            expect(result.clicked).toBe(true);
+            expect(helperClicked).toBe(false);
+            expect(primaryClicked).toBe(true);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
     it('returns error when button not found', async () => {
         const page = makePage({
             waitForSelector: async () => ({}),
-            evaluate: async () => false,
+            evaluate: async () => ({ clicked: false, error: 'Generate button not found' }),
             waitForTimeout: async () => undefined,
         });
         const result = await clickRunwayGenerate(page);
         expect(result.clicked).toBe(false);
+    });
+
+    it('retries when a generate click does not start an accepted Runway job', async () => {
+        let clickAttempts = 0;
+        let inspectCalls = 0;
+        const page = makePage({
+            waitForSelector: async () => ({}),
+            waitForTimeout: async () => undefined,
+            evaluate: async (fn) => {
+                const fnText = String(fn);
+                if (fnText.includes('queueGateText')) {
+                    inspectCalls += 1;
+                    return {
+                        textSample: inspectCalls === 1 ? '' : 'loading animation',
+                        outputItemCount: 3,
+                        outputLabels: [],
+                        activeLabels: inspectCalls === 1 ? [] : ['loading animation'],
+                        progressTexts: [],
+                        queueGateText: null,
+                        readyText: null,
+                        hasGenerateButton: true,
+                        generateDisabled: false,
+                    };
+                }
+                if (fnText.includes('genBtn')) {
+                    clickAttempts += 1;
+                    return { clicked: true };
+                }
+                return null;
+            },
+        });
+
+        const result = await clickRunwayGenerate(page, {
+            afterCount: 3,
+            expectedType: 'video',
+            settleMs: 250,
+        });
+
+        expect(result.clicked).toBe(true);
+        expect(result.accepted).toBe(true);
+        expect(result.attempts).toBe(2);
+        expect(clickAttempts).toBe(2);
     });
 });
 
@@ -501,9 +762,11 @@ describe('executeRunwayGeneration', () => {
                     };
                 }
                 if (fnText.includes('outputPattern')) return 3;
+                if (fnText.includes('genBtn')) return { clicked: true };
                 if (fnText.includes('[role="radio"]')) {
                     return { found: true, selected: true, changed: false };
                 }
+                if (typeof arg === 'string' && arg.includes('Prompt')) return 'test';
                 if (typeof arg === 'string') return null;
                 if (fnText.includes('select-base-model')) return 'Seedance 2.0';
                 if (fnText.includes('div[aria-label="Prompt"]')) return true;

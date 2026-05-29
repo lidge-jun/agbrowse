@@ -181,8 +181,8 @@ describe('runway CLI helpers', () => {
                 textSample: "You're on a roll! Please wait for your last generation to complete, or switch to Credits Mode.",
                 outputItemCount: 12,
                 outputLabels: ['Kling O3 4K - sample.mp4'],
-                activeLabels: ['loading animation'],
-                progressTexts: ['55%'],
+                activeLabels: [],
+                progressTexts: [],
                 queueGateText: 'You are on a roll / wait for last generation / Credits Mode',
                 readyText: null,
                 hasGenerateButton: true,
@@ -195,6 +195,29 @@ describe('runway CLI helpers', () => {
         expect(result.completionSignal).toBe('queue-gate');
         expect(result.queue.full).toBe(true);
         expect(result.submitEvidence.acceptedAfterBaseline).toBe(false);
+    });
+
+    it('keeps Runway active when a transient queue gate appears with active generation signals', async () => {
+        const page = {
+            url: () => 'https://app.runwayml.com/ai-tools/generate?mode=tools',
+            title: async () => 'Runway',
+            evaluate: async () => ({
+                textSample: "You're on a roll! Your video is generating in Explore Mode. 55%",
+                outputItemCount: 12,
+                outputLabels: ['Kling O3 4K - sample.mp4'],
+                activeLabels: ['loading animation'],
+                progressTexts: ['55%'],
+                queueGateText: 'You are on a roll / wait for last generation / Credits Mode',
+                readyText: null,
+                hasGenerateButton: true,
+                generateDisabled: false,
+            }),
+        };
+        const result = await inspectRunwayCompletionState(page, { queueLimit: 2, afterCount: 12 });
+        expect(result.state).toBe('active');
+        expect(result.terminal).toBe(false);
+        expect(result.completionSignal).toBe('active-generation-signals');
+        expect(result.queue.full).toBe(true);
     });
 
     it('does not infer Runway queue state from a non-Runway tab', async () => {
@@ -332,6 +355,29 @@ describe('runway CLI helpers', () => {
         expect(result.terminal).toBe(false);
         expect(result.completionSignal).toBe('active-generation-signals');
         expect(result.activeLabels).toContain('50%');
+    });
+
+    it('treats plain Runway in-queue card text as an active generation signal', async () => {
+        const page = {
+            url: () => 'https://app.runwayml.com/ai-tools/generate?mode=tools',
+            title: async () => 'Runway',
+            evaluate: async () => ({
+                textSample: 'Prompt and controls only.',
+                activeText: `${'older output '.repeat(150)}Your generation is in queue and will start in a few minutes.`,
+                outputItemCount: 13,
+                outputLabels: ['Reuse settings', 'See full prompt'],
+                activeLabels: [],
+                progressTexts: [],
+                queueGateText: null,
+                readyText: null,
+                hasGenerateButton: true,
+                generateDisabled: false,
+            }),
+        };
+        const result = await inspectRunwayCompletionState(page, { queueLimit: 2, afterCount: 12 });
+        expect(result.state).toBe('active');
+        expect(result.terminal).toBe(false);
+        expect(result.activeLabels).toContain('in queue');
     });
 
     it('keeps two in-progress Runway jobs active instead of terminal queue_full without a queue gate', async () => {
