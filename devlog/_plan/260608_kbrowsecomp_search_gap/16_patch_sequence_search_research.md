@@ -7,7 +7,28 @@ that can explain search failures and choose fetch or browse deliberately.
 
 ## Patch Sequence
 
-### P0. Offline Planning Core
+This sequence must be read together with doc 17. `agbrowse research plan` is
+not enough by itself; cli-jaw's `browser`/`browse` command surface and
+agbrowse's standalone command surface need to stay mirrored for the agent
+workflow to remain teachable.
+
+### P0a. cli-jaw Browser Command Mirror
+
+Before or alongside the research CLI, close the agent-visible browser parity
+gap:
+
+```text
+agbrowse new-tab <url> [--no-activate] [--json]
+agbrowse tab-close <targetId> [--json]
+agbrowse active-tab --json
+agbrowse vision-click <target> [--provider codex] [--double]
+```
+
+These commands matter for Korean search because dynamic pages, portals,
+iframes, and table/list pages often require controlled tab isolation, explicit
+target handoff, and no-ref coordinate fallback.
+
+### P0b. Offline Planning Core
 
 Implemented first:
 
@@ -25,9 +46,16 @@ This covers the part that failed across providers: broad natural-language
 queries, snippet finalization, dropped date/source/table constraints, and
 unclear browser escalation.
 
-### P1. Search Backend Normalizer
+### P1. Research CLI + Search Backend Normalizer
 
-Add a pure normalizer before adding API clients:
+Expose the planning core first:
+
+```bash
+agbrowse research plan --query "<problem>" --json
+```
+
+Then add a pure normalizer before adding API clients:
+
 
 ```json
 {
@@ -40,7 +68,23 @@ Add a pure normalizer before adding API clients:
 The normalizer should keep raw backend fields for diagnostics but expose a
 single URL-candidate shape to the fetch loop.
 
-### P2. Fetch Enrichment Loop
+### P2. cli-jaw Skill/Prompt Wiring
+
+After the agbrowse command exists, update cli-jaw source templates and browser
+skills so employees know the shared flow:
+
+```text
+Korean external/current/source-sensitive search
+  -> agbrowse research plan
+  -> provider search with atomicQueries
+  -> agbrowse fetch for URL candidates
+  -> agbrowse browser commands when browseRequired or fetch is weak
+```
+
+This is the point where the earlier cli-jaw prompt patch becomes operationally
+connected to agbrowse instead of remaining a general instruction.
+
+### P3. Fetch Enrichment Loop
 
 For each normalized search result:
 
@@ -52,7 +96,7 @@ For each normalized search result:
 
 This turns snippets into ranking hints, not evidence.
 
-### P3. Browse Escalation Controller
+### P4. Browse Escalation Controller
 
 Escalate only with a reason:
 
@@ -66,7 +110,7 @@ Escalate only with a reason:
 The output should name the next browser action instead of silently switching
 tools.
 
-### P4. CLI Surface
+### P5. Full CLI Surface
 
 Expose after the module contract is stable:
 

@@ -41,6 +41,7 @@ source-domain statistics to avoid republishing query-answer pairs.
 | 14 | `14_cli_jaw_query_patch_smoke_corpus.md` | cli-jaw query patch smoke corpus | Query-rewrite-first smoke prompts and pass/fail criteria |
 | 15 | `15_offline_fixture_contract.md` | Offline fixture contract | Network-free fixture shape for query/fetch/browse trajectory validation |
 | 16 | `16_patch_sequence_search_research.md` | Search research patch sequence | P0-P4 implementation sequence from planning core to live harness |
+| 17 | `17_cli_jaw_browser_mirror_plan.md` | cli-jaw browser mirror plan | Required browser command parity between cli-jaw and agbrowse |
 
 ## Key Dataset Facts
 
@@ -84,6 +85,12 @@ item 3. The extra research in docs 09-12 sharpens this into a practical route:
 keep existing search APIs for URL discovery, make small Korean/source-aware
 keyword rewrites, fetch the returned URLs, and use browser skills only when
 fetch cannot see the needed page state.
+
+Doc 17 adds the missing integration constraint: the K-BrowseComp patch plan
+must advance cli-jaw browser command parity and agbrowse research planning
+together. cli-jaw is the employee orchestrator; agbrowse is the standalone
+browser runtime. If the browse command surface diverges, the query/fetch/browse
+workflow cannot be taught reliably across both systems.
 
 The provider probe in doc 13 confirms this direction across Codex, Claude,
 AGY/Gemini, and Cursor. Internal search query rewrites are generally not
