@@ -45,6 +45,7 @@ source-domain statistics to avoid republishing query-answer pairs.
 | 18 | `18_browser_surface_inventory.md` | Browser surface inventory | A/B inventory of cli-jaw-only, agbrowse-only, shared, and drifted command surfaces |
 | 19 | `19_standalone_orchestrated_architecture.md` | Standalone/orchestrated architecture | cli-jaw-only, agbrowse-only, and integrated operating modes |
 | 20 | `20_p0a_browser_surface_parity_plan.md` | P0a implementation plan | Concrete browser command parity patch plan before research CLI work |
+| 21 | `21_p1_research_cli_plan.md` | P1 implementation plan | `agbrowse research plan` CLI and search-result normalizer contract |
 
 ## Key Dataset Facts
 

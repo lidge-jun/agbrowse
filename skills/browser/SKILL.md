@@ -287,6 +287,22 @@ agbrowse snapshot --interactive
 agbrowse click e7
 ```
 
+### Research Planning
+
+```bash
+agbrowse research plan --query "한국어 외부 정보 질문" --json
+# Run provider/native search with plan.atomicQueries.
+# Treat search rows as URL candidates, not evidence.
+agbrowse research normalize-results --backend tavily --file results.json --json
+# Then read candidate URLs with agbrowse fetch before answering.
+```
+
+Use this before broad Korean/current/source-sensitive searches. The plan output
+splits the request into constraints and focused queries. The normalizer keeps
+provider snippets as diagnostics only; original-page evidence still requires
+`agbrowse fetch`, and dynamic/Naver/table/list cases may require browser
+inspection after fetch.
+
 ### Form Filling
 
 ```bash

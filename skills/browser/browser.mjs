@@ -15,6 +15,8 @@
  *   observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]  ObservationBundleV1 (G06)
  *   observe-actions <instruction> [--json] [--top-n N] [--include-disabled]  Rank candidate next actions (G02)
  *   runway <command>                    Runway full-surface CLI (13 commands, 3 safety levels)
+ *   research plan --query <problem> [--json]  Korean query rewrite and evidence plan
+ *   research normalize-results --file <json> [--backend name] [--json]  Normalize search URL candidates
  *   screenshot [--full-page] [--ref eN] [--json]  Capture screenshot
  *   mouse-click <x> <y> [--double]  Click at pixel coordinates
  *   move-mouse <x> <y>               Move mouse without clicking
@@ -80,6 +82,8 @@ import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager
 import { cleanupIdleTabs, planCleanupIdleTabs, pickCleanupCandidates, isPinned, parseDuration, DEFAULT_MAX_TABS } from './tab-lifecycle.mjs';
 import { runAdaptiveFetchCli } from './adaptive-fetch/index.mjs';
 import { runRunwayCli } from './runway.mjs';
+import { planKoreanResearch } from './search-research/search-strategy.mjs';
+import { normalizeSearchResults } from './search-research/normalizer.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2053,8 +2057,116 @@ const browserDeps = {
     ensureStarted: (options = {}) => launchChrome(Number((/** @type {any} */ (options)).port || getPort()), options),
 };
 
+/**
+ * @param {string[]} argv
+ */
+function runResearchCli(argv = []) {
+    const command = argv[0] || 'help';
+    if (command === 'plan') {
+        const { values } = parseArgs({
+            args: argv.slice(1),
+            options: {
+                query: { type: 'string' },
+                json: { type: 'boolean', default: false },
+                'max-queries': { type: 'string' },
+            },
+            strict: false,
+        });
+        const query = typeof values.query === 'string' ? values.query.trim() : '';
+        if (!query) {
+            return {
+                exitCode: 1,
+                stderr: 'Usage: browser.mjs research plan --query <problem> [--max-queries N] [--json]',
+            };
+        }
+        const maxQueries = values['max-queries'] ? Number(values['max-queries']) : undefined;
+        const plan = planKoreanResearch(query, { maxQueries: Number.isFinite(maxQueries) ? maxQueries : undefined });
+        return values.json
+            ? { stdout: JSON.stringify(plan, null, 2) }
+            : { stdout: formatResearchPlan(plan) };
+    }
+
+    if (command === 'normalize-results') {
+        const { values } = parseArgs({
+            args: argv.slice(1),
+            options: {
+                file: { type: 'string' },
+                backend: { type: 'string' },
+                query: { type: 'string' },
+                json: { type: 'boolean', default: false },
+            },
+            strict: false,
+        });
+        const file = typeof values.file === 'string' ? values.file.trim() : '';
+        if (!file) {
+            return {
+                exitCode: 1,
+                stderr: 'Usage: browser.mjs research normalize-results --file <json> [--backend name] [--query query] [--json]',
+            };
+        }
+        const input = JSON.parse(readFileSync(file, 'utf8'));
+        const normalized = normalizeSearchResults(input, {
+            backend: typeof values.backend === 'string' ? values.backend : undefined,
+            query: typeof values.query === 'string' ? values.query : undefined,
+        });
+        return values.json
+            ? { stdout: JSON.stringify(normalized, null, 2) }
+            : { stdout: formatNormalizedSearchResults(normalized) };
+    }
+
+    return {
+        stdout: `agbrowse research <command>
+
+Commands:
+  plan --query <problem> [--max-queries N] [--json]
+      Rewrite a Korean research problem into constraints, focused queries, and fetch/browse policy.
+  normalize-results --file <json> [--backend name] [--query query] [--json]
+      Normalize provider search rows into URL candidates. Snippets are not final evidence.`,
+    };
+}
+
+/**
+ * @param {ReturnType<typeof planKoreanResearch>} plan
+ */
+function formatResearchPlan(plan) {
+    return [
+        `research plan: ${plan.schemaVersion}`,
+        `problem: ${plan.problem}`,
+        `constraints: ${plan.constraints.length}`,
+        `source hints: ${plan.sourceHints.join(', ') || 'none'}`,
+        'queries:',
+        ...plan.atomicQueries.map((query, index) => `  ${index + 1}. [${query.purpose}] ${query.query}`),
+        `fetch original pages: ${plan.followUp.fetchOriginalPages ? 'yes' : 'no'}`,
+        `browse required: ${plan.followUp.browseRequired ? plan.followUp.browseReasons.join(', ') || 'yes' : 'no'}`,
+    ].join('\n');
+}
+
+/**
+ * @param {ReturnType<typeof normalizeSearchResults>} normalized
+ */
+function formatNormalizedSearchResults(normalized) {
+    return [
+        `search results: ${normalized.schemaVersion}`,
+        `backend: ${normalized.backend}`,
+        `query: ${normalized.query || '(empty)'}`,
+        `url candidates: ${normalized.results.length}`,
+        `dropped: ${normalized.dropped.length}`,
+        ...normalized.results.map(result => `  ${result.rank}. ${result.title || '(untitled)'} - ${result.url}`),
+        'snippets are not final evidence',
+    ].join('\n');
+}
+
 try {
     switch (sub) {
+        case 'research': {
+            const result = runResearchCli(process.argv.slice(3));
+            if (result.stderr) {
+                console.error(result.stderr);
+                process.exit(result.exitCode || 1);
+            }
+            console.log(result.stdout);
+            break;
+        }
         case 'skills': {
             const result = runSkillsCli(process.argv.slice(3), { sourceRoot: SKILLS_ROOT });
             if (result.type === 'json') {
@@ -2903,6 +3015,7 @@ try {
     agbrowse start --headed                  Launch a visible Chrome
     agbrowse navigate https://example.com    Open a URL
     agbrowse fetch https://example.com --json Read one URL for agent evidence
+    agbrowse research plan --query "한국어 검색 질문" --json  Plan focused queries
     agbrowse snapshot --interactive          Get refs (e1, e2, …)
     agbrowse click e1                        Click ref e1
     agbrowse runway status                   Inspect Runway tab (plan, model, mode)
@@ -2975,6 +3088,15 @@ try {
         browser       Chrome/CDP browser control skill
         web-ai        ChatGPT, Gemini, and Grok browser web-ai workflow skill
         vision-click  Screenshot-to-coordinate click helper skill
+
+  Research planning:
+    research plan --query <problem> [--max-queries N] [--json]
+      Rewrite a Korean external/source-sensitive problem into constraints,
+      focused URL-candidate queries, route URLs, and fetch/browse policy.
+
+    research normalize-results --file <json> [--backend name] [--query query] [--json]
+      Normalize Exa/Tavily/Perplexity/Brave/browser-SERP rows into one
+      search-results-v1 URL-candidate envelope. Snippets are not final evidence.
 
   Browser lifecycle:
     start [--port <9222>] [--headless|--headed] [--chrome-path PATH]

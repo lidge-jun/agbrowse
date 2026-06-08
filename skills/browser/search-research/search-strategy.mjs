@@ -32,6 +32,7 @@ export function planKoreanResearch(problem = '', options = {}) {
         || sourceHints.includes('structured')
         || needsBrowseEscalation(normalized);
     return {
+        schemaVersion: 'research-plan-v1',
         problem: normalized,
         sourceHints,
         constraints,
@@ -203,7 +204,9 @@ function compactQuery(terms) {
 }
 
 /**
- * @param {Array<{ query: string } & Record<string, unknown>>} specs
+ * @template {{ query: string }} T
+ * @param {T[]} specs
+ * @returns {T[]}
  */
 function dedupeQueries(specs) {
     const seen = new Set();

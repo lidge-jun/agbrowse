@@ -22,6 +22,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Lifecycle | `start`, `stop`, `status`, `reset` | Chrome CDP lifecycle |
 | Observe | `snapshot`, `screenshot`, `text`, `get-dom` | DOM/ref/text/screenshot 관찰 |
 | URL read | `fetch` | candidate URL을 public endpoint, HTTP fetch, metadata, optional reader, browser render/network 후보로 읽음. Generic search 아님 |
+| Research | `research`, `research plan`, `research normalize-results` | Korean/source-sensitive search plan 생성과 provider search result URL-candidate 정규화 |
 | Act | `click`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `drag`, `mouse-click`, `move-mouse`, `mouse-down`, `mouse-up` | ref 기반 또는 coordinate 기반 mutation |
 | Navigate | `navigate`, `reload`, `resize`, `tabs`, `active-tab`, `tab-switch`, `select-tab`, `new-tab`, `tab-close`, `tab-cleanup`, `scroll` | navigation, viewport, active target 조회, tab 관리 (multi-tab create/close 포함) |
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
@@ -52,6 +53,26 @@ Safety contract:
 - 세 번째 제출에서 Runway가 `You're on a roll` / `Please wait for your last generation` / `Credits Mode` gate를 보여줄 때만 `queue_full`/`queue-gate` terminal signal로 기록한다.
 - 첫 구현 focus는 `apps`, `custom-tools`다.
 - `agent`, `recents`, `workflow`, `characters`는 surface-only로 유지한다.
+
+## Research Commands
+
+`agbrowse research`는 검색 API 클라이언트가 아니라, 한국어 외부 정보
+검색을 더 작은 URL 후보 탐색 문제로 바꾸는 offline planning surface다.
+검색 결과 snippet을 정답으로 보지 않고, fetch/browser 검증으로 넘길 수
+있는 candidate URL envelope를 만든다.
+
+| 명령 | Browser 필요 | 역할 |
+| --- | ---: | --- |
+| `plan --query <problem> [--max-queries N] [--json]` | No | 한국어 문제를 constraints, source hints, 1-3 focused queries, route URLs, fetch/browse policy로 분해 |
+| `normalize-results --file <json> [--backend name] [--query query] [--json]` | No | Exa/Tavily/Perplexity/Brave/browser SERP형 rows를 `search-results-v1` URL candidates로 정규화 |
+
+Safety contract:
+
+- `research`는 live search, fetch, browse를 실행하지 않는다.
+- Snippet/content fields는 diagnostics이고 final evidence가 아니다.
+- Invalid/non-http URL rows는 `dropped`로 남겨야 하며 evidence로 승격하지 않는다.
+- Fetch enrichment와 browse escalation은 P3/P4 command surface에서 별도
+  reason과 함께 실행한다.
 
 ## Adaptive Fetch
 
