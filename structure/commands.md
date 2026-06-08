@@ -22,7 +22,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Lifecycle | `start`, `stop`, `status`, `reset` | Chrome CDP lifecycle |
 | Observe | `snapshot`, `screenshot`, `text`, `get-dom` | DOM/ref/text/screenshot 관찰 |
 | URL read | `fetch` | candidate URL을 public endpoint, HTTP fetch, metadata, optional reader, browser render/network 후보로 읽음. Generic search 아님 |
-| Research | `research`, `research plan`, `research normalize-results` | Korean/source-sensitive search plan 생성과 provider search result URL-candidate 정규화 |
+| Research | `research`, `research plan`, `research normalize-results`, `research enrich-fetch` | Korean/source-sensitive search plan 생성, provider search result URL-candidate 정규화, 원문 fetch evidence enrichment |
 | Act | `click`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `drag`, `mouse-click`, `move-mouse`, `mouse-down`, `mouse-up` | ref 기반 또는 coordinate 기반 mutation |
 | Navigate | `navigate`, `reload`, `resize`, `tabs`, `active-tab`, `tab-switch`, `select-tab`, `new-tab`, `tab-close`, `tab-cleanup`, `scroll` | navigation, viewport, active target 조회, tab 관리 (multi-tab create/close 포함) |
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
@@ -65,11 +65,15 @@ Safety contract:
 | --- | ---: | --- |
 | `plan --query <problem> [--max-queries N] [--json]` | No | 한국어 문제를 constraints, source hints, 1-3 focused queries, route URLs, fetch/browse policy로 분해 |
 | `normalize-results --file <json> [--backend name] [--query query] [--json]` | No | Exa/Tavily/Perplexity/Brave/browser SERP형 rows를 `search-results-v1` URL candidates로 정규화 |
+| `enrich-fetch --plan <json> --results <json> [--browser never\|auto\|required] [--max-results N] [--json]` | No by default | `search-results-v1` URL candidates를 adaptive fetch로 읽고 `research-fetch-enrichment-v1` ledger evidence로 보강 |
 
 Safety contract:
 
-- `research`는 live search, fetch, browse를 실행하지 않는다.
+- `plan`과 `normalize-results`는 live search, fetch, browse를 실행하지 않는다.
+- `enrich-fetch`는 live search를 실행하지 않고, 입력된 URL candidates만 fetch한다.
 - Snippet/content fields는 diagnostics이고 final evidence가 아니다.
+- `enrich-fetch`는 검색 query의 `constraintIds`를 증거로 승격하지 않는다.
+  Ledger support는 fetched original-page text/title에서만 계산한다.
 - Invalid/non-http URL rows는 `dropped`로 남겨야 하며 evidence로 승격하지 않는다.
 - Fetch enrichment와 browse escalation은 P3/P4 command surface에서 별도
   reason과 함께 실행한다.

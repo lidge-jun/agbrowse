@@ -61,6 +61,52 @@ describe.sequential('research CLI', () => {
         }
     });
 
+    it('awaits fetch enrichment CLI output without requiring Chrome or network when max-results is zero', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agbrowse-research-enrich-cli-'));
+        const planFile = join(dir, 'plan.json');
+        const resultsFile = join(dir, 'results.json');
+        try {
+            const planResult = await execBrowser([
+                'research',
+                'plan',
+                '--query',
+                '고려대학교출판문화원 2024년 12월 27일 540쪽 MOOC 목차',
+                '--json',
+            ]);
+            writeFileSync(planFile, planResult.stdout);
+            writeFileSync(resultsFile, JSON.stringify({
+                schemaVersion: 'search-results-v1',
+                backend: 'fixture',
+                query: JSON.parse(planResult.stdout).atomicQueries[0].query,
+                results: [
+                    { url: 'https://example.com/book', title: 'Book', snippet: 'candidate' },
+                ],
+                dropped: [],
+                resultRole: 'url-candidates',
+                evidencePolicy: 'snippets-are-not-final-evidence',
+            }));
+            const result = await execBrowser([
+                'research',
+                'enrich-fetch',
+                '--plan',
+                planFile,
+                '--results',
+                resultsFile,
+                '--max-results',
+                '0',
+                '--json',
+            ]);
+            expect(result.code).toBe(0);
+            const body = JSON.parse(result.stdout);
+            expect(body.schemaVersion).toBe('research-fetch-enrichment-v1');
+            expect(body.fetchPolicy.maxResults).toBe(0);
+            expect(body.candidates).toEqual([]);
+            expect(body.summary.status).toBe('insufficient-evidence');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('fails missing arguments before browser mutation', async () => {
         const missingQuery = await execBrowser(['research', 'plan', '--json']);
         expect(missingQuery.code).not.toBe(0);
@@ -69,5 +115,9 @@ describe.sequential('research CLI', () => {
         const missingFile = await execBrowser(['research', 'normalize-results', '--json']);
         expect(missingFile.code).not.toBe(0);
         expect(missingFile.stderr).toContain('research normalize-results --file <json>');
+
+        const missingEnrich = await execBrowser(['research', 'enrich-fetch', '--json']);
+        expect(missingEnrich.code).not.toBe(0);
+        expect(missingEnrich.stderr).toContain('research enrich-fetch --plan <json> --results <json>');
     });
 });

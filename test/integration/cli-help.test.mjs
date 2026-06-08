@@ -46,6 +46,7 @@ describe.sequential('CLI help', () => {
         expect(result.stdout).toContain('Research planning:');
         expect(result.stdout).toContain('research plan --query <problem>');
         expect(result.stdout).toContain('research normalize-results --file <json>');
+        expect(result.stdout).toContain('research enrich-fetch --plan <json> --results <json>');
     });
 
     it('shows Runway help without touching the browser', async () => {

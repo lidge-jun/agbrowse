@@ -294,14 +294,20 @@ agbrowse research plan --query "한국어 외부 정보 질문" --json
 # Run provider/native search with plan.atomicQueries.
 # Treat search rows as URL candidates, not evidence.
 agbrowse research normalize-results --backend tavily --file results.json --json
-# Then read candidate URLs with agbrowse fetch before answering.
+agbrowse research enrich-fetch --plan plan.json --results normalized-results.json --json
+# Then browse only the remaining dynamic/Naver/table candidates before answering.
 ```
 
 Use this before broad Korean/current/source-sensitive searches. The plan output
 splits the request into constraints and focused queries. The normalizer keeps
-provider snippets as diagnostics only; original-page evidence still requires
-`agbrowse fetch`, and dynamic/Naver/table/list cases may require browser
+provider snippets as diagnostics only. `enrich-fetch` reads returned URLs
+through adaptive fetch and updates the constraint ledger from original page
+text/title only. Dynamic/Naver/table/list cases may still require browser
 inspection after fetch.
+
+`enrich-fetch` defaults to `--browser never`; it is a fetch enrichment step, not
+the browser escalation controller. If the envelope returns `nextStep.type:
+browse-candidates`, use normal browser commands to inspect those pages.
 
 ### Form Filling
 

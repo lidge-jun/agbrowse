@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createConstraintLedger, summarizeLedger, updateLedgerWithEvidence } from '../../skills/browser/search-research/constraint-ledger.mjs';
+import { enrichSearchResultsWithFetch } from '../../skills/browser/search-research/fetch-enrichment.mjs';
 import { buildRouteUrl, chooseKoreanRoute, detectSourceHints, needsBrowseEscalation } from '../../skills/browser/search-research/korean-routes.mjs';
 import { normalizeSearchResults } from '../../skills/browser/search-research/normalizer.mjs';
 import { planKoreanResearch } from '../../skills/browser/search-research/search-strategy.mjs';
@@ -99,5 +100,97 @@ describe('K-BrowseComp search research planning', () => {
         expect(normalized.results).toHaveLength(1);
         expect(normalized.results[0].raw).toMatchObject({ score: 0.82 });
         expect(normalized.dropped[0].reason).toBe('missing-or-invalid-url');
+    });
+
+    it('enriches URL candidates by fetch and keeps snippets out of the evidence ledger', async () => {
+        const plan = planKoreanResearch('고려대학교출판문화원 2024년 12월 27일 540쪽 MOOC 목차');
+        const normalized = normalizeSearchResults({
+            backend: 'exa',
+            query: plan.atomicQueries[0].query,
+            results: [
+                {
+                    url: 'https://example.com/book',
+                    title: 'Search snippet title',
+                    snippet: '2024년 12월 27일 540쪽 목차가 있다는 검색 스니펫',
+                },
+            ],
+        });
+        const enriched = await enrichSearchResultsWithFetch(plan, normalized, {}, {
+            runAdaptiveFetch: async input => ({
+                ok: true,
+                verdict: 'strong_ok',
+                source: 'fetch',
+                finalUrl: input.url,
+                title: '도서 소개',
+                content: '이 페이지는 일반적인 도서 소개 본문입니다.',
+                evidence: ['readable-text'],
+                warnings: [],
+            }),
+        });
+        expect(enriched.schemaVersion).toBe('research-fetch-enrichment-v1');
+        expect(enriched.candidates[0].discoveryConstraintIds.length).toBeGreaterThan(0);
+        expect(enriched.candidates[0].constraintIds).not.toEqual(
+            expect.arrayContaining(enriched.candidates[0].discoveryConstraintIds)
+        );
+        expect(enriched.summary.ready).toBe(false);
+        expect(enriched.summary.pending.length).toBeGreaterThan(0);
+        expect(enriched.nextStep.type).toBe('browse-candidates');
+    });
+
+    it('updates the ledger only when fetched original text supports the remaining constraints', async () => {
+        const plan = planKoreanResearch('고려대학교출판문화원 2024년 12월 27일 540쪽 MOOC 목차');
+        const normalized = normalizeSearchResults({
+            query: plan.atomicQueries[0].query,
+            results: [
+                { url: 'https://example.com/book', title: 'MOOC book', snippet: 'diagnostic only' },
+            ],
+        });
+        const enriched = await enrichSearchResultsWithFetch(plan, normalized, { browser: 'never' }, {
+            runAdaptiveFetch: async input => ({
+                ok: true,
+                verdict: 'strong_ok',
+                source: 'fetch',
+                finalUrl: input.url,
+                title: '고려대학교출판문화원 MOOC 목차',
+                content: '2024년 12월 27일 출간, 540쪽, 목차 제공.',
+                evidence: ['original-page-text'],
+                warnings: [],
+            }),
+        });
+        expect(enriched.fetchPolicy.browser).toBe('never');
+        expect(enriched.summary.status).toBe('complete');
+        expect(enriched.summary.pending).toEqual([]);
+        expect(enriched.candidates[0].constraintIds).toEqual(expect.arrayContaining(plan.constraints.map(constraint => constraint.id)));
+        expect(enriched.nextStep.type).toBe('finalize-ready');
+    });
+
+    it('does not let search result titles satisfy constraints when fetched page evidence is empty', async () => {
+        const plan = planKoreanResearch('고려대학교출판문화원 2024년 12월 27일 540쪽 MOOC 목차');
+        const normalized = normalizeSearchResults({
+            query: plan.atomicQueries[0].query,
+            results: [
+                {
+                    url: 'https://example.com/book',
+                    title: '고려대학교출판문화원 2024년 12월 27일 540쪽 MOOC 목차',
+                    snippet: '검색 결과 메타데이터는 진단용일 뿐입니다.',
+                },
+            ],
+        });
+        const enriched = await enrichSearchResultsWithFetch(plan, normalized, {}, {
+            runAdaptiveFetch: async input => ({
+                ok: true,
+                verdict: 'strong_ok',
+                source: 'fetch',
+                finalUrl: input.url,
+                title: null,
+                content: 'irrelevant fetched body',
+                evidence: [],
+                warnings: [],
+            }),
+        });
+        expect(enriched.summary.status).toBe('insufficient-evidence');
+        expect(enriched.summary.ready).toBe(false);
+        expect(enriched.summary.supported).toEqual([]);
+        expect(enriched.candidates[0].constraintIds).toEqual([]);
     });
 });

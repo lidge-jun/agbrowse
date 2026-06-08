@@ -17,6 +17,7 @@
  *   runway <command>                    Runway full-surface CLI (13 commands, 3 safety levels)
  *   research plan --query <problem> [--json]  Korean query rewrite and evidence plan
  *   research normalize-results --file <json> [--backend name] [--json]  Normalize search URL candidates
+ *   research enrich-fetch --plan <json> --results <json> [--json]  Fetch original-page evidence
  *   screenshot [--full-page] [--ref eN] [--json]  Capture screenshot
  *   mouse-click <x> <y> [--double]  Click at pixel coordinates
  *   move-mouse <x> <y>               Move mouse without clicking
@@ -84,6 +85,7 @@ import { runAdaptiveFetchCli } from './adaptive-fetch/index.mjs';
 import { runRunwayCli } from './runway.mjs';
 import { planKoreanResearch } from './search-research/search-strategy.mjs';
 import { normalizeSearchResults } from './search-research/normalizer.mjs';
+import { enrichSearchResultsWithFetch } from './search-research/fetch-enrichment.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2060,7 +2062,7 @@ const browserDeps = {
 /**
  * @param {string[]} argv
  */
-function runResearchCli(argv = []) {
+async function runResearchCli(argv = []) {
     const command = argv[0] || 'help';
     if (command === 'plan') {
         const { values } = parseArgs({
@@ -2114,6 +2116,43 @@ function runResearchCli(argv = []) {
             : { stdout: formatNormalizedSearchResults(normalized) };
     }
 
+    if (command === 'enrich-fetch') {
+        const { values } = parseArgs({
+            args: argv.slice(1),
+            options: {
+                plan: { type: 'string' },
+                results: { type: 'string' },
+                json: { type: 'boolean', default: false },
+                browser: { type: 'string', default: 'never' },
+                trace: { type: 'boolean', default: false },
+                'max-results': { type: 'string' },
+                'timeout-ms': { type: 'string' },
+                'max-bytes': { type: 'string' },
+            },
+            strict: false,
+        });
+        const planFile = typeof values.plan === 'string' ? values.plan.trim() : '';
+        const resultsFile = typeof values.results === 'string' ? values.results.trim() : '';
+        if (!planFile || !resultsFile) {
+            return {
+                exitCode: 1,
+                stderr: 'Usage: browser.mjs research enrich-fetch --plan <json> --results <json> [--browser never|auto|required] [--max-results N] [--json]',
+            };
+        }
+        const plan = JSON.parse(readFileSync(planFile, 'utf8'));
+        const normalized = JSON.parse(readFileSync(resultsFile, 'utf8'));
+        const enriched = await enrichSearchResultsWithFetch(plan, normalized, {
+            browser: /** @type {any} */ (values.browser),
+            trace: Boolean(values.trace),
+            maxResults: values['max-results'] === undefined ? undefined : Number(values['max-results']),
+            timeoutMs: values['timeout-ms'] === undefined ? undefined : Number(values['timeout-ms']),
+            maxBytes: values['max-bytes'] === undefined ? undefined : Number(values['max-bytes']),
+        });
+        return values.json
+            ? { stdout: JSON.stringify(enriched, null, 2) }
+            : { stdout: formatFetchEnrichment(enriched) };
+    }
+
     return {
         stdout: `agbrowse research <command>
 
@@ -2121,7 +2160,9 @@ Commands:
   plan --query <problem> [--max-queries N] [--json]
       Rewrite a Korean research problem into constraints, focused queries, and fetch/browse policy.
   normalize-results --file <json> [--backend name] [--query query] [--json]
-      Normalize provider search rows into URL candidates. Snippets are not final evidence.`,
+      Normalize provider search rows into URL candidates. Snippets are not final evidence.
+  enrich-fetch --plan <json> --results <json> [--browser never|auto|required] [--max-results N] [--json]
+      Fetch original pages for normalized URL candidates and update the constraint ledger.`,
     };
 }
 
@@ -2156,10 +2197,25 @@ function formatNormalizedSearchResults(normalized) {
     ].join('\n');
 }
 
+/**
+ * @param {Awaited<ReturnType<typeof enrichSearchResultsWithFetch>>} enriched
+ */
+function formatFetchEnrichment(enriched) {
+    return [
+        `fetch enrichment: ${enriched.schemaVersion}`,
+        `query: ${enriched.query || '(empty)'}`,
+        `candidates fetched: ${enriched.candidates.length}`,
+        `ledger: ${enriched.summary.status}`,
+        `supported: ${enriched.summary.supported.join(', ') || 'none'}`,
+        `pending: ${enriched.summary.pending.join(', ') || 'none'}`,
+        `next step: ${enriched.nextStep.type} (${enriched.nextStep.reason})`,
+    ].join('\n');
+}
+
 try {
     switch (sub) {
         case 'research': {
-            const result = runResearchCli(process.argv.slice(3));
+            const result = await runResearchCli(process.argv.slice(3));
             if (result.stderr) {
                 console.error(result.stderr);
                 process.exit(result.exitCode || 1);
@@ -3097,6 +3153,10 @@ try {
     research normalize-results --file <json> [--backend name] [--query query] [--json]
       Normalize Exa/Tavily/Perplexity/Brave/browser-SERP rows into one
       search-results-v1 URL-candidate envelope. Snippets are not final evidence.
+
+    research enrich-fetch --plan <json> --results <json> [--browser never|auto|required] [--max-results N] [--json]
+      Fetch original pages for normalized URL candidates, attach adaptive-fetch
+      results, and update the constraint ledger from fetched text only.
 
   Browser lifecycle:
     start [--port <9222>] [--headless|--headed] [--chrome-path PATH]
