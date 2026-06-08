@@ -37,6 +37,8 @@ source-domain statistics to avoid republishing query-answer pairs.
 | 10 | `10_keyword_adjustment_fetch_loop.md` | Minimal keyword + fetch strategy | Small query rewrites that turn search results into fetchable evidence |
 | 11 | `11_browse_skill_coverage.md` | Browse fallback coverage | What fetch cannot cover and when browser skills should take over |
 | 12 | `12_agbrowse_delta_current_capability.md` | agbrowse delta | What agbrowse can add beyond the current URL-reader/search-only split |
+| 13 | `13_provider_cli_query_probe.md` | Provider CLI query probe | Actual Codex/Claude/AGY/Cursor Korean query/result observations |
+| 14 | `14_cli_jaw_query_patch_smoke_corpus.md` | cli-jaw query patch smoke corpus | Query-rewrite-first smoke prompts and pass/fail criteria |
 
 ## Key Dataset Facts
 
@@ -80,3 +82,11 @@ item 3. The extra research in docs 09-12 sharpens this into a practical route:
 keep existing search APIs for URL discovery, make small Korean/source-aware
 keyword rewrites, fetch the returned URLs, and use browser skills only when
 fetch cannot see the needed page state.
+
+The provider probe in doc 13 confirms this direction across Codex, Claude,
+AGY/Gemini, and Cursor. Internal search query rewrites are generally not
+exposed, search outputs are mostly snippets/synthesis/citations, and
+search-only evidence was insufficient for the tested Korean tasks. Doc 14 turns
+that observation into a cli-jaw prompt-patch smoke corpus focused first on
+better query sending, with fetch and browse kept as downstream verification
+decisions.
