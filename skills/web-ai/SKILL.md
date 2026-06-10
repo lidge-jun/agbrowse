@@ -28,6 +28,10 @@ standalone `agbrowse` Chrome/CDP runtime.
 - Do not start a separate Chrome/profile unless the user explicitly asks for an
   isolated run.
 - Prefer `agbrowse status` before mutation.
+- If the user explicitly says to use `agbrowse` or standalone agbrowse, run
+  `agbrowse --help` first, and run `agbrowse web-ai --help` before choosing
+  web-ai flags. Treat the current help output as the command truth and adapt
+  these instructions to that surface.
 - For live provider smoke tests, pass `--url` so the runtime verifies the
   provider host before sending.
 
@@ -342,11 +346,12 @@ For multi-zip mode, ChatGPT repeats the same two-line block for each zip. The
 agbrowse and other automation.
 
 Current ChatGPT web sessions may not expose `turn_plan.update_turn_plan` at all
-(live probe returned `NO_TURN_PLAN_TOOL` on 2026-06-11). Do not fail a run only
-because that visible todo tool is absent; the durable plan file inside the zip
-is the required checklist. New `web-ai code` retrieval fails closed when a code
-zip lacks `PLAN.md` or `00_plan.md`; `code-extract` can still recover legacy
-artifacts from older conversations.
+(or may expose it only transiently while the response is streaming). Do not fail
+a completed run only because the visible todo UI is absent after the answer
+finishes; the durable plan file inside the zip is the required checklist. New
+`web-ai code` retrieval fails closed when a code zip lacks `PLAN.md` or
+`00_plan.md`; `code-extract` can still recover legacy artifacts from older
+conversations.
 
 After extraction, verify locally when correctness matters:
 

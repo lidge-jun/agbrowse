@@ -37,7 +37,10 @@ describe('code dev-agent context bundle', () => {
         const verified = verifyZipBuffer(buffer);
         expect(verified.files).toContain(GPT_DEV_AGENT_CONTEXT_MARKDOWN_ENTRY);
         expect(verified.files).toContain(GPT_DEV_AGENT_CONTEXT_MANIFEST_ENTRY);
-        expect(readZipTextEntry(buffer, GPT_DEV_AGENT_CONTEXT_MARKDOWN_ENTRY)).toContain('Linux sandbox');
+        const contextMarkdown = readZipTextEntry(buffer, GPT_DEV_AGENT_CONTEXT_MARKDOWN_ENTRY);
+        expect(contextMarkdown).toContain('Linux sandbox');
+        expect(contextMarkdown).toContain('turn_plan.update_turn_plan');
+        expect(contextMarkdown).toContain('visible todo UI may disappear');
 
         const manifest = await readCodeDevContextManifest(result.path);
         expect(manifest.name).toBe('gpt-dev-agent-context');

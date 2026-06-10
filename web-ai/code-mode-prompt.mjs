@@ -18,7 +18,7 @@ export const ARTIFACT_EXCLUSIONS = [
 
 export const PLAN_TOOL_REQUIREMENT = '- 가능하면 첫 액션으로 plan 도구를 사용해 구현/검증/패키징 계획을 세운 뒤 코드 작성에 들어간다. 도구가 없다면 가장하지 말고 PLAN.md 또는 00_plan.md 에 계획을 작성한다.';
 
-export const TODO_TOOL_REQUIREMENT = '- turn_plan.update_turn_plan 같은 visible todo/checklist 도구가 실제로 사용 가능하면 작업 계획에 맞춰 5-10개 항목으로 만들고 진행 중 갱신한다. 도구가 없으면 절대 사용했다고 말하지 말고 PLAN.md 또는 00_plan.md 의 체크리스트를 durable todo 로 삼는다.';
+export const TODO_TOOL_REQUIREMENT = '- turn_plan.update_turn_plan 같은 visible todo/checklist 도구가 실제로 사용 가능하면 첫 코드 작성 전에 작업 계획에 맞춰 5-10개 항목(가능하면 8개)을 만들고, 구현/검증/패키징 진행 중 상태를 갱신한다. 이 visible todo UI 는 응답 종료 후 사라질 수 있으므로 최종 검증 산출물로 요구하지 않는다. 도구가 없으면 절대 사용했다고 말하지 말고 PLAN.md 또는 00_plan.md 의 체크리스트를 durable todo 로 삼는다.';
 
 export const PLAN_FILE_REQUIREMENT = '- 각 코드 zip 루트에는 반드시 PLAN.md 또는 00_plan.md 를 포함한다. 이 파일에는 Linux sandbox 전제, 5-10개 체크리스트, 구현 계획, 실행한 검증 명령, 패키징 기준을 적는다.';
 

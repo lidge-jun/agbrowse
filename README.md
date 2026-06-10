@@ -666,7 +666,8 @@ supported.
 visible ChatGPT web UI, then retrieving the resulting zip without clicking a
 download button. The prompt contract asks ChatGPT to create a durable
 `PLAN.md` or `00_plan.md` checklist inside the generated artifact, use
-`turn_plan.update_turn_plan` only when that tool is actually available,
+`turn_plan.update_turn_plan` only when that tool is actually available during
+the response, treat that visible todo UI as transient after completion,
 implement, self-check, package, and answer with both a human clickable sandbox
 link and a machine-readable plain path. Each `web-ai code` call automatically
 uploads `skills/web-ai/modules/gpt-dev-agent-context.zip` as the first
@@ -731,6 +732,8 @@ agbrowse and other automation.
 New code-mode runs fail closed if the recovered code zip does not contain
 `PLAN.md` or `00_plan.md`. `code-extract` remains able to recover old
 conversations, but old artifacts may predate the plan-file contract.
+Do not treat disappearance of the visible todo UI after the response finishes
+as a failure; the zip-root plan file is the durable checklist.
 
 Verify recovered archives locally when correctness matters:
 
