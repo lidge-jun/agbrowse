@@ -663,7 +663,8 @@ treats `Heavy` as active Pro/Heavy and can select the direct DOM fallback
 visible ChatGPT web UI, then retrieving the resulting zip without clicking a
 download button. The prompt contract asks ChatGPT to use its plan tool, create a
 visible `turn_plan.update_turn_plan` checklist, implement, self-check, package,
-and answer only with sandbox artifact path text such as `/mnt/data/result.zip`.
+and answer with both a human clickable sandbox link and a machine-readable
+plain path.
 
 Single zip:
 
@@ -708,6 +709,17 @@ cookie-bound payload inside the page, validates the zip, and writes it locally.
 The original conversation URL/session/current tab plus a logged-in ChatGPT
 browser profile are still required; a copied `/mnt/data/result.zip` line alone
 is not enough.
+
+Expected final assistant answer shape:
+
+```text
+DOWNLOAD: [result.zip](sandbox:/mnt/data/result.zip)
+MACHINE: /mnt/data/result.zip
+```
+
+For multi-zip output, ChatGPT repeats the same two-line block for each zip. The
+`DOWNLOAD:` line is for humans in the ChatGPT UI; the `MACHINE:` line is for
+agbrowse and other automation.
 
 Verify recovered archives locally when correctness matters:
 

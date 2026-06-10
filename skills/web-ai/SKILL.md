@@ -275,7 +275,8 @@ for ChatGPT to create zip artifacts in its sandbox, retrieves the artifacts via
 the provider download API, and validates the local zip before returning. The
 contract tells ChatGPT to use its plan tool first, create/update a visible
 `turn_plan.update_turn_plan` todo checklist, then implement, self-check,
-package, and return only the artifact path(s).
+package, and return both human clickable sandbox links and machine-readable
+plain artifact paths.
 
 Single zip:
 
@@ -325,6 +326,17 @@ conversation was created by agbrowse and the session is still recorded, use
 works. The extractor does not send a new prompt; it scans the saved conversation
 JSON for `/mnt/data/*.zip` paths and reuses the provider download API.
 
+Expected final ChatGPT answer shape for one zip:
+
+```text
+DOWNLOAD: [result.zip](sandbox:/mnt/data/result.zip)
+MACHINE: /mnt/data/result.zip
+```
+
+For multi-zip mode, ChatGPT repeats the same two-line block for each zip. The
+`DOWNLOAD:` line is for humans in the ChatGPT UI; the `MACHINE:` line is for
+agbrowse and other automation.
+
 After extraction, verify locally when correctness matters:
 
 ```bash
@@ -337,11 +349,13 @@ where the visible assistant answer contained only `/mnt/data/result.zip`; the
 runtime recovered `pro_hello.py` and `README.md` from the old conversation
 without sending a follow-up prompt.
 
-Code mode is beta and ChatGPT-only. It does not depend on visible download
-buttons; plain sandbox paths in the assistant answer are enough for the runtime
-to retrieve the archives, including later `code-extract` runs. Text copied away
-from ChatGPT is not enough by itself: the extractor still needs the original
-conversation URL/session/current tab plus the logged-in ChatGPT browser profile.
+Code mode is beta and ChatGPT-only. The `DOWNLOAD:` sandbox link gives humans a
+visible button in the ChatGPT UI, while the `MACHINE:` plain path gives agents a
+stable text target. Plain sandbox paths in the assistant answer remain enough
+for the runtime to retrieve the archives, including later `code-extract` runs.
+Text copied away from ChatGPT is not enough by itself: the extractor still needs
+the original conversation URL/session/current tab plus the logged-in ChatGPT
+browser profile.
 Do not claim cli-jaw parity for this command unless the equivalent cli-jaw
 command surface, retrieval runtime, tests, and installed skill docs are
 implemented there.

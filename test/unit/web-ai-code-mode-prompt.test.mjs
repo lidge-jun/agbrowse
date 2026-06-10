@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
     ARTIFACT_EXCLUSIONS,
     CODE_ARTIFACT_PATH,
+    HUMAN_DOWNLOAD_PREFIX,
+    MACHINE_PATH_PREFIX,
     PLAN_TOOL_REQUIREMENT,
     TODO_TOOL_REQUIREMENT,
     buildCodeModePrompt,
@@ -18,6 +20,8 @@ describe('buildCodeModePrompt', () => {
         expect(prompt).toContain('turn_plan.update_turn_plan');
         expect(prompt).toContain(`container.exec 로 단 하나의 ${CODE_ARTIFACT_PATH}`);
         expect(prompt).toContain('find /mnt/data -maxdepth 1 -name "*.zip" -print');
+        expect(prompt).toContain(`${HUMAN_DOWNLOAD_PREFIX} [result.zip](sandbox:${CODE_ARTIFACT_PATH})`);
+        expect(prompt).toContain(`${MACHINE_PATH_PREFIX} ${CODE_ARTIFACT_PATH}`);
         expect(prompt).toContain('중간 확인 질문 금지');
         for (const exclusion of ARTIFACT_EXCLUSIONS) {
             expect(prompt).toContain(exclusion);
@@ -32,7 +36,9 @@ describe('buildCodeModePrompt', () => {
         const prompt = buildCodeModePrompt('FastAPI backend + React frontend', { multiZip: true });
         expect(prompt).toContain('MULTI-ZIP');
         expect(prompt).toContain('frontend.zip');
-        expect(prompt).toContain('한 줄에 하나씩');
+        expect(prompt).toContain('zip마다 정확히 두 줄');
+        expect(prompt).toContain('DOWNLOAD: [<zip basename>](sandbox:/mnt/data/<zip basename>)');
+        expect(prompt).toContain('MACHINE: /mnt/data/<zip basename>');
         expect(prompt).toContain(PLAN_TOOL_REQUIREMENT);
         expect(prompt).toContain(TODO_TOOL_REQUIREMENT);
         expect(prompt).toContain('turn_plan.update_turn_plan');
@@ -47,6 +53,26 @@ describe('checkContractCompliance', () => {
         // Live run answered with a JSON-ish wrap: ["/mnt/data/result.zip"]
         expect(checkContractCompliance('["/mnt/data/result.zip"]').compliant).toBe(true);
         expect(checkContractCompliance('  /mnt/data/result.zip\n').compliant).toBe(true);
+    });
+
+    it('accepts the human download plus machine path format', () => {
+        const answer = [
+            'DOWNLOAD: [result.zip](sandbox:/mnt/data/result.zip)',
+            'MACHINE: /mnt/data/result.zip',
+        ].join('\n');
+        const result = checkContractCompliance(answer);
+        expect(result.compliant).toBe(true);
+        expect(result.mentionsPath).toBe(true);
+    });
+
+    it('accepts the rendered ChatGPT button text plus machine path format', () => {
+        const answer = [
+            'DOWNLOAD: result.zip',
+            'MACHINE: /mnt/data/result.zip',
+        ].join('\n');
+        const result = checkContractCompliance(answer);
+        expect(result.compliant).toBe(true);
+        expect(result.mentionsPath).toBe(true);
     });
 
     it('flags non-compliant answers while noting path mentions', () => {

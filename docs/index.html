@@ -315,7 +315,7 @@ agbrowse web-ai poll \
       <section class="section split" id="code-artifacts">
         <div>
           <h2>Recover code zips from old ChatGPT conversations.</h2>
-          <p>When ChatGPT answers with plain sandbox text like <code>/mnt/data/result.zip</code>, agbrowse can revisit the conversation JSON, mint the provider download URL, validate the zip, and save it locally.</p>
+          <p>ChatGPT returns a human <code>DOWNLOAD:</code> sandbox link plus a machine <code>MACHINE:</code> path. agbrowse can revisit the conversation JSON, mint the provider download URL, validate the zip, and save it locally.</p>
         </div>
         <div class="terminal">
           <pre><code>agbrowse web-ai code \
@@ -324,6 +324,9 @@ agbrowse web-ai poll \
   --effort standard \
   --prompt "Create a Flask MVP." \
   --output-zip ./result.zip
+
+DOWNLOAD: [result.zip](sandbox:/mnt/data/result.zip)
+MACHINE: /mnt/data/result.zip
 
 agbrowse web-ai code-extract \
   --vendor chatgpt \
