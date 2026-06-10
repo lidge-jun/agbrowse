@@ -444,7 +444,8 @@ ChatGPT:
 - Thinking effort trigger:
   `[data-testid="model-switcher-gpt-5-5-thinking-thinking-effort"]`
   with `Light`, `Standard`, `Extended`, and `Heavy`.
-- Use regular Pro by selecting `--model pro --effort standard`.
+- In the simplified Intelligence UI, Pro currently routes through `Pro Extended`
+  because the plain `Pro` / `Pro Standard` row may be absent.
 
 2026-06-11 ChatGPT Intelligence UI note:
 
@@ -454,7 +455,7 @@ ChatGPT:
 - `thinking --effort standard` selects `Medium`.
 - `thinking --effort extended` selects `High`.
 - `thinking --effort heavy` selects `Extra High`.
-- `pro --effort standard` selects `Pro Standard`.
+- `pro --effort standard` selects `Pro Extended` when the simplified UI only exposes Pro Extended.
 - `pro --effort extended` selects `Pro Extended`.
 
 Gemini:

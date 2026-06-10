@@ -36,6 +36,7 @@ describe('web-ai ChatGPT model selector policy', () => {
             { model: 'thinking', effort: 'standard', selected: 'thinking', selectedEffort: 'standard' },
             { model: 'thinking', effort: 'extended', selected: 'thinking', selectedEffort: 'extended' },
             { model: 'thinking', effort: 'heavy', selected: 'thinking', selectedEffort: 'heavy' },
+            { model: 'pro', effort: 'standard', selected: 'pro', selectedEffort: 'standard' },
             { model: 'pro', effort: 'extended', selected: 'pro', selectedEffort: 'extended' },
         ];
 
@@ -57,6 +58,28 @@ describe('web-ai ChatGPT model selector policy', () => {
             expect(result).toMatchObject({
                 selected: testCase.selected,
                 effort: testCase.selectedEffort,
+            });
+        }
+    });
+
+    it('routes Pro requests to Pro Extended when the simplified UI has no Pro Standard row', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+
+        for (const effort of ['standard', 'extended']) {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                initialModelMenuOpen: false,
+                closedDropdownButton: true,
+                simplifiedIntelligenceMenu: true,
+                simplifiedProExtendedOnly: true,
+                checkedModelRows: false,
+                checkedEffortRows: false,
+            });
+            const result = await selectChatGptModel(page, 'pro', { effort });
+
+            expect(result).toMatchObject({
+                selected: 'pro',
+                effort,
             });
         }
     });
@@ -724,6 +747,7 @@ function createFakeModelPage({
     effortOptionRole = 'menuitemradio',
     modelPickerUnavailable = false,
     simplifiedIntelligenceMenu = false,
+    simplifiedProExtendedOnly = false,
     advanceClock = null,
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
@@ -778,11 +802,11 @@ function createFakeModelPage({
             get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'heavy'; },
             onClick: () => setSimplifiedSelection('thinking', 'heavy'),
         }),
-        createElement({
+        ...(simplifiedProExtendedOnly ? [] : [createElement({
             text: 'Pro Standard',
             get checked() { return state.currentModel === 'pro' && state.selectedEffort === 'standard'; },
             onClick: () => setSimplifiedSelection('pro', 'standard'),
-        }),
+        })]),
         createElement({
             text: 'Pro Extended',
             get checked() { return state.currentModel === 'pro' && state.selectedEffort === 'extended'; },

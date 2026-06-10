@@ -92,9 +92,9 @@ const CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS = {
         },
     },
     pro: {
-        defaultLabels: ['Pro Standard', 'Pro Extended'],
+        defaultLabels: ['Pro Extended'],
         efforts: {
-            standard: ['Pro Standard'],
+            standard: ['Pro Extended'],
             extended: ['Pro Extended'],
         },
     },
@@ -455,6 +455,7 @@ async function findModelOption(page, choice) {
         }
     }
     const simplified = await findOptionByExactLabels(page, simplifiedDefaultLabels(choice));
+    if (simplified && await isSimplifiedIntelligenceMenuOpen(page, choice, null)) return simplified;
     if (simplified && await isModelOptionCandidate(simplified, choice)) return simplified;
     return null;
 }
@@ -485,7 +486,7 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort ${effort} is not available for ${model}`, evidence: { model, effort, supported: Object.keys(config?.efforts || {}) } });
     }
     await openEffortMenu(page, model, effort, usedFallbacks);
-    const before = await readCheckedEffort(page, model);
+    const before = await readCheckedEffort(page, model, effort);
     if (before === effort) return { requested: effort, selected: before, changed: false };
     const option = await findEffortOption(page, model, effort);
     if (!option) {
@@ -495,7 +496,7 @@ async function selectChatGptEffort(page, model, effort, usedFallbacks) {
     await option.click({ timeout: 5_000 });
     await page.waitForTimeout(500).catch(() => undefined);
     await openEffortMenu(page, model, effort, usedFallbacks);
-    const after = await readCheckedEffort(page, model);
+    const after = await readCheckedEffort(page, model, effort);
     if (after !== effort) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT reasoning effort verification failed: expected ${effort}, got ${after || 'none'}`, evidence: { model, effort, got: after || null } });
     }
@@ -649,14 +650,14 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
  * @param {string} model
  * @returns {Promise<EffortChoice | null>}
  */
-async function readCheckedEffort(page, model) {
+async function readCheckedEffort(page, model, preferredEffort = null) {
     const config = CHATGPT_MODEL_EFFORT_OPTIONS[model];
     const checkedRows = await page.locator('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"][data-state="checked"]')
         .all()
         .catch(() => /** @type {Locator[]} */ ([]));
     for (const row of checkedRows) {
         const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
-        const simplified = effortChoiceFromSimplifiedText(text, model);
+        const simplified = effortChoiceFromSimplifiedText(text, model, preferredEffort);
         if (simplified) return simplified;
     }
     for (const [effort, label] of Object.entries(config?.efforts || {})) {
@@ -948,8 +949,10 @@ function simplifiedEffortLabels(model, effort) {
  * @param {string} model
  * @returns {EffortChoice | null}
  */
-function effortChoiceFromSimplifiedText(text, model) {
+function effortChoiceFromSimplifiedText(text, model, preferredEffort = null) {
     const options = CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS[/** @type {ModelChoice} */ (model)]?.efforts || {};
+    const preferredLabels = preferredEffort ? options[preferredEffort] || [] : [];
+    if (preferredLabels.some(label => menuTextHasExactLine(text, label))) return /** @type {EffortChoice} */ (preferredEffort);
     for (const [effort, labels] of Object.entries(options)) {
         if (labels.some(label => menuTextHasExactLine(text, label))) return /** @type {EffortChoice} */ (effort);
     }
