@@ -68,6 +68,7 @@ agbrowse/
 
 cli-jaw/
 ├── bin/commands/browser-web-ai.ts
+├── src/routes/browser.ts
 ├── src/browser/web-ai/
 │   ├── code-mode.ts                      NEW
 │   ├── code-mode-prompt.ts               NEW
@@ -80,10 +81,12 @@ cli-jaw/
 │       ├── gpt-dev-agent-context.md      NEW
 │       └── gpt-dev-agent-context.zip     NEW generated/saved bundle
 └── tests/unit/
-    ├── browser-web-ai-code-mode.test.ts          NEW
-    ├── browser-web-ai-code-mode-prompt.test.ts   NEW
-    ├── browser-web-ai-code-artifact.test.ts      NEW if needed
-    └── browser-web-ai-code-dev-context.test.ts   NEW
+    ├── browser-web-ai-code-mode.test.ts           NEW
+    ├── browser-web-ai-code-mode-prompt.test.ts    NEW
+    ├── browser-web-ai-code-artifact.test.ts       NEW if needed
+    ├── browser-web-ai-code-dev-context.test.ts    NEW
+    ├── browser-web-ai-code-route.test.ts          NEW
+    └── browser-web-ai-multi-upload.test.ts        NEW or MODIFY existing attachment test
 ```
 
 ## Part 2 — Diff-Level Plan
@@ -177,6 +180,8 @@ After:
 ### B. agbrowse Skill Module
 
 #### NEW `skills/web-ai/modules/gpt-dev-agent-context.md`
+
+Create the new directory `skills/web-ai/modules/`.
 
 Complete content intent:
 - Title: `GPT Dev-Agent Context for ChatGPT Code Mode`.
@@ -294,6 +299,37 @@ Orchestrates:
 - artifact retrieval;
 - plan file validation.
 
+#### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/src/browser/web-ai/types.ts`
+
+Before:
+- `QuestionEnvelopeInput` and related command input shapes carry singular `filePath`.
+
+After:
+- Add optional `filePaths?: string[]` while preserving `filePath?: string` for backward compatibility.
+- `filePaths` takes precedence when present.
+- Keep JSON-compatible route payloads.
+
+#### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/src/browser/web-ai/question.ts`
+
+Before:
+- Envelope normalization is singular-file aware.
+
+After:
+- Preserve normalized `filePaths` in the envelope/input result without rendering file contents into the prompt.
+- Keep existing source-audit and context-package semantics unchanged.
+
+#### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/src/browser/web-ai/chatgpt.ts`
+
+Before:
+- Upload path is singular.
+- It rejects context package plus `--file`.
+
+After:
+- Normalize `filePaths` from `input.filePaths` or legacy `input.filePath`.
+- Upload every path in order.
+- Preserve the context-package plus explicit `--file` rejection for normal `send/query`.
+- Allow code mode to provide the automatic context zip plus caller files through `filePaths` because that is not the legacy context-package transport.
+
 #### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/bin/commands/browser-web-ai.ts`
 
 Before:
@@ -307,10 +343,23 @@ After:
   - `--output-dir`
   - `--multi-zip`
   - `--conversation`
-- Route to cli-jaw's local code-mode runtime.
+- Route through the existing CLI-to-server browser API by posting to `/web-ai/code` and `/web-ai/code-extract`; do not bypass the HTTP browser API unless a later audit proves the command is intentionally local-only.
 - Update help text to remove “standalone agbrowse only” claim.
 
+#### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/src/routes/browser.ts`
+
+Before:
+- The browser route exposes existing web-ai commands but no `code` or `code-extract` endpoint.
+
+After:
+- Add POST handlers for `/api/browser/web-ai/code` and `/api/browser/web-ai/code-extract` matching the CLI path convention.
+- The route resolves the active provider page/session using the same dependency factory used by `send/query/poll`.
+- The route calls new `codeWebAi` / `extractCodeArtifacts` functions.
+- The route response remains JSON and preserves existing error envelope behavior.
+
 #### NEW `/Users/jun/Developer/new/700_projects/cli-jaw/skills_ref/web-ai/modules/gpt-dev-agent-context.md`
+
+Create the new directory `/Users/jun/Developer/new/700_projects/cli-jaw/skills_ref/web-ai/modules/`.
 
 Same semantic content as agbrowse, adjusted for cli-jaw wording.
 
@@ -355,6 +404,21 @@ Orchestrator test with fake query service:
 - caller files preserved after it;
 - ChatGPT-only guard;
 - output path/multi-zip handling.
+
+#### NEW `/Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-route.test.ts`
+
+Assert:
+- `/api/browser/web-ai/code` route is registered and calls the code-mode service.
+- `/api/browser/web-ai/code-extract` route is registered and calls extraction service.
+- Errors use the existing browser web-ai error envelope.
+
+#### NEW or MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-multi-upload.test.ts`
+
+Assert:
+- `filePaths[]` takes precedence over legacy `filePath`.
+- upload order is preserved.
+- normal context package plus explicit `--file` remains rejected.
+- code-mode-provided automatic context zip plus caller files is accepted.
 
 #### MODIFY `/Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-cli-contract.test.ts`
 
@@ -415,6 +479,8 @@ npm --prefix /Users/jun/Developer/new/700_projects/cli-jaw test -- \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-mode-prompt.test.ts \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-mode.test.ts \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-dev-context.test.ts \
+  /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-route.test.ts \
+  /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-multi-upload.test.ts \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-cli-contract.test.ts \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/web-ai-skill-policy.test.ts
 npm --prefix /Users/jun/Developer/new/700_projects/cli-jaw run typecheck
