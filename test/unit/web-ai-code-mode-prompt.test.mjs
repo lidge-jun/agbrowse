@@ -24,6 +24,7 @@ describe('buildCodeModePrompt', () => {
         expect(prompt).toContain('가능하면 8개');
         expect(prompt).toContain('20개 이상도 작성해도 된다');
         expect(prompt).toContain('응답 종료 후 사라질 수 있으므로');
+        expect(prompt).toContain('[x] 로 갱신');
         expect(prompt).toContain('도구가 없으면 절대 사용했다고 말하지 말고');
         expect(prompt).toContain(`container.exec 로 단 하나의 ${CODE_ARTIFACT_PATH}`);
         expect(prompt).toContain('find /mnt/data -maxdepth 1 -name "*.zip" -print');

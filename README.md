@@ -736,6 +736,8 @@ conversations, but old artifacts may predate the plan-file contract.
 Do not treat disappearance of the visible todo UI after the response finishes
 as a failure; the zip-root plan file is the durable checklist. Small generated
 projects usually need 5-10 plan items, but complex projects may use 20 or more.
+Completed items in the zip-root plan file should be marked `[x]` before final
+packaging.
 
 Verify recovered archives locally when correctness matters:
 

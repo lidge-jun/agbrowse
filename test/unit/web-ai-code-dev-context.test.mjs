@@ -41,6 +41,7 @@ describe('code dev-agent context bundle', () => {
         expect(contextMarkdown).toContain('Linux sandbox');
         expect(contextMarkdown).toContain('turn_plan.update_turn_plan');
         expect(contextMarkdown).toContain('20+ items');
+        expect(contextMarkdown).toContain('marked `[x]`');
         expect(contextMarkdown).toContain('visible todo UI may disappear');
 
         const manifest = await readCodeDevContextManifest(result.path);

@@ -353,7 +353,8 @@ finishes; the durable plan file inside the zip is the required checklist. New
 `web-ai code` retrieval fails closed when a code zip lacks `PLAN.md` or
 `00_plan.md`; `code-extract` can still recover legacy artifacts from older
 conversations. Small code artifacts usually need 5-10 checklist items, but
-complex artifacts may use 20 or more.
+complex artifacts may use 20 or more. Completed items in the zip-root plan file
+should be marked `[x]` before final packaging.
 
 After extraction, verify locally when correctness matters:
 
