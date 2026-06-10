@@ -42,8 +42,9 @@
 
 - 의존성 vs vendoring: 사용자가 명시적으로 무의존 접목 선택. esbuild는 vendoring
   시점 1회 도구 (런타임/CI 미사용).
-- lite 번들(`dist/index.js`) 사용 — `defuddle/full`(수식 파싱 포함)은 282KB 대비
-  이득이 적어 제외.
+- ~~lite 번들(`dist/index.js`) 사용~~ → **full 번들로 변경** (구현 중 발견:
+  markdown serializer가 full에만 포함, lite는 `markdown:true` 무시 — 구현 결과
+  섹션 참조).
 - fetch 정적 경로(JSDOM 필요)는 범위 제외 — 브라우저가 있을 때만 defuddle 후보
   생성. Jina 후보는 그대로 유지(제거 아님, 경쟁 후보).
 
