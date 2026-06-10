@@ -23,6 +23,7 @@ must be treated as historical  do not edit them after release.evidence
 | Topic | Folder | Status |
 | --- | --- | --- |
 | K-BrowseComp search gap analysis | `_plan/260608_kbrowsecomp_search_gap/` | Research/spec complete; implementation deferred. |
+| web-ai GPT Code Mode (artifact zip 회수) | `_plan/260611_webai_gpt_code_mode/` | Plan + feasibility verified (download path works); implementation not started. |
 
 ## `_fin/mvp/` topics
 
