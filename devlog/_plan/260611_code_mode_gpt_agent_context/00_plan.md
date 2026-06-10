@@ -108,10 +108,16 @@ Planned exports:
 
 ```js
 export const GPT_DEV_AGENT_CONTEXT_BASENAME = 'gpt-dev-agent-context.zip';
-export function resolveCodeDevContextPaths(baseDir = process.cwd()) {}
+export function resolveCodeDevContextPaths(options = {}) {}
 export async function ensureCodeDevContextZip(options = {}) {}
 export async function readCodeDevContextManifest(zipPath) {}
 ```
+
+Path resolution rule:
+- Resolve checked-in skill module assets relative to this module/package location, not `process.cwd()`.
+- In agbrowse ESM, derive the package root from `import.meta.url` by walking from `web-ai/code-dev-context.mjs` to the repository/package root, then append `skills/web-ai/modules/`.
+- Accept an explicit `packageRoot` override for tests.
+- Tests must call the resolver from a temporary non-repo cwd to prove global/package usage does not depend on caller cwd.
 
 #### MODIFY `web-ai/code-mode-prompt.mjs`
 
@@ -221,6 +227,8 @@ Assertions:
 - `ensureCodeDevContextZip` creates a valid zip.
 - Manifest and markdown entries are present.
 - Bundle text mentions Linux sandbox, `PLAN.md`, `00_plan.md`, `turn_plan.update_turn_plan`, and artifact exclusions.
+- Resolver works when the current process cwd is a temporary directory outside the repo.
+- `npm pack --dry-run --json` includes `skills/web-ai/modules/gpt-dev-agent-context.md` and `skills/web-ai/modules/gpt-dev-agent-context.zip`.
 
 #### MODIFY `test/unit/web-ai-code-mode-prompt.test.mjs`
 
@@ -284,6 +292,11 @@ TypeScript port of agbrowse code prompt contract. Use strict-compatible exported
 TypeScript port of the saved context zip resolver/builder. Must use cli-jaw paths:
 - `skills_ref/web-ai/modules/gpt-dev-agent-context.md`
 - `skills_ref/web-ai/modules/gpt-dev-agent-context.zip`
+
+Path resolution rule:
+- Resolve from the compiled/source module location or an explicit package root, not caller cwd.
+- For source tests, support an explicit `packageRoot` override.
+- For runtime, prefer cli-jaw's package root resolution conventions if an existing helper exists; otherwise derive from the module URL/path and verify with a non-repo cwd test.
 
 #### NEW `/Users/jun/Developer/new/700_projects/cli-jaw/src/browser/web-ai/code-artifact.ts`
 
@@ -395,7 +408,11 @@ Mirror prompt assertions from agbrowse.
 
 #### NEW `/Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-dev-context.test.ts`
 
-Zip bundle validation.
+Zip bundle validation:
+- saved markdown and zip entries exist;
+- manifest is readable;
+- resolver works when the current process cwd is a temporary directory outside the repo;
+- package dry-run includes `skills_ref/web-ai/modules/gpt-dev-agent-context.md` and `.zip` if npm packaging includes `skills_ref`.
 
 #### NEW `/Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-code-mode.test.ts`
 
@@ -450,6 +467,7 @@ npm test -- --run \
   test/unit/web-ai-code-dev-context.test.mjs
 npm run typecheck
 npm run test:release-gates
+npm pack --dry-run --json
 git diff --check
 ```
 
@@ -484,6 +502,7 @@ npm --prefix /Users/jun/Developer/new/700_projects/cli-jaw test -- \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/browser-web-ai-cli-contract.test.ts \
   /Users/jun/Developer/new/700_projects/cli-jaw/tests/unit/web-ai-skill-policy.test.ts
 npm --prefix /Users/jun/Developer/new/700_projects/cli-jaw run typecheck
+npm --prefix /Users/jun/Developer/new/700_projects/cli-jaw pack --dry-run --json
 bash /Users/jun/Developer/new/700_projects/cli-jaw/structure/verify-counts.sh
 git -C /Users/jun/Developer/new/700_projects/cli-jaw diff --check
 ```
