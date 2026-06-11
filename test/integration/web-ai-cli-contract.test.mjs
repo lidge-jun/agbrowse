@@ -27,7 +27,33 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('out.png, out-2.png, out-3.png');
         expect(result.stdout).toContain('query --session <id> sends a new prompt');
         expect(result.stdout).toContain('--session "$SID"');
+        expect(result.stdout).toMatch(/agbrowse web-ai code\s+--vendor chatgpt/);
         expect(result.stdout).toMatch(/agbrowse web-ai query\s+--vendor grok/);
+    });
+
+    it('shows command-specific code-mode help without a browser', async () => {
+        const result = await execBrowser(['web-ai', 'code', '--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('Usage:');
+        expect(result.stdout).toContain('agbrowse web-ai code --vendor chatgpt --prompt <build-spec>');
+        expect(result.stdout).toContain('subcommand, not a --code flag');
+        expect(result.stdout).toContain('--output-zip <path>');
+        expect(result.stdout).toContain('--multi-zip');
+        expect(result.stdout).toContain('PLAN.md or 00_plan.md');
+        expect(result.stdout).toContain('turn_plan.update_turn_plan');
+        expect(result.stdout).toContain('MACHINE: /mnt/data/result.zip');
+    });
+
+    it('shows command-specific code extraction help without a browser', async () => {
+        const result = await execBrowser(['web-ai', 'code-extract', '--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('Usage:');
+        expect(result.stdout).toContain('agbrowse web-ai code-extract --vendor chatgpt');
+        expect(result.stdout).toContain('It does not send a new prompt');
+        expect(result.stdout).toContain('--conversation <id|url>');
+        expect(result.stdout).toContain('--session <sessionId>');
+        expect(result.stdout).toContain('--multi-zip');
+        expect(result.stdout).toContain('A copied /mnt/data/result.zip text line alone is not enough');
     });
 
     it('supports render command without a running browser', async () => {

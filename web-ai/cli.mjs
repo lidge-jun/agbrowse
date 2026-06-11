@@ -278,6 +278,8 @@ Examples:
   agbrowse web-ai query   --vendor chatgpt --session "$SID" --inline-only \\
                                           --output-image ./next.png \\
                                           --prompt "Create another image in this same conversation"
+  agbrowse web-ai code    --vendor chatgpt --model thinking --effort standard \\
+                                          --prompt "Build an MVP" --output-zip ./result.zip
 
   # Re-retrieve a zip from an existing ChatGPT code-mode conversation.
   agbrowse web-ai code-extract --vendor chatgpt \\
@@ -297,6 +299,104 @@ Examples:
   # Watch from a supervisor or terminal until complete.
   agbrowse web-ai watch --session "$SID" --interval 15s --poll-timeout 30 --navigate
 `;
+
+export const WEB_AI_CODE_USAGE = `
+Usage:
+  agbrowse web-ai code --vendor chatgpt --prompt <build-spec> [options]
+
+What it does:
+  ChatGPT-only code generation through the visible ChatGPT web UI. This is a
+  subcommand, not a --code flag. It sends a strict code-mode contract prompt,
+  automatically uploads the saved GPT dev-agent context zip first, waits for
+  ChatGPT to create /mnt/data/*.zip in its sandbox, retrieves the archive
+  headlessly through the provider download API, verifies the zip, and writes it
+  locally.
+
+Required:
+  --prompt <text>       Build spec for ChatGPT.
+
+Recommended model:
+  --model thinking      Use ChatGPT thinking mode for code work.
+  --effort <alias>      thinking: light|standard|extended|heavy
+                        pro: standard|extended
+
+Artifact options:
+  --output-zip <path>   Save one generated zip to this path.
+  --multi-zip           Retrieve several named /mnt/data/*.zip artifacts.
+  --output-dir <dir>    Save multi-zip artifacts into this directory.
+
+Optional inputs:
+  --file <path>         Repeatable upload; may mix zip, image, PDF, docs, text.
+  --context-from-files <glob|path>
+  --context-exclude <glob>
+  --context-file <path>
+  --context-transport <upload|inline>
+
+Behavior:
+  New code artifacts must include PLAN.md or 00_plan.md at the zip root.
+  The visible turn_plan.update_turn_plan checklist is best-effort and may be
+  transient; the plan file inside the zip is the durable checklist.
+  The final ChatGPT answer should include both:
+    DOWNLOAD: [result.zip](sandbox:/mnt/data/result.zip)
+    MACHINE: /mnt/data/result.zip
+
+Examples:
+  agbrowse web-ai code --vendor chatgpt --model thinking --effort standard \\
+          --prompt "Create a Flask hello-world MVP." \\
+          --output-zip ./result.zip
+
+  agbrowse web-ai code --vendor chatgpt --model thinking --effort heavy \\
+          --multi-zip --output-dir ./artifacts \\
+          --prompt "Create backend.zip and frontend.zip as separate deliverables."
+
+After extraction:
+  unzip -t ./result.zip
+  unzip -l ./result.zip
+`;
+
+export const WEB_AI_CODE_EXTRACT_USAGE = `
+Usage:
+  agbrowse web-ai code-extract --vendor chatgpt [conversation selector] [options]
+
+What it does:
+  ChatGPT-only artifact re-extraction. It does not send a new prompt. It scans
+  the saved ChatGPT conversation JSON for /mnt/data/*.zip paths, mints the
+  provider download URL, fetches the cookie-bound payload inside the page,
+  validates the zip, and writes it locally.
+
+Conversation selector:
+  --url <chatgpt conversation URL>
+  --conversation <id|url>
+  --session <sessionId>
+  Or omit these when the target ChatGPT conversation tab is already open.
+
+Artifact options:
+  --output-zip <path>   Save one recovered zip to this path.
+  --multi-zip           Recover every mentioned /mnt/data/*.zip artifact.
+  --output-dir <dir>    Save multi-zip artifacts into this directory.
+
+Requirements:
+  The original conversation must still be accessible in the logged-in ChatGPT
+  browser profile. A copied /mnt/data/result.zip text line alone is not enough.
+
+Examples:
+  agbrowse web-ai code-extract --vendor chatgpt \\
+          --url "https://chatgpt.com/c/<conversation-id>" \\
+          --output-zip ./result.zip
+
+  agbrowse web-ai code-extract --vendor chatgpt \\
+          --url "https://chatgpt.com/c/<conversation-id>" \\
+          --multi-zip --output-dir ./artifacts
+`;
+
+/**
+ * @param {string|undefined} command
+ */
+function usageForCommand(command) {
+    if (command === 'code') return WEB_AI_CODE_USAGE.trim();
+    if (command === 'code-extract') return WEB_AI_CODE_EXTRACT_USAGE.trim();
+    return WEB_AI_USAGE.trim();
+}
 
 /**
  * @param {any} argv
@@ -364,7 +464,7 @@ async function runWebAiCliInner(argv = [], deps) {
         return { ok: true, status: 'help' };
     }
     if (argv.includes('--help')) {
-        console.log(WEB_AI_USAGE.trim());
+        console.log(usageForCommand(command));
         return { ok: true, status: 'help' };
     }
     if (!COMMANDS.has(command)) {
