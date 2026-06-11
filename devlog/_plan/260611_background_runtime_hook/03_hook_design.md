@@ -1,5 +1,9 @@
 # Task 3 — cli-jaw Background Runtime Hook 설계 초안
 
+> **➡️ 이관됨 (2026-06-11)**: 이 초안은 cli-jaw devlog로 이관·확장되었다. 최신 상세 설계는
+> `cli-jaw/devlog/_plan/260611_bgtask_background_runtime/` (01 런타임 분석 + 02 상세 설계)
+> 를 보라. 이 문서는 agbrowse 쪽 리서치 기록으로만 유지하며 더 이상 갱신하지 않는다.
+
 > 목표: `[현재] Boss turn → web-ai query (30분 블로킹) → 턴 종료`를
 > `[목표] Boss turn → web-ai send → 턴 종료 → jaw 서버가 백그라운드 모니터링 → 완료 시 boss 자동 재호출`로.
 > web-ai 전용이 아닌 **범용 장기 프로세스 hook**으로 설계한다. (설계 문서 — 구현은 별도 plan)
