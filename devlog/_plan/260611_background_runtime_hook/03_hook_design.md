@@ -55,6 +55,11 @@ jaw server ──spawn──▶ agbrowse web-ai watch --session SID --json
 
 - 완료 감지 1차: stdout 라인 파서 (`watch.complete|watch.timeout|watch.error`).
   2차(보강): 프로세스 exit + `sessions show --json` 최종 확인.
+- **headed Chrome 생존** (02 문서 gap #3): 별도 관리 불필요 — agbrowse provider 명령은
+  CDP 부재 시 headed Chrome을 자동 기동하고 (`web-ai/cli.mjs:183` usage 명시,
+  `ensureHeadedBrowserForWebAi`), 탭 유실은 tab-recovery가 복구. Chrome/탭 사망은
+  watch tick의 `reattach-mismatch`/`capability-fail`로 표면화 → 스톨 감지 →
+  `--navigate` 재spawn으로 수렴.
 - 범용화: web-ai가 아닌 작업(CI/build/deploy)은 "임의 명령 + 완료 판정 규칙"으로 추상화 (§2).
 - 스톨 감지는 `worker-monitor.ts:14-58` 패턴 재사용 (tick이 N분간 없으면 onStall → 재spawn).
 
