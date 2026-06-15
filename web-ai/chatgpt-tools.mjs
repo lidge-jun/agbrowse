@@ -235,10 +235,11 @@ async function clickMenuItem(page, item) {
 
 /** @param {Page} page */
 async function closeComposerMenus(page) {
-    for (let i = 0; i < 2; i += 1) {
-        await page.keyboard.press('Escape').catch(() => undefined);
-        await page.waitForTimeout(150).catch(() => undefined);
-    }
+    // ChatGPT uses a second Escape to remove the active composer tool pill
+    // (for example, Web search becomes a "Search, click to remove" pill).
+    // One Escape is enough to close an open menu without undoing selection.
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(150).catch(() => undefined);
 }
 
 /** @param {Page} page @param {string} combo */

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { resolveChatGptComposerToolRequests, selectChatGptComposerTools } from '../../web-ai/chatgpt-tools.mjs';
 
 const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
+const chatgptToolsSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt-tools.mjs'), 'utf8');
 
 describe('web-ai ChatGPT composer tool resolver', () => {
     it('does not touch ChatGPT composer menus without explicit tool requests', async () => {
@@ -24,6 +25,11 @@ describe('web-ai ChatGPT composer tool resolver', () => {
 
         expect(readyIndex).toBeGreaterThan(-1);
         expect(toolsIndex).toBeGreaterThan(readyIndex);
+    });
+
+    it('does not clear selected composer tools with a second Escape', () => {
+        expect(chatgptToolsSrc).toContain('Search, click to remove');
+        expect(chatgptToolsSrc).not.toContain('for (let i = 0; i < 2; i += 1)');
     });
 
     it('normalizes explicit tool and plugin aliases', () => {
