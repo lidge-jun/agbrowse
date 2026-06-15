@@ -185,15 +185,15 @@ async function extractResearchReport(page, deps) {
  * Execute a Deep Research query in ChatGPT.
  * @param {any} page
  * @param {any} deps
- * @param {{ prompt: string, session: any, timeoutMs?: number }} opts
+ * @param {{ prompt: string, session: any, timeoutMs?: number, skipModeActivation?: boolean }} opts
  * @returns {Promise<DeepResearchResult>}
  */
-export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs = 1_200_000 }) {
+export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs = 1_200_000, skipModeActivation = false }) {
     const warnings = [];
 
     updateSession(session.sessionId, { researchMode: 'deep' });
 
-    const modeActivated = await activateDeepResearchMode(page);
+    const modeActivated = skipModeActivation ? true : await activateDeepResearchMode(page);
     if (!modeActivated) {
         warnings.push('deep-research-mode-button-not-found-using-prompt-prefix');
     }

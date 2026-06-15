@@ -12,6 +12,12 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(modelSrc).toContain('Heavy');
         expect(modelSrc).toContain('Extra High');
         expect(modelSrc).toContain('Pro Extended');
+        expect(modelSrc).toContain('즉시');
+        expect(modelSrc).toContain('중간');
+        expect(modelSrc).toContain('높음');
+        expect(modelSrc).toContain('매우 높음');
+        expect(modelSrc).toContain('Pro 확장');
+        expect(modelSrc).toContain('composer-intelligence-pro-thinking-effort-trigger');
         expect(modelSrc).toContain('readActiveModelPill');
     });
 

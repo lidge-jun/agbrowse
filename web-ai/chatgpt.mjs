@@ -43,6 +43,7 @@ import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs'
 import { collectImages, isImageOnlyGeneratedImageChromeText } from './chatgpt-images.mjs';
 import { resolveArtifactsDir } from './session-artifacts.mjs';
 import { sendDeepResearch } from './chatgpt-deep-research.mjs';
+import { selectChatGptComposerTools } from './chatgpt-tools.mjs';
 import { buildTargetMismatchResult } from './session-target-guard.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
@@ -175,6 +176,7 @@ export async function sendWebAi(deps, input = {}) {
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelope(envelope);
     const selectedModel = await selectChatGptModel(page, input.model, { effort: input.reasoningEffort });
+    const selectedTools = await selectChatGptComposerTools(page, input);
     await waitForStableAssistantCount(page);
     const assistantCount = await countAssistantMessages(page);
     const baseline = saveBaseline({
@@ -295,7 +297,7 @@ export async function sendWebAi(deps, input = {}) {
             url: finalUrl,
             sessionId: session.sessionId,
             baseline,
-            usedFallbacks: [...usedFallbacks, ...(selectedModel?.usedFallbacks || [])],
+            usedFallbacks: [...usedFallbacks, ...(selectedModel?.usedFallbacks || []), ...(selectedTools?.usedFallbacks || [])],
             ...(traceSummary ? { traceSummary } : {}),
             contextPack: contextPack ? summarizeContextPack(contextPack) : undefined,
             warnings: [
@@ -304,8 +306,12 @@ export async function sendWebAi(deps, input = {}) {
                 ...(contextAttachmentPath ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
                 ...attachmentWarnings,
                 ...(selectedModel?.warnings || []),
+                ...(selectedTools?.warnings || []),
                 ...(selectedModel?.selected ? [`model selected: ${selectedModel.selected}${selectedModel.alreadySelected ? ' (already selected)' : ''}`] : []),
                 ...(selectedModel?.effort ? [`reasoning effort selected: ${selectedModel.effort}`] : []),
+                ...(selectedTools?.selectedTools?.length ? [`composer tools selected: ${selectedTools.selectedTools.join(', ')}`] : []),
+                ...(selectedTools?.selectedPlugins?.length ? [`composer plugins selected: ${selectedTools.selectedPlugins.join(', ')}`] : []),
+                ...(selectedTools?.reasons?.length ? [`composer tool reasons: ${selectedTools.reasons.join(', ')}`] : []),
             ],
         };
     } finally {
@@ -626,10 +632,12 @@ export async function deepResearchWebAi(deps, input = {}) {
         port: deps.getPort?.() || 9222,
     });
     const timeoutMs = Math.max(1, Number(input.timeout || 1200)) * 1000;
+    const selectedTools = await selectChatGptComposerTools(page, { ...input, research: 'deep' });
     const result = await sendDeepResearch(page, deps, {
         prompt: (/** @type {any} */ (envelope)).composerText || input.prompt,
         session,
         timeoutMs,
+        skipModeActivation: selectedTools?.selectedTools?.includes('deep-research') === true,
     });
     if (result.ok) {
         const refreshed = getSession(session.sessionId) || session;
@@ -648,7 +656,13 @@ export async function deepResearchWebAi(deps, input = {}) {
         ...result,
         vendor: envelope.vendor,
         url: page.url(),
-        usedFallbacks: [],
+        usedFallbacks: [...(selectedTools?.usedFallbacks || [])],
+        warnings: [
+            ...(result.warnings || []),
+            ...(selectedTools?.warnings || []),
+            ...(selectedTools?.selectedTools?.length ? [`composer tools selected: ${selectedTools.selectedTools.join(', ')}`] : []),
+            ...(selectedTools?.selectedPlugins?.length ? [`composer plugins selected: ${selectedTools.selectedPlugins.join(', ')}`] : []),
+        ],
     };
 }
 

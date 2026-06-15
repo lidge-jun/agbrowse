@@ -453,6 +453,42 @@ Do not claim cli-jaw parity for this command unless the equivalent cli-jaw
 command surface, retrieval runtime, tests, and installed skill docs are
 implemented there.
 
+## ChatGPT Composer Tools and Plugins
+
+ChatGPT's composer `+` menu can be selected before sending:
+
+```bash
+agbrowse web-ai query \
+  --vendor chatgpt \
+  --inline-only \
+  --tool web-search \
+  --plugin github \
+  --prompt "Review the current GitHub repo status."
+```
+
+Supported tool aliases:
+
+- `--tool image` → `이미지 만들기` / Create image
+- `--tool deep-research` or `--research deep` → `심층 리서치` / Deep Research
+- `--tool web-search` or `--web-search` → `웹 검색` / Web search
+- `--tool agent-mode` → `에이전트 모드`
+- `--tool tasks` → `할 일 만들기`
+
+Supported `--plugin` aliases under `더 보기`:
+
+- `github`, `gmail`, `google-drive`, `google-calendar`, `google-contacts`
+- `supabase`, `vercel`, `figma`, `canva`, `context7`, `openai-platform`
+
+Use `--auto-tools` when you want agbrowse to infer obvious tools from the prompt:
+
+- current/latest/news/price/official/source-sensitive prompt → web search
+- image/illustration/poster generation prompt → image
+- deep research / 심층 리서치 prompt → deep research
+- GitHub/repo/PR/branch prompt → GitHub plugin
+- Supabase/RLS/migration prompt → Supabase plugin
+
+Live-verified 2026-06-15 on Korean ChatGPT UI: `파일 추가 및 기타`, `이미지 만들기`, `심층 리서치`, `웹 검색`, `더 보기`, and plugins including `GitHub`, `Supabase`, `Vercel`, `Gmail`, `Google 드라이브`, `Google Calendar`.
+
 ## Generated Images
 
 Use ChatGPT only:
@@ -461,6 +497,7 @@ Use ChatGPT only:
 agbrowse web-ai query \
   --vendor chatgpt \
   --inline-only \
+  --tool image \
   --output-image ./out.png \
   --prompt "Create an image of a small robot holding a banana."
 ```
@@ -604,6 +641,16 @@ ChatGPT:
 - `thinking --effort heavy` selects `Extra High`.
 - `pro --effort standard` selects `Pro Extended` when the simplified UI only exposes Pro Extended; if ChatGPT exposes a `Pro Standard` hover submenu, treat it as an optional refinement rather than a required selector.
 - `pro --effort extended` selects `Pro Extended`.
+
+2026-06-15 Korean ChatGPT Intelligence UI note:
+
+- The composer model pill may show `중간` and open a `지능` menu.
+- `instant` / `thinking --effort light` select `즉시`.
+- `thinking --effort standard` selects `중간`.
+- `thinking --effort extended` selects `높음`.
+- `thinking --effort heavy` selects `매우 높음`.
+- `pro --effort extended` selects `Pro 확장`.
+- Pro effort trigger observed as `data-testid="composer-intelligence-pro-thinking-effort-trigger"`.
 
 Gemini:
 

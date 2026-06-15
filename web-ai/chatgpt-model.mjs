@@ -35,9 +35,10 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
 ];
 
 const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-gpt-"]';
-const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b)/i;
+const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)/i;
 const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Standard Pro', 'Extended Pro'];
 const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
+    '[data-testid="composer-intelligence-pro-thinking-effort-trigger"]',
     '[data-testid*="thinking-effort"]',
     '[data-testid*="reasoning-effort"]',
     '[data-testid*="effort"]',
@@ -49,9 +50,9 @@ const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
 
 /** @type {Readonly<Record<ModelChoice, ModelOptionConfig>>} */
 export const CHATGPT_MODEL_OPTIONS = {
-    instant: { testIds: ['model-switcher-gpt-5-5', 'model-switcher-gpt-5-3'], labels: ['Instant'] },
-    thinking: { testIds: ['model-switcher-gpt-5-5-thinking', 'model-switcher-gpt-5-5-thinking-thinking-effort'], labels: ['Thinking', 'Medium', 'High', 'Extra High'] },
-    pro: { testIds: ['model-switcher-gpt-5-5-pro', 'model-switcher-gpt-5-5-pro-thinking-effort'], labels: ['Pro', 'Heavy', 'Pro Standard', 'Pro Extended'] },
+    instant: { testIds: ['model-switcher-gpt-5-5', 'model-switcher-gpt-5-3'], labels: ['Instant', '즉시'] },
+    thinking: { testIds: ['model-switcher-gpt-5-5-thinking', 'model-switcher-gpt-5-5-thinking-thinking-effort'], labels: ['Thinking', 'Medium', 'High', 'Extra High', '중간', '높음', '매우 높음'] },
+    pro: { testIds: ['model-switcher-gpt-5-5-pro', 'model-switcher-gpt-5-5-pro-thinking-effort'], labels: ['Pro', 'Heavy', 'Pro Standard', 'Pro Extended', 'Pro 확장', '프로 확장'] },
 };
 
 /** @type {Readonly<Record<string, EffortConfig>>} */
@@ -77,25 +78,25 @@ export const CHATGPT_MODEL_EFFORT_OPTIONS = {
 /** @type {Readonly<Record<ModelChoice, { defaultLabels: readonly string[], efforts: Readonly<Record<string, readonly string[]>> }>>} */
 const CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS = {
     instant: {
-        defaultLabels: ['Instant'],
+        defaultLabels: ['Instant', '즉시'],
         efforts: {
-            light: ['Instant'],
+            light: ['Instant', '즉시'],
         },
     },
     thinking: {
-        defaultLabels: ['Medium'],
+        defaultLabels: ['Medium', '중간'],
         efforts: {
-            light: ['Instant'],
-            standard: ['Medium'],
-            extended: ['High'],
-            heavy: ['Extra High'],
+            light: ['Instant', '즉시'],
+            standard: ['Medium', '중간'],
+            extended: ['High', '높음'],
+            heavy: ['Extra High', '매우 높음'],
         },
     },
     pro: {
-        defaultLabels: ['Pro Extended'],
+        defaultLabels: ['Pro Extended', 'Pro 확장', '프로 확장'],
         efforts: {
-            standard: ['Pro Extended'],
-            extended: ['Pro Extended'],
+            standard: ['Pro Extended', 'Pro 확장', '프로 확장'],
+            extended: ['Pro Extended', 'Pro 확장', '프로 확장'],
         },
     },
 };
@@ -679,9 +680,9 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
          * @param {string[]} labelsForChoice
          */
         function matchesModelText(text, choice, labelsForChoice) {
-            if (choice === 'instant') return /\b(Instant|Fast)\b/i.test(text);
-            if (choice === 'thinking') return /\b(Thinking|Think)\b/i.test(text);
-            if (choice === 'pro') return /\b(Pro|Heavy)\b/i.test(text);
+            if (choice === 'instant') return /\b(Instant|Fast)\b|즉시/i.test(text);
+            if (choice === 'thinking') return /\b(Thinking|Think)\b|중간|높음|매우 높음/i.test(text);
+            if (choice === 'pro') return /\b(Pro|Heavy)\b|Pro 확장|프로 확장/i.test(text);
             return labelsForChoice.some(label => new RegExp(`(^|\\s)${label}\\b`, 'i').test(text));
         }
     }, { expectedLabels: labels, modelChoice: model, triggerSelectors: CHATGPT_EFFORT_TRIGGER_SELECTORS }).catch(() => null);
@@ -897,7 +898,7 @@ async function isModelMenuOpen(page) {
             const testId = item.getAttribute?.('data-testid') || '';
             if (!text) return false;
             if (testId.includes('effort') && /^(Light|Standard|Extended|Heavy|Standard Pro|Extended Pro)$/i.test(text)) return false;
-            return /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b)/i.test(text);
+            return /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)/i.test(text);
         }))
         .catch(() => false);
     if (legacyOpen || await isSimplifiedIntelligenceMenuOpen(page, null, null)) return true;
@@ -914,9 +915,9 @@ async function isModelMenuOpen(page) {
  * @returns {RegExp}
  */
 function modelLabelPattern(choice, label) {
-    if (choice === 'instant') return /\b(Instant|Fast)\b/i;
-    if (choice === 'thinking') return /\b(Thinking|Think|Medium|High|Extra High)\b/i;
-    if (choice === 'pro') return /\b(Pro|Heavy|Pro Standard|Pro Extended)\b/i;
+    if (choice === 'instant') return /\b(Instant|Fast)\b|즉시/i;
+    if (choice === 'thinking') return /\b(Thinking|Think|Medium|High|Extra High)\b|중간|높음|매우 높음/i;
+    if (choice === 'pro') return /\b(Pro|Heavy|Pro Standard|Pro Extended)\b|Pro 확장|프로 확장/i;
     return new RegExp(`(^|\\s)${escapeRegExp(label)}\\b`, 'i');
 }
 
@@ -933,10 +934,10 @@ function effortLabelPattern(label) {
  * @returns {ModelChoice | null}
  */
 function modelChoiceFromText(text) {
-    if (/\b(Instant|Fast)\b/i.test(text)) return 'instant';
+    if (/\b(Instant|Fast)\b|즉시/i.test(text)) return 'instant';
     if (isLegacyProModelLabel(text)) return null;
-    if (/\b(Pro Standard|Pro Extended)\b/i.test(text)) return 'pro';
-    if (/\b(Medium|High|Extra High)\b/i.test(text)) return 'thinking';
+    if (/\b(Pro Standard|Pro Extended)\b|Pro 확장|프로 확장/i.test(text)) return 'pro';
+    if (/\b(Medium|High|Extra High)\b|중간|높음|매우 높음/i.test(text)) return 'thinking';
     if (/\b(Thinking|Think)\b/i.test(text)) return 'thinking';
     if (/\b(Pro|Heavy)\b/i.test(text)) return 'pro';
     return null;
@@ -968,11 +969,11 @@ async function findOptionByExactLabels(page, labels) {
 async function isSimplifiedIntelligenceMenuOpen(page, model, effort) {
     const requiredLabels = effort && model
         ? simplifiedEffortLabels(model, effort)
-        : ['Instant', 'Medium', 'High', 'Extra High'];
+        : ['Instant', 'Medium', 'High', 'Extra High', '즉시', '중간', '높음', '매우 높음'];
     if (requiredLabels.length === 0) return false;
     return page.locator('[role="menu"]').evaluateAll((menus, labels) => menus.some(menu => {
         const text = /** @type {HTMLElement} */ (menu).innerText || menu.textContent || '';
-        if (!/\bIntelligence\b/i.test(text)) return false;
+        if (!/\bIntelligence\b|지능/i.test(text)) return false;
         return labels.some(label => menuTextHasExactLine(text, label));
     }), requiredLabels).catch(() => false);
 }
@@ -1028,7 +1029,7 @@ function menuTextHasExactLine(text, label) {
 function normalizeModelPickerText(text) {
     return String(text || '')
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }

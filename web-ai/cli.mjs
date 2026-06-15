@@ -130,6 +130,17 @@ Attachments and context:
   --inline-only                     Required for send/query without files
   --file <path>                     Upload a file; repeat for several files of
                                     mixed types (zip + image + doc) in one turn
+  --tool <name>                     ChatGPT composer tool to select before send;
+                                    repeatable. Known: image, deep-research,
+                                    web-search, agent-mode, tasks.
+  --plugin <name>                   ChatGPT "More" plugin/tool to select;
+                                    repeatable. Known: github, gmail,
+                                    google-drive, google-calendar, supabase,
+                                    vercel, figma, canva, context7.
+  --web-search                      Shortcut for --tool web-search.
+  --auto-tools                      Heuristically select ChatGPT tools/plugins
+                                    from the prompt (current/news → web search,
+                                    image intent → image, repo/GitHub → GitHub).
   --output-image <path>             Save generated ChatGPT images. If several
                                     images are returned, siblings are written
                                     as out.png, out-2.png, out-3.png.
@@ -332,12 +343,6 @@ Artifact options:
   --multi-zip           Retrieve several named /mnt/data/*.zip artifacts.
   --output-dir <dir>    Save multi-zip artifacts into this directory.
                         Default: ./code-artifacts-<conversation>/.
-  --context-refresh     Re-upload the dev-agent context zip on a continuation
-                        turn. By default it is attached only on the FIRST turn
-                        of a conversation; continuation turns (--url /
-                        --conversation / --session) skip it because the
-                        container /mnt and conversation history already carry
-                        the contract.
 
 Optional inputs:
   --file <path>         Repeatable upload; may mix zip, image, PDF, docs, text.
@@ -345,6 +350,10 @@ Optional inputs:
   --context-exclude <glob>
   --context-file <path>
   --context-transport <upload|inline>
+  --context-refresh     Re-upload the dev-agent context zip on a continuation
+                        turn. By default it is attached only on the FIRST turn
+                        of a conversation; continuation turns (--url /
+                        --conversation / --session) skip it.
 
 Behavior:
   New code artifacts must include PLAN.md or 00_plan.md at the zip root.
@@ -530,6 +539,10 @@ async function runWebAiCliInner(argv = [], deps) {
             'source-audit-scope': { type: 'string' },
             'source-audit-date': { type: 'string' },
             file: { type: 'string', multiple: true },
+            tool: { type: 'string', multiple: true },
+            plugin: { type: 'string', multiple: true },
+            'web-search': { type: 'boolean', default: false },
+            'auto-tools': { type: 'boolean', default: false },
             'output-image': { type: 'string' },
             'output-zip': { type: 'string' },
             'output-dir': { type: 'string' },
@@ -619,6 +632,10 @@ async function runWebAiCliInner(argv = [], deps) {
         attachmentPolicy: filePaths.length ? 'upload' : 'inline-only',
         filePath: filePaths[0],
         filePaths,
+        tools: values.tool || [],
+        plugins: values.plugin || [],
+        webSearch: values['web-search'] === true,
+        autoTools: values['auto-tools'] === true,
         outputImage: values['output-image'],
         outputZip: values['output-zip'],
         outputDir: values['output-dir'],
