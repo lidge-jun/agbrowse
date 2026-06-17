@@ -1,0 +1,12 @@
+{
+  "viewport": { "width": 1200, "height": 800 },
+  "dpr": 2,
+  "clip": { "x": 300, "y": 100, "width": 400, "height": 300 },
+  "candidate": {
+    "found": true,
+    "bbox": { "x": 80, "y": 40, "width": 120, "height": 60 },
+    "point": { "x": 140, "y": 70 },
+    "confidence": 0.84
+  },
+  "expectedCssPoint": { "x": 370, "y": 135 }
+}

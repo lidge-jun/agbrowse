@@ -454,14 +454,17 @@ navigation, reload, tab switch, or any major page mutation.
 
 Use `vision-click` only when a target is visible in a screenshot but has no
 usable DOM/ref target, such as canvas/WebGL-heavy UIs.
+The normal order is ref click first, coordinate click last. Vision results are
+treated as bbox candidates with confidence; low-confidence or legacy point-only
+results require verification instead of clicking directly.
 
 ```bash
 agbrowse screenshot --json
 agbrowse-vision-click "the visible Submit button"
 ```
 
-The vision path handles device-pixel-ratio correction before sending
-`page.mouse.click()` coordinates.
+The vision path handles device-pixel-ratio correction and clip-origin evidence
+before sending `page.mouse.click()` coordinates.
 
 ## Web AI
 

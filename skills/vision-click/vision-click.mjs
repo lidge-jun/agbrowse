@@ -18,13 +18,16 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     buildCoordPrompt,
-    extractCoordJson,
+    candidateCenter,
+    extractVisionCandidateJson,
     assertCodexCli,
     applyDprCorrection,
     clipAroundPoint,
     describeRegion,
+    isLowConfidence,
     parseVisionClickCliArgs,
     resolveRegionClip,
+    validateVisionCandidate,
 } from './vision-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,7 +79,7 @@ function browserCmd(args, opts = {}) {
 /**
  * @param {string} screenshotPath
  * @param {string} prompt
- * @returns {{found:boolean, x:number, y:number, description?:string}}
+ * @returns {import('./vision-core.mjs').VisionCandidate}
  */
 function codexVisionWithPrompt(screenshotPath, prompt) {
     const args = [
@@ -105,18 +108,18 @@ function codexVisionWithPrompt(screenshotPath, prompt) {
             const event = JSON.parse(line);
             const text = event.item?.text || event.item?.aggregated_output || '';
             if (!text) continue;
-            const coords = extractCoordJson(text);
-            if (coords) return coords;
+            const candidate = extractVisionCandidateJson(text);
+            if (candidate) return candidate;
         } catch { /* skip non-JSON lines */ }
     }
-    throw new Error(`No coordinate JSON in codex NDJSON output (${lines.length} lines)`);
+    throw new Error(`No vision candidate JSON in codex NDJSON output (${lines.length} lines)`);
 }
 
 /**
  * @param {string} screenshotPath
  * @param {string} target
  * @param {any} [options]
- * @returns {{found:boolean, x:number, y:number, description?:string}}
+ * @returns {import('./vision-core.mjs').VisionCandidate}
  */
 function codexVision(screenshotPath, target, options = {}) {
     return codexVisionWithPrompt(screenshotPath, buildCoordPrompt(target, options));
@@ -177,12 +180,13 @@ function convertRawToCss(raw, dpr, clip = null) {
 /**
  * @param {string} target
  * @param {{dpr:number, viewport:{width:number,height:number}, clip:{x:number,y:number,width:number,height:number}|null}} capture
- * @param {{x:number,y:number,description?:string}} initialResult
+ * @param {import('./vision-core.mjs').VisionCandidate} initialResult
  * @param {any} [opts]
  * @returns {{raw:{x:number,y:number}, css:{x:number,y:number}, clip:{x:number,y:number,width:number,height:number}, description?:string}}
  */
 function verifyCandidate(target, capture, initialResult, opts = {}) {
-    const cssPoint = convertRawToCss({ x: initialResult.x, y: initialResult.y }, capture.dpr, capture.clip);
+    const center = candidateCenter(initialResult);
+    const cssPoint = convertRawToCss(center, capture.dpr, capture.clip);
     const verifyClip = clipAroundPoint(cssPoint, capture.viewport, { width: 280, height: 200 });
     const verifyCapture = JSON.parse(browserCmd(screenshotJsonArgs(opts, verifyClip), opts));
     const regionHint = describeRegion(opts.region);
@@ -196,7 +200,9 @@ function verifyCandidate(target, capture, initialResult, opts = {}) {
         throw new Error('Verification crop did not contain the target');
     }
 
-    const verifyCss = applyDprCorrection(verified.x, verified.y, verifyCapture.dpr || capture.dpr || 1);
+    validateVisionCandidate(verified, { viewport: { width: verifyClip.width, height: verifyClip.height }, dpr: verifyCapture.dpr || capture.dpr || 1 });
+    const verifyCenter = candidateCenter(verified);
+    const verifyCss = applyDprCorrection(verifyCenter.x, verifyCenter.y, verifyCapture.dpr || capture.dpr || 1);
     const distanceX = Math.abs(verifyCss.x - verifyClip.width / 2);
     const distanceY = Math.abs(verifyCss.y - verifyClip.height / 2);
     if (distanceX > verifyClip.width * 0.45 || distanceY > verifyClip.height * 0.45) {
@@ -224,7 +230,7 @@ function verifyCandidate(target, capture, initialResult, opts = {}) {
 /**
  * @param {string} target
  * @param {any} [opts]
- * @returns {{success:boolean, reason?:string, clicked?:{x:number,y:number}, raw?:{x:number,y:number}, dpr?:number, description?:string, snap?:string|null, clip?:any, verified?:boolean}}
+ * @returns {{success:boolean, reason?:string, clicked?:{x:number,y:number}, raw?:{x:number,y:number}, dpr?:number, description?:string, candidate?:import('./vision-core.mjs').VisionCandidate, reconciliation?:string, snap?:string|null, clip?:any, verified?:boolean}}
  */
 function visionClick(target, opts = {}) {
     const stableViewport = prepareStableViewport(opts);
@@ -253,13 +259,24 @@ function visionClick(target, opts = {}) {
     if (!result.found) {
         return { success: false, reason: 'target not found' };
     }
+    validateVisionCandidate(result, { viewport, dpr, clip });
+
+    const requiresVerification =
+        result.riskFlags.includes('point_only') ||
+        (isLowConfidence(result) && result.confidence >= 0.5);
+    if (isLowConfidence(result) && !opts.verifyBeforeClick) {
+        return {
+            success: false,
+            reason: `vision candidate confidence ${result.confidence} is below 0.75; rerun with --verify-before-click`,
+        };
+    }
 
     // 3. DPR correction: image pixels → CSS pixels
-    let finalRaw = { x: result.x, y: result.y };
+    let finalRaw = candidateCenter(result);
     let finalCss = convertRawToCss(finalRaw, dpr, clip);
     let verification = null;
 
-    if (opts.verifyBeforeClick) {
+    if (opts.verifyBeforeClick || requiresVerification) {
         verification = verifyCandidate(target, { dpr, viewport, clip }, result, opts);
         finalRaw = verification.raw;
         finalCss = verification.css;
@@ -285,6 +302,8 @@ function visionClick(target, opts = {}) {
         raw: finalRaw,
         dpr,
         description: verification?.description || result.description,
+        candidate: result,
+        reconciliation: 'unavailable',
         snap,
         clip,
         verified: Boolean(verification),
@@ -318,7 +337,8 @@ if (opts.help || !target) {
     --verify-before-click  Re-check a zoomed crop before clicking
 
   Pipeline:
-    screenshot → optional clip → codex exec (NDJSON) → optional verify crop → DPR correction → mouse click → verify
+    screenshot → optional clip → codex exec (bbox/confidence candidate) → optional verify crop → DPR correction → mouse click → verify
+    Ref clicks are preferred whenever snapshot --interactive exposes a usable ref. Coordinate click is the last fallback.
 
   Prerequisites:
     - agbrowse running Chrome (agbrowse start)

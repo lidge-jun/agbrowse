@@ -2408,6 +2408,7 @@ try {
             const maxTextChars = values['max-text-chars'] ? parseInt(/** @type {string} */ (values['max-text-chars'])) : undefined;
             const page = await getReadyPage(getPort());
             const url = page.url();
+            const targetId = `cdp:${getPort()}`;
             let title = '';
             try { title = await page.title(); } catch { /* best-effort */ }
             const viewport = page.viewportSize() || { width: 0, height: 0 };
@@ -2456,6 +2457,7 @@ try {
             const bundle = buildObservationBundle({
                 url,
                 title,
+                targetId,
                 viewport,
                 dpr,
                 snapshotNodes: nodes,

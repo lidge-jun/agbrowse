@@ -55,10 +55,28 @@ describe('G06 — observation-bundle ObservationBundleV1', () => {
 
     it('reports stats correctly', () => {
         const b = buildObservationBundle(baseInput);
+        expect(b.observationId).toBeTruthy();
+        expect(b.basis).toMatchObject({
+            url: baseInput.url,
+            viewport: baseInput.viewport,
+            dpr: 2,
+            capturedAt: baseInput.capturedAt,
+        });
         expect(b.stats.refCount).toBe(4);
         expect(b.stats.boxCount).toBe(2);
         expect(b.stats.hasScreenshot).toBe(true);
         expect(b.screenshot).toBe('/tmp/screenshot.png');
+    });
+
+    it('preserves explicit observationId and targetId', () => {
+        const b = buildObservationBundle({
+            ...baseInput,
+            observationId: 'obs-explicit',
+            targetId: 'target-1',
+        });
+        expect(b.observationId).toBe('obs-explicit');
+        expect(b.targetId).toBe('target-1');
+        expect(b.basis.targetId).toBe('target-1');
     });
 
     it('handles missing screenshot/boxes gracefully', () => {

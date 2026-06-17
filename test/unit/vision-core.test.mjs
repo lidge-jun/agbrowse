@@ -4,19 +4,26 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
     buildCoordPrompt,
+    candidateCenter,
     clipAroundPoint,
     describeRegion,
     extractCoordJson,
+    extractVisionCandidateJson,
     assertCodexCli,
     applyDprCorrection,
+    isLowConfidence,
     parseVisionClickCliArgs,
     parseViewportSpec,
     resolveRegionClip,
+    validateVisionCandidate,
 } from '../../skills/vision-click/vision-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const coordFixtures = JSON.parse(
     readFileSync(join(__dirname, '..', 'fixtures', 'coord-responses.json'), 'utf8')
+);
+const visionFixtures = JSON.parse(
+    readFileSync(join(__dirname, '..', 'fixtures', 'vision-candidates.json'), 'utf8')
 );
 
 describe('vision-core', () => {
@@ -24,6 +31,8 @@ describe('vision-core', () => {
         const prompt = buildCoordPrompt('Submit button');
         expect(prompt).toContain('Submit button');
         expect(prompt).toContain('"found"');
+        expect(prompt).toContain('"bbox"');
+        expect(prompt).toContain('"confidence"');
     });
 
     it('buildCoordPrompt includes region and verification hints when provided', () => {
@@ -65,6 +74,44 @@ describe('vision-core', () => {
     it('extractCoordJson returns null for truncated json', () => {
         const parsed = extractCoordJson(coordFixtures[5].text);
         expect(parsed).toBeNull();
+    });
+
+    it('extractVisionCandidateJson parses bbox candidates and legacy points', () => {
+        for (const fixture of visionFixtures) {
+            const parsed = extractVisionCandidateJson(fixture.text);
+            expect(parsed).toMatchObject(fixture.expected);
+        }
+    });
+
+    it('candidateCenter derives the bbox center', () => {
+        const candidate = extractVisionCandidateJson(visionFixtures[0].text);
+        expect(candidateCenter(candidate)).toEqual({ x: 140, y: 70 });
+    });
+
+    it('validateVisionCandidate rejects invalid bbox and out-of-bounds point', () => {
+        expect(() => validateVisionCandidate({
+            schemaVersion: 'vision-candidate-v1',
+            found: true,
+            kind: 'vision_bbox',
+            bbox: { x: 1, y: 1, width: 0, height: 10 },
+            point: { x: 1, y: 1 },
+            confidence: 0.8,
+            riskFlags: [],
+        }, { viewport: { width: 100, height: 100 }, dpr: 1 })).toThrow('invalid vision candidate bbox');
+        expect(() => validateVisionCandidate({
+            schemaVersion: 'vision-candidate-v1',
+            found: true,
+            kind: 'coordinate',
+            bbox: null,
+            point: { x: 200, y: 1 },
+            confidence: 0.8,
+            riskFlags: [],
+        }, { viewport: { width: 100, height: 100 }, dpr: 1 })).toThrow('outside');
+    });
+
+    it('isLowConfidence applies the shared threshold', () => {
+        const candidate = extractVisionCandidateJson(visionFixtures[1].text);
+        expect(isLowConfidence(candidate)).toBe(true);
     });
 
     it('assertCodexCli accepts an injected exec implementation', () => {

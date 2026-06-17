@@ -231,7 +231,7 @@ tool description에도 그 제한을 명시한다.
 
 ## ObservationBundleV1 Schema (G06)
 
-`agbrowse observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]`은 한 번의 호출로 URL, title, viewport, DPR, snapshot refs, optional bounding boxes, optional screenshot path, body innerText 요약을 단일 record로 묶는다. Vercel agent-browser/Playwright MCP `browser_observe`/VisualWebArena 류 multimodal 벤치가 요구하는 reproducible observation step을 만족시킨다.
+`agbrowse observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]`은 한 번의 호출로 observation id, target id, URL, title, viewport, DPR, snapshot refs, optional bounding boxes, optional screenshot path, body innerText 요약을 단일 record로 묶는다. Vercel agent-browser/Playwright MCP `browser_observe`/VisualWebArena 류 multimodal 벤치가 요구하는 reproducible observation step을 만족시킨다. Browser action routing은 ref-first, coordinate-last 정책을 따른다. Vision coordinate fallback은 bbox/confidence candidate와 clip/DPR basis를 보존하고, confidence가 낮거나 point-only인 결과는 verification 없이 바로 클릭하지 않는다.
 
 ```json
 {
