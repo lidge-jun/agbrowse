@@ -25,7 +25,8 @@ describe('web-ai policy', () => {
 
     it('denies risky actions before mutation', () => {
         expect(() => enforcePolicy({}, { clipboardWriteIntercept: true })).toThrow(/provider copy capture denied/);
-        expect(() => enforcePolicy({}, { evaluate: true })).toThrow(/evaluate denied/);
+        expect(enforcePolicy({}, { evaluate: true }).ok).toBe(true);
+        expect(() => enforcePolicy({ allowEvaluate: false }, { evaluate: true })).toThrow(/evaluate denied/);
     });
 
     it('exposes ruleId in policy errors', () => {

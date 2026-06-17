@@ -23,7 +23,7 @@ describe.sequential('browser console and network semantics', () => {
     });
 
     it('reads buffered console logs from expressions and reloads', async () => {
-        const probe = await execBrowser(['console', '--clear', '--expression', 'console.log("probe-log")', '--limit', '10', '--unsafe-allow', 'evaluate'], { env });
+        const probe = await execBrowser(['console', '--clear', '--expression', 'console.log("probe-log")', '--limit', '10'], { env });
         expect(probe.code).toBe(0);
         expect(probe.stdout).toContain('probe-log');
 

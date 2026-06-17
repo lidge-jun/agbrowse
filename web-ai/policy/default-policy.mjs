@@ -7,7 +7,7 @@ export const DEFAULT_WEB_AI_POLICY = Object.freeze({
     allowUploads: 'explicit-only',
     allowClipboardRead: false,
     allowClipboardWrite: 'explicit-only',
-    allowEvaluate: false,
+    allowEvaluate: true,
     allowFileAccess: false,
     allowCrossOriginNavigation: 'confirm',
     destructiveFormPolicy: 'deny',

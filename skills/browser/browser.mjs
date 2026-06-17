@@ -44,9 +44,9 @@
  *   tab-cleanup [--provider chatgpt --keep-provider-tabs 1]  Close idle/overflow tabs
  *   text [--format html]             Get page text
  *   get-dom [--selector CSS] [--max-chars N]  Get current DOM
- *   console [--duration ms] [--clear] [--reload] [--expression js --unsafe-allow evaluate]  Read buffered console logs
+ *   console [--duration ms] [--clear] [--reload] [--expression js]  Read buffered console logs
  *   network [--duration ms] [--filter text] [--reload]  Inspect network requests
- *   evaluate <js> --unsafe-allow evaluate  Execute JavaScript
+ *   evaluate <js>                     Execute JavaScript
  *   scroll <dir> [--amount N] [--json]  Scroll page
  *   wait <ms> [--json]               Wait fixed duration
  *   wait-for-selector <css> [--timeout ms] [--json]  Wait for selector
@@ -3315,7 +3315,7 @@ try {
                            [--expression "console.log('hi')"]
     network                Inspect requests [--duration ms] [--filter text]
                            [--clear] [--reload] [--live-only]
-     evaluate <js>          Execute JavaScript only with --unsafe-allow evaluate
+     evaluate <js>          Execute JavaScript
 
 	  Web AI:
       Before agent-run Web AI automation:

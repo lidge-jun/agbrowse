@@ -26,7 +26,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Act | `click`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `drag`, `mouse-click`, `move-mouse`, `mouse-down`, `mouse-up` | ref 기반 또는 coordinate 기반 mutation |
 | Navigate | `navigate`, `reload`, `resize`, `tabs`, `active-tab`, `tab-switch`, `select-tab`, `new-tab`, `tab-close`, `tab-cleanup`, `scroll` | navigation, viewport, active target 조회, tab 관리 (multi-tab create/close 포함) |
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
-| Diagnostics | `console`, `network`, `evaluate` | console/network capture와 explicit unsafe JS evaluation |
+| Diagnostics | `console`, `network`, `evaluate` | console/network capture와 page JS evaluation |
 | Web AI | `web-ai` | provider workflow subcommand |
 | Runway | `runway` | Runway Apps/Custom selector contract, current-tab status, read-only preflight |
 
