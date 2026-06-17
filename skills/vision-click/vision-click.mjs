@@ -14,6 +14,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -29,6 +30,7 @@ import {
     resolveRegionClip,
     validateVisionCandidate,
 } from './vision-core.mjs';
+import { assertFreshObservationBundle, reconcileVisionCandidate } from '../../web-ai/candidate-reconcile.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -152,6 +154,15 @@ function prepareStableViewport(opts = {}) {
 }
 
 /**
+ * @param {string|null|undefined} path
+ * @returns {any|null}
+ */
+function loadObservationBundle(path) {
+    if (!path) return null;
+    return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+/**
  * @param {any} opts
  * @param {{width:number,height:number}} viewport
  * @returns {{x:number,y:number,width:number,height:number}|null}
@@ -238,6 +249,10 @@ function visionClick(target, opts = {}) {
     // 1. Screenshot (get path + DPR via --json)
     console.error(`${c.dim}📸 Taking screenshot...${c.reset}`);
     const baseCapture = JSON.parse(browserCmd(['screenshot', '--json'], opts));
+    const bundle = loadObservationBundle(opts.bundle);
+    if (bundle) {
+        assertFreshObservationBundle(bundle, { url: baseCapture.url, targetId: baseCapture.targetId });
+    }
     const viewport = stableViewport || baseCapture.viewport;
     const clip = resolveInitialClip(opts, viewport);
     const ss = clip
@@ -275,6 +290,30 @@ function visionClick(target, opts = {}) {
     let finalRaw = candidateCenter(result);
     let finalCss = convertRawToCss(finalRaw, dpr, clip);
     let verification = null;
+    let reconciliation = 'unavailable';
+
+    if (bundle) {
+        const decision = reconcileVisionCandidate({ candidate: result, bundle });
+        reconciliation = decision.reason || decision.action;
+        if (decision.action === 'fail') {
+            throw new Error(`${decision.code || 'COMPUTER_TARGET_AMBIGUOUS'}: ${decision.reason}`);
+        }
+        if (decision.action === 'ref' && decision.ref) {
+            browserCmd(['click', decision.ref], opts);
+            return {
+                success: true,
+                clicked: finalCss,
+                raw: finalRaw,
+                dpr,
+                description: result.description,
+                candidate: result,
+                reconciliation,
+                snap: safeSnapshot(opts),
+                clip,
+                verified: false,
+            };
+        }
+    }
 
     if (opts.verifyBeforeClick || requiresVerification) {
         verification = verifyCandidate(target, { dpr, viewport, clip }, result, opts);
@@ -303,11 +342,23 @@ function visionClick(target, opts = {}) {
         dpr,
         description: verification?.description || result.description,
         candidate: result,
-        reconciliation: 'unavailable',
+        reconciliation,
         snap,
         clip,
         verified: Boolean(verification),
     };
+}
+
+/**
+ * @param {any} opts
+ * @returns {string|null}
+ */
+function safeSnapshot(opts) {
+    try {
+        return browserCmd(['snapshot', '--interactive'], opts);
+    } catch {
+        return null;
+    }
 }
 
 // ═══════════════════════════════════════════════════
@@ -334,6 +385,7 @@ if (opts.help || !target) {
     --viewport <WxH>       Custom viewport preset, e.g. 1440x900
     --region <name>        Named crop: left-panel, center-map, top-bar
     --clip <x y w h>       Manual crop in CSS pixels
+    --bundle <path>        ObservationBundle JSON from observe-bundle --json for ref reconciliation
     --verify-before-click  Re-check a zoomed crop before clicking
 
   Pipeline:

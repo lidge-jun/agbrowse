@@ -1410,7 +1410,14 @@ async function screenshotAction(port, opts = {}) {
         await page.screenshot({ path: filepath, fullPage: opts.fullPage, type });
     }
 
-    return { path: filepath, dpr: viewport.dpr, viewport: { width: viewport.width, height: viewport.height }, clip };
+    return {
+        path: filepath,
+        url: page.url(),
+        targetId: `cdp:${port}`,
+        dpr: viewport.dpr,
+        viewport: { width: viewport.width, height: viewport.height },
+        clip,
+    };
 }
 
 /**

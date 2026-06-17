@@ -75,6 +75,10 @@ agbrowse-vision-click "Menu" --browser-script /path/to/browser.mjs
 # Accuracy-first mode for dense UIs
 agbrowse-vision-click "first search result row" --prepare-stable --region left-panel --verify-before-click
 
+# Reconcile a vision bbox against refs from observe-bundle
+agbrowse observe-bundle --screenshot --boxes --json > /tmp/bundle.json
+agbrowse-vision-click "Submit button" --bundle /tmp/bundle.json --verify-before-click
+
 # Manual clip when you know the rough area
 agbrowse-vision-click "zoom button" --clip 980 120 220 220
 ```

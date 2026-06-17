@@ -33,6 +33,7 @@ import { execFileSync } from 'node:child_process';
  * @property {string|null} region
  * @property {Clip|null} clip
  * @property {boolean} help
+ * @property {string|null} bundle
  */
 
 /**
@@ -144,6 +145,7 @@ export function parseVisionClickCliArgs(args, defaults = {}) {
         region: null,
         clip: null,
         help: false,
+        bundle: null,
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -196,6 +198,11 @@ export function parseVisionClickCliArgs(args, defaults = {}) {
                 height: values[3],
             };
             i += 4;
+            continue;
+        }
+        if (arg === '--bundle') {
+            opts.bundle = args[i + 1] || opts.bundle;
+            i += 1;
             continue;
         }
         if (arg.startsWith('--')) continue;

@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { reconcileVisionCandidate } from '../../web-ai/candidate-reconcile.mjs';
+import {
+    assertFreshObservationBundle,
+    reconcileVisionCandidate,
+} from '../../web-ai/candidate-reconcile.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,5 +35,14 @@ describe('candidate reconciliation', () => {
             bundle: { refs: [{ ref: '@e1', role: 'button', name: 'A', box: { x: 0, y: 0, width: 100, height: 100 } }] },
         });
         expect(result).toMatchObject({ action: 'coordinate' });
+    });
+
+    it('rejects stale observation bundles before coordinate fallback', () => {
+        const fixture = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'browser-observation-stale.json'), 'utf8'));
+        expect(() => assertFreshObservationBundle(fixture, fixture.current)).toThrow('COMPUTER_OBSERVATION_STALE');
+        expect(() => assertFreshObservationBundle(fixture, {
+            url: fixture.basis.url,
+            targetId: fixture.basis.targetId,
+        })).not.toThrow();
     });
 });

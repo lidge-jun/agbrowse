@@ -35,6 +35,20 @@ export function reconcileVisionCandidate(input) {
 }
 
 /**
+ * @param {{basis?:{url?:string,targetId?:string}, url?:string, targetId?:string}} bundle
+ * @param {{url?:string,targetId?:string}} current
+ */
+export function assertFreshObservationBundle(bundle, current) {
+    const basis = bundle.basis || bundle;
+    if (basis.url && current.url && basis.url !== current.url) {
+        throw new Error('COMPUTER_OBSERVATION_STALE: observation URL does not match current page');
+    }
+    if (basis.targetId && current.targetId && basis.targetId !== current.targetId) {
+        throw new Error('COMPUTER_OBSERVATION_STALE: observation targetId does not match current page');
+    }
+}
+
+/**
  * @param {Box|undefined} box
  * @param {{x:number,y:number}} point
  */

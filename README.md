@@ -461,6 +461,9 @@ results require verification instead of clicking directly.
 ```bash
 agbrowse screenshot --json
 agbrowse-vision-click "the visible Submit button"
+
+agbrowse observe-bundle --screenshot --boxes --json > /tmp/bundle.json
+agbrowse-vision-click "Submit button" --bundle /tmp/bundle.json --verify-before-click
 ```
 
 The vision path handles device-pixel-ratio correction and clip-origin evidence

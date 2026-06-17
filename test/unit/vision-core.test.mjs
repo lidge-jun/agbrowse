@@ -25,6 +25,9 @@ const coordFixtures = JSON.parse(
 const visionFixtures = JSON.parse(
     readFileSync(join(__dirname, '..', 'fixtures', 'vision-candidates.json'), 'utf8')
 );
+const dprClipFixture = JSON.parse(
+    readFileSync(join(__dirname, '..', 'fixtures', 'browser-dpr-clip.json'), 'utf8')
+);
 
 describe('vision-core', () => {
     it('buildCoordPrompt includes the target and JSON contract', () => {
@@ -130,6 +133,15 @@ describe('vision-core', () => {
         expect(applyDprCorrection(400, 276, 2)).toEqual({ x: 200, y: 138 });
     });
 
+    it('applyDprCorrection preserves clip origin evidence', () => {
+        const center = candidateCenter(dprClipFixture.candidate);
+        const css = applyDprCorrection(center.x, center.y, dprClipFixture.dpr);
+        expect({
+            x: dprClipFixture.clip.x + css.x,
+            y: dprClipFixture.clip.y + css.y,
+        }).toEqual(dprClipFixture.expectedCssPoint);
+    });
+
     it('parseVisionClickCliArgs keeps option values out of the target', () => {
         const parsed = parseVisionClickCliArgs([
             'Submit',
@@ -141,6 +153,7 @@ describe('vision-core', () => {
             '--viewport', '1440x900',
             '--region', 'left-panel',
             '--clip', '10', '20', '300', '180',
+            '--bundle', '/tmp/bundle.json',
         ], {
             port: '9222',
             browserScript: '/tmp/browser.mjs',
@@ -156,7 +169,16 @@ describe('vision-core', () => {
             region: 'left-panel',
             clip: { x: 10, y: 20, width: 300, height: 180 },
             help: false,
+            bundle: '/tmp/bundle.json',
         });
+    });
+
+    it('parseVisionClickCliArgs defaults bundle to null', () => {
+        const parsed = parseVisionClickCliArgs(['Target'], {
+            port: '9222',
+            browserScript: '/tmp/default-browser.mjs',
+        });
+        expect(parsed.opts.bundle).toBeNull();
     });
 
     it('parseVisionClickCliArgs reads browser-script explicitly', () => {
