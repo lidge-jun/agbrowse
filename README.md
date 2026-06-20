@@ -433,7 +433,7 @@ Tab limits:
 
 | Setting | Default | Env var |
 | --- | --- | --- |
-| Max tabs | 10 | `AGBROWSE_MAX_TABS` |
+| Max tabs | 20 | `AGBROWSE_MAX_TABS` |
 | Idle timeout | 30 min | `AGBROWSE_TAB_IDLE` |
 
 `send` and `query` run tab cleanup before opening another tab. Cleanup never

@@ -30,7 +30,7 @@ All four areas were adversarially pressure-tested ("is this REALLY needed?"). Th
 
 Each `260619_*` folder has a `20_pressure_test_verdict.md` with the per-claim KEEP/DOWNSCOPE/DROP table and evidence; the `10_solution_plan.md` files are retained as full background but **superseded for scope** by the verdicts.
 
-## Implementation status (2026-06-20)
+## Implementation status (2026-06-21)
 
 Per the user directive "patch everything except tab, close to _fin, push":
 
@@ -39,9 +39,9 @@ Per the user directive "patch everything except tab, close to _fin, push":
 | **skill envelope** | docs patched (`e88a520`) | `_fin/260620_skill_envelope_already_capable.md` |
 | **timeout** | code patched (`1d86985`) — tier-aware default, `pro=3600` | `_fin/260619_timeout_adaptive_scaling/` |
 | **watch** | code patched (`1d86985`) — watcher reuses healed session (#77 watch-path) | `_fin/260619_watch_notification_gaps/` |
-| **tab** | **DEFERRED** — the heavy multi-process concurrency work; MVV documented, not yet implemented | `_plan/260619_tab_parallel_stability/` (still active) |
+| **tab** | code patched — record-before-bind, active-session caps, PID reaper, stale TTL docs | `_fin/260619_tab_parallel_stability/` + `_fin/260621_tab_stability_mvv_closeout/` |
 
-Verification for the timeout+watch patch: vitest 837/837 unit + 14/14 affected + 6/6 integration; `npm run gate:all` 16/16. Tab remains the one open area — implement its MVV (record-before-bind reorder + active-count cap + PID reaper + doc fix) in a separate pass when ready.
+Verification for the timeout+watch patch: vitest 837/837 unit + 14/14 affected + 6/6 integration; `npm run gate:all` 16/16. Verification for the tab MVV closeout is recorded in `_fin/260621_tab_stability_mvv_closeout/00_plan.md`.
 
 Each folder has: `00_overview.md` (problem framing), `01_root_cause.md` (verified, with `file:line` + real code), `10_solution_plan.md` (design + code sketch + test strategy + risks).
 

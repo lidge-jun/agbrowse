@@ -207,7 +207,6 @@ export async function grokSendWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'grok'),
         envelopeSummary: { ...summarizeEnvelope(input, contextPack), assistantCount },
     });
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: 'grok',
@@ -217,6 +216,7 @@ export async function grokSendWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
     return {
         ok: true,
         vendor: 'grok',

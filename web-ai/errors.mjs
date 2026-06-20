@@ -95,6 +95,23 @@ export class WebAiError extends Error {
  */
 export function wrapError(err, fallback = {}) {
     if (err instanceof WebAiError) return err;
+    if (err && typeof err === 'object' && typeof /** @type {{ errorCode?: unknown }} */ (err).errorCode === 'string') {
+        const e = /** @type {{ message?: string, errorCode?: string, stage?: string, retryHint?: string, vendor?: string, mutationAllowed?: boolean, selectorsTried?: string[], evidence?: unknown, traceId?: string, ruleId?: string }} */ (err);
+        return new WebAiError({
+            errorCode: e.errorCode,
+            stage: e.stage,
+            retryHint: e.retryHint,
+            vendor: e.vendor,
+            mutationAllowed: e.mutationAllowed,
+            selectorsTried: e.selectorsTried,
+            evidence: e.evidence,
+            traceId: e.traceId,
+            ruleId: e.ruleId,
+            message: e.message,
+            ...fallback,
+            cause: err,
+        });
+    }
     const e = /** @type {{ message?: string }} */ (err);
     return new WebAiError({
         errorCode: 'internal.unhandled',

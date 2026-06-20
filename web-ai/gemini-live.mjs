@@ -267,7 +267,6 @@ export async function geminiSendWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'gemini'),
         envelopeSummary: { ...summarizeEnvelope(input, contextPack), assistantCount: turnsBefore },
     });
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: 'gemini',
@@ -277,6 +276,7 @@ export async function geminiSendWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
     return {
         ok: true,
         vendor: 'gemini',

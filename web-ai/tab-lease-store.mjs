@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, u
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { closeTab, isTabAlive } from '../skills/browser/tab-manager.mjs';
+import { isPidAlive } from '../skills/browser/profile-lock.mjs';
 import { activeCommandTargetIds } from './active-command-store.mjs';
 
 /**
@@ -26,6 +27,7 @@ import { activeCommandTargetIds } from './active-command-store.mjs';
  *   closePreviousState?: string,
  *   cleanupReason?: string,
  *   closeFailedAt?: string,
+ *   ownerPid?: number|null,
  * }} Lease
  *
  * @typedef {{
@@ -51,6 +53,9 @@ import { activeCommandTargetIds } from './active-command-store.mjs';
  *   globalMax?: number,
  *   completedSessions?: boolean,
  *   now?: number,
+ *   ownerPid?: number|null,
+ *   activeMaxPerKey?: number,
+ *   activeGlobalMax?: number,
  * }} LeaseInput
  *
  * @typedef {{ targetId?: string, vendor?: string, owner?: string, state?: string }} ListLeasesFilter
@@ -64,6 +69,23 @@ const STALE_LOCK_MS = 30_000;
 const DEFAULT_POOL_TTL_MS = parseDuration(process.env.AGBROWSE_PROVIDER_POOL_TTL || '30m');
 const DEFAULT_POOL_MAX_PER_KEY = parseInt(process.env.AGBROWSE_PROVIDER_POOL_MAX_PER_KEY || '3', 10);
 const DEFAULT_POOL_GLOBAL_MAX = parseInt(process.env.AGBROWSE_PROVIDER_POOL_GLOBAL_MAX || '8', 10);
+const DEFAULT_ACTIVE_MAX_PER_KEY = parseInt(process.env.AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY || '5', 10);
+const DEFAULT_ACTIVE_GLOBAL_MAX = parseInt(process.env.AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX || '14', 10);
+
+export class ProviderActiveCapacityError extends Error {
+    /**
+     * @param {{ reason: string, limit: number, current: number, leaseKey: string, vendor: string, browserProfileKey: string }} details
+     */
+    constructor(details) {
+        super(`provider active tab capacity exceeded: ${details.reason} ${details.current}/${details.limit}`);
+        this.name = 'ProviderActiveCapacityError';
+        this.errorCode = 'provider.active-capacity';
+        this.stage = 'provider-capacity';
+        this.retryHint = 'wait-or-retry-later';
+        this.mutationAllowed = false;
+        this.evidence = details;
+    }
+}
 
 function home() {
     return process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
@@ -228,7 +250,12 @@ export async function recordActiveLease(input = {}) {
             leasedAt: input.leasedAt || now,
             updatedAt: now,
         });
-        store.leases = store.leases.filter(row => !sameTargetScope(row, lease) && !sameSessionScope(row, lease));
+        const retained = store.leases.filter(row => !sameTargetScope(row, lease) && !sameSessionScope(row, lease));
+        assertActiveCapacity(retained, lease, {
+            maxPerKey: input.activeMaxPerKey ?? DEFAULT_ACTIVE_MAX_PER_KEY,
+            globalMax: input.activeGlobalMax ?? DEFAULT_ACTIVE_GLOBAL_MAX,
+        });
+        store.leases = retained;
         store.leases.push(lease);
         writeStore(store);
         return lease;
@@ -353,6 +380,9 @@ export async function cleanupLeasedTabs(port, input = {}) {
         }
         store.leases = store.leases.filter(lease => lease.browserProfileKey !== browserProfileKey || !dead.includes(lease.targetId));
         const closeableLeases = store.leases.filter(lease => lease.browserProfileKey === browserProfileKey && !activeTargets.has(lease.targetId));
+        toClose.push(...closeableLeases
+            .filter(lease => lease.state === 'active-session' && Number.isFinite(lease.ownerPid) && !isPidAlive(Number(lease.ownerPid)))
+            .map(lease => ({ ...lease, cleanupReason: 'owner-pid-dead' })));
         toClose.push(...selectOverflowAndExpired(closeableLeases, {
             nowMs,
             maxPerKey: input.maxPerKey ?? DEFAULT_POOL_MAX_PER_KEY,
@@ -418,6 +448,7 @@ function normalizeLease(input = {}) {
         leaseDisposition: input.leaseDisposition || null,
         updatedAt: input.updatedAt || new Date().toISOString(),
         leaseKey: '',
+        ownerPid: input.ownerPid === null ? null : Number(input.ownerPid || process.pid),
     };
     lease.leaseKey = input.leaseKey || buildLeaseKey(lease);
     return lease;
@@ -452,6 +483,53 @@ function sameSessionScope(a, b) {
  */
 function sameBrowserProfile(a, b) {
     return a?.owner === b?.owner && a?.vendor === b?.vendor && a?.sessionType === b?.sessionType && a?.browserProfileKey === b?.browserProfileKey;
+}
+
+/**
+ * @param {Lease[]} retained
+ * @param {Lease} nextLease
+ * @param {{ maxPerKey: number, globalMax: number }} limits
+ */
+function assertActiveCapacity(retained, nextLease, limits) {
+    const active = retained.filter(lease =>
+        lease.state === 'active-session' &&
+        lease.owner === nextLease.owner &&
+        lease.browserProfileKey === nextLease.browserProfileKey
+    );
+    const maxPerKey = normalizeLimit(limits.maxPerKey);
+    if (maxPerKey >= 0) {
+        const perKeyCount = active.filter(lease => lease.leaseKey === nextLease.leaseKey).length;
+        if (perKeyCount >= maxPerKey) {
+            throw new ProviderActiveCapacityError({
+                reason: 'active-max-per-key',
+                limit: maxPerKey,
+                current: perKeyCount,
+                leaseKey: nextLease.leaseKey,
+                vendor: nextLease.vendor,
+                browserProfileKey: nextLease.browserProfileKey,
+            });
+        }
+    }
+    const globalMax = normalizeLimit(limits.globalMax);
+    if (globalMax >= 0 && active.length >= globalMax) {
+        throw new ProviderActiveCapacityError({
+            reason: 'active-global-max',
+            limit: globalMax,
+            current: active.length,
+            leaseKey: nextLease.leaseKey,
+            vendor: nextLease.vendor,
+            browserProfileKey: nextLease.browserProfileKey,
+        });
+    }
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeLimit(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return -1;
+    return Math.max(0, Math.floor(parsed));
 }
 
 /**

@@ -30,8 +30,6 @@ must be treated as historical  do not edit them after release.evidence
 | Codebase audit backlog | `_plan/260603_codebase_audit/` | Historical audit + issue tracker; keep grouped until separately closed. |
 | K-BrowseComp search gap analysis | `_plan/260608_kbrowsecomp_search_gap/` | Research/spec complete; implementation deferred. |
 | Oracle stability gap analysis | `_plan/260608_oracle_stability_gap/` | Partial follow-up backlog; includes 2026-06-20 Oracle 0.15 delta and 31/32 PABCD follow-up plans. |
-| Web-AI tab parallel stability | `_plan/260619_webai_stability/00_index.md`, `_plan/260619_tab_parallel_stability/` | Active: timeout/watch/skill-envelope closed; tab MVV remains open. |
-| MCP wait response recovery | `_plan/260621_mcp_wait_response_recovery/` | GitHub #79 PABCD: session-bound MCP wait/resume recovery and monotonic timeout handling. |
 | Legacy MVP phase plans | `_plan/legacy_mvp_phase_plans/` | Pre-closeout phase 8.1/9 planning references; grouped for audit hygiene. |
 | Strict migration | `_plan/strict-migration/` | Deferred migration planning and arbitration notes. |
 
@@ -59,6 +57,9 @@ separate closeout audit.
 | Docs Pages and code-mode overhaul | `_fin/260611_docs_pages_overhaul/` | Final goal audit proves local gates, push, and live Pages deployment. |
 | ChatGPT composer tool selection probe | `_fin/260615_chatgpt_composer_tools_live_probe.md` | PR #78 evidence and follow-up patches applied. |
 | Computer-use contract hardening / vision upgrade | `_fin/260617_computer_use_contract_hardening/` | `dev-vision-upgrade` verification report records implementation and live smoke evidence. |
+| Web-AI stability and concurrency closeout | `_fin/260619_webai_stability/`, `_fin/260619_tab_parallel_stability/` | Timeout/watch/skill-envelope closed earlier; tab MVV closed by active lease cap + PID reaper + record-before-bind. |
+| MCP wait response recovery | `_fin/260621_mcp_wait_response_recovery/` | GitHub #79 PABCD: session-bound MCP wait/resume recovery and monotonic timeout handling. |
+| Tab stability MVV closeout | `_fin/260621_tab_stability_mvv_closeout/` | Final branch closeout plan for tab MVV, verification, push, and PR body `Closes #79`. |
 
 ## `_fin/mvp/` topics
 

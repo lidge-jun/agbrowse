@@ -209,7 +209,7 @@ reducing tab creation overhead in batch scenarios.
 
 | Pool setting | Default | Env Var |
 | --- | --- | --- |
-| TTL per pooled tab | 15 min | `AGBROWSE_PROVIDER_POOL_TTL` |
+| TTL per pooled tab | 30 min | `AGBROWSE_PROVIDER_POOL_TTL` |
 | Max warm tabs per `(owner,vendor,sessionType,origin,profile)` | 3 | `AGBROWSE_PROVIDER_POOL_MAX_PER_KEY` |
 | Global cap on warm provider tabs | 8 | `AGBROWSE_PROVIDER_POOL_GLOBAL_MAX` |
 
@@ -221,7 +221,7 @@ another in-flight Pro query without lease contention.
 
 | Setting | Default | Env Var |
 | --- | --- | --- |
-| Max tabs | 10 | `AGBROWSE_MAX_TABS` |
+| Max tabs | 20 | `AGBROWSE_MAX_TABS` |
 | Idle timeout | 30 min | `AGBROWSE_TAB_IDLE` |
 
 Idle tabs (inactive longer than the timeout) are auto-closed unless pinned or

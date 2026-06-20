@@ -3368,8 +3368,10 @@ try {
 
       Tab lease policy:
         Completed provider tabs are runtime leases. Defaults: maxPerKey=3,
-        globalMax=8, TTL=15m. Override via AGBROWSE_PROVIDER_POOL_MAX_PER_KEY,
+        globalMax=8, TTL=30m. Override via AGBROWSE_PROVIDER_POOL_MAX_PER_KEY,
         AGBROWSE_PROVIDER_POOL_GLOBAL_MAX, AGBROWSE_PROVIDER_POOL_TTL.
+        Active session caps default to per-key=5 and global=14. Override via
+        AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY and AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX.
         Use --new-tab / --parallel to bypass pool reuse for a single call.
         Run tab-cleanup --json to inspect leaseClosedTabs.
 
@@ -3421,7 +3423,7 @@ try {
                            Holds web-ai-sessions.json (Phase 1 store) +
                            web-ai-baselines.json (legacy) + browser profile.
     CDP_PORT               Default CDP port (default: 9222)
-    AGBROWSE_MAX_TABS      Max open tabs before cleanup closes oldest (default: 10)
+    AGBROWSE_MAX_TABS      Max open tabs before cleanup closes oldest (default: 20)
     AGBROWSE_TAB_IDLE      Idle threshold for cleanup (default: 30m)
     AGBROWSE_REUSE_TAB=1   Legacy web-ai behavior: reuse active tab
     AGBROWSE_WEB_AI_AUTO_START=0

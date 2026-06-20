@@ -17,7 +17,7 @@ import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
 import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
-import { cleanupIdleTabs, isPinned } from '../skills/browser/tab-lifecycle.mjs';
+import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { listSessions, getSession, resolveTimeoutDefaultSec } from './session.mjs';
@@ -216,10 +216,12 @@ Browser:
 
 Tab lease policy:
   Completed provider tabs are runtime leases, not history storage.
-  Defaults: maxPerKey=3, globalMax=8, TTL=15m. Per-key limit is the
+  Pool defaults: maxPerKey=3, globalMax=8, TTL=30m. Per-key limit is the
   number of warm pooled tabs allowed per
   (owner,vendor,sessionType,origin,profile). Override via
   AGBROWSE_PROVIDER_POOL_MAX_PER_KEY / _GLOBAL_MAX / _TTL.
+  Active session caps default to per-key=5 and global=14. Override via
+  AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY / _GLOBAL_MAX.
   Expired or overflow pooled tabs are closed with CDP.
   Use --new-tab / --parallel to bypass pool reuse for a single call.
   Use "agbrowse tab-cleanup --json" to inspect leaseClosedTabs.
@@ -986,7 +988,7 @@ async function ensureProviderTab(deps, input) {
     const port = deps.getPort?.() || 9222;
 
     await cleanupPoolTabs(port);
-    await cleanupIdleTabs(port, { maxTabs: Number.POSITIVE_INFINITY });
+    await cleanupIdleTabs(port, { maxTabs: DEFAULT_MAX_TABS });
 
     if (input.forceNewTab !== true) {
         // Phase 9.2: try tab pool first

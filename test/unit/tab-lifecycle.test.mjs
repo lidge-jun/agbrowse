@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
-import { checkoutPooledLease, cleanupLeasedTabs, listLeases, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
+import { checkoutPooledLease, cleanupLeasedTabs, listLeases, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 
 describe('tab lifecycle cleanup selection', () => {
     it('parses duration strings used by tab-cleanup UX', () => {
@@ -187,10 +187,43 @@ describe('tab lifecycle cleanup selection', () => {
         expect(lifecycleSource).toContain('!activeCommandTargets.has(tab.targetId)');
         expect(leaseSource).toContain('activeCommandTargetIds');
         expect(leaseSource).toContain('!activeTargets.has(lease.targetId)');
+        expect(leaseSource).toContain('isPidAlive');
+        expect(leaseSource).toContain('owner-pid-dead');
         expect(lifecycleSource).not.toContain('activeCommandTargetIds({ browserProfileKey: String(port) }).catch');
         expect(leaseSource).not.toContain('activeCommandTargetIds({ browserProfileKey }).catch');
         expect(lifecycleSource).toContain('selectProviderTabsForCleanup');
         expect(lifecycleSource).toContain('providerClosed');
+    });
+
+    it('records provider leases before binding sessions to tabs', () => {
+        const chatgptSource = readFileSync(new URL('../../web-ai/chatgpt.mjs', import.meta.url), 'utf8');
+        const geminiSource = readFileSync(new URL('../../web-ai/gemini-live.mjs', import.meta.url), 'utf8');
+        const grokSource = readFileSync(new URL('../../web-ai/grok-live.mjs', import.meta.url), 'utf8');
+
+        expectOrder(chatgptSource, "sessionType: 'send-poll'", 'recordActiveLease', 'bindSessionToTab');
+        expectOrder(chatgptSource, "sessionType: 'deep-research'", 'recordActiveLease', 'bindSessionToTab');
+        expectOrder(geminiSource, "sessionType: 'send-poll'", 'recordActiveLease', 'bindSessionToTab');
+        expectOrder(grokSource, "sessionType: 'send-poll'", 'recordActiveLease', 'bindSessionToTab');
+    });
+
+    it('uses finite tab caps and current provider lease docs', () => {
+        const cliSource = readFileSync(new URL('../../web-ai/cli.mjs', import.meta.url), 'utf8');
+        const lifecycleSource = readFileSync(new URL('../../skills/browser/tab-lifecycle.mjs', import.meta.url), 'utf8');
+        const browserSource = readFileSync(new URL('../../skills/browser/browser.mjs', import.meta.url), 'utf8');
+        const skillSource = readFileSync(new URL('../../skills/web-ai/SKILL.md', import.meta.url), 'utf8');
+        const readmeSource = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+
+        expect(cliSource).not.toContain('maxTabs: Number.POSITIVE_INFINITY');
+        expect(cliSource).toContain('maxTabs: DEFAULT_MAX_TABS');
+        expect(lifecycleSource).toContain("process.env.AGBROWSE_MAX_TABS || '20'");
+        for (const source of [cliSource, browserSource]) {
+            expect(source).not.toContain('TTL=15m');
+            expect(source).toContain('TTL=30m');
+            expect(source).toContain('AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY');
+        }
+        expect(skillSource).toContain('| TTL per pooled tab | 30 min |');
+        expect(skillSource).toContain('| Max tabs | 20 |');
+        expect(readmeSource).toContain('| Max tabs | 20 |');
     });
 
     it('removes dead pooled lease metadata during checkout', async () => {
@@ -222,6 +255,107 @@ describe('tab lifecycle cleanup selection', () => {
 
             expect(checkedOut).toBeNull();
             expect(await listLeases()).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('records owner pid on active leases', async () => {
+        const temp = createTempBrowserEnv('agbrowse-owner-pid-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            await recordActiveLease({
+                port: 65_532,
+                vendor: 'chatgpt',
+                targetId: 'active-with-owner',
+                sessionId: 'session-owner',
+                url: 'https://chatgpt.com/c/owner',
+            });
+
+            const [lease] = await listLeases();
+            expect(lease.ownerPid).toBe(process.pid);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('rejects active leases above the per-key cap but allows same-session replacement', async () => {
+        const temp = createTempBrowserEnv('agbrowse-active-per-key-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            for (const id of ['one', 'two']) {
+                await recordActiveLease({
+                    port: 65_533,
+                    vendor: 'chatgpt',
+                    targetId: `target-${id}`,
+                    sessionId: `session-${id}`,
+                    url: `https://chatgpt.com/c/${id}`,
+                    activeMaxPerKey: 2,
+                    activeGlobalMax: 10,
+                });
+            }
+
+            await expect(recordActiveLease({
+                port: 65_533,
+                vendor: 'chatgpt',
+                targetId: 'target-three',
+                sessionId: 'session-three',
+                url: 'https://chatgpt.com/c/three',
+                activeMaxPerKey: 2,
+                activeGlobalMax: 10,
+            })).rejects.toBeInstanceOf(ProviderActiveCapacityError);
+
+            await recordActiveLease({
+                port: 65_533,
+                vendor: 'chatgpt',
+                targetId: 'target-one-rebound',
+                sessionId: 'session-one',
+                url: 'https://chatgpt.com/c/one-rebound',
+                activeMaxPerKey: 2,
+                activeGlobalMax: 10,
+            });
+
+            expect((await listLeases()).map(lease => lease.targetId).sort()).toEqual(['target-one-rebound', 'target-two']);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('rejects active leases above the browser-profile global cap', async () => {
+        const temp = createTempBrowserEnv('agbrowse-active-global-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            await recordActiveLease({
+                port: 65_534,
+                vendor: 'chatgpt',
+                targetId: 'target-chatgpt',
+                sessionId: 'session-chatgpt',
+                url: 'https://chatgpt.com/c/global',
+                activeMaxPerKey: 10,
+                activeGlobalMax: 1,
+            });
+
+            await expect(recordActiveLease({
+                port: 65_534,
+                vendor: 'gemini',
+                targetId: 'target-gemini',
+                sessionId: 'session-gemini',
+                url: 'https://gemini.google.com/app/global',
+                activeMaxPerKey: 10,
+                activeGlobalMax: 1,
+            })).rejects.toMatchObject({
+                errorCode: 'provider.active-capacity',
+                stage: 'provider-capacity',
+            });
         } finally {
             if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
             else process.env.BROWSER_AGENT_HOME = previousHome;
@@ -306,4 +440,13 @@ function completedLease(targetId, browserProfileKey) {
         updatedAt: '2026-05-03T00:00:00.000Z',
         leaseKey: `web-ai:chatgpt:send-poll:https://chatgpt.com:${browserProfileKey}`,
     };
+}
+
+function expectOrder(source, anchor, first, second) {
+    const anchorIndex = source.indexOf(anchor);
+    expect(anchorIndex).toBeGreaterThanOrEqual(0);
+    const snippet = source.slice(Math.max(0, anchorIndex - 220), anchorIndex + 420);
+    expect(snippet.indexOf(first)).toBeGreaterThanOrEqual(0);
+    expect(snippet.indexOf(second)).toBeGreaterThanOrEqual(0);
+    expect(snippet.indexOf(first)).toBeLessThan(snippet.indexOf(second));
 }

@@ -198,7 +198,6 @@ export async function sendWebAi(deps, input = {}) {
     if (selectedModel?.modelSelection) {
         updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });
     }
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: envelope.vendor,
@@ -208,6 +207,7 @@ export async function sendWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
 
     const editorOptions = {
         insertText: async (/** @type {any} */ text) => {
@@ -645,7 +645,6 @@ export async function deepResearchWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'chatgpt'),
         envelopeSummary: { ...summarizeEnvelope(input), assistantCount },
     });
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: envelope.vendor,
@@ -655,6 +654,7 @@ export async function deepResearchWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
     const timeoutMs = Math.max(1, Number(input.timeout || 1200)) * 1000;
     const selectedTools = await selectChatGptComposerTools(page, { ...input, research: 'deep' });
     const result = await sendDeepResearch(page, deps, {
