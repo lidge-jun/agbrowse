@@ -62,7 +62,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright-core install --with-deps chromium
+        run: npx playwright-core install chromium
 
       - name: Verify release ref and package version
         run: |
