@@ -98,19 +98,27 @@ Already covered or partially covered:
 - Deep Research exists in `web-ai/chatgpt-deep-research.mjs`, including iframe scan and report artifacts.
 - Session resume/reattach/watch recovery exists in `web-ai/tab-recovery.mjs` and `web-ai/watcher.mjs`.
 - Same-command ChatGPT batch follow-ups exist via `--follow-up`.
-- Capability truth table explicitly says later-session follow-up remains deferred.
+- Later-session prompt send already exists through `agbrowse web-ai query --session <id> --prompt <text>` via `runBoundSendOrQuery()` and `withSessionPage()`.
+- Capability truth table still treats later-session follow-up as deferred in the dedicated `--follow-up` capability row, so the remaining gap is parity labeling, discoverability, and stricter saved-conversation guards, not a greenfield feature.
 
 Still missing or worth auditing:
 
 - Generic ChatGPT downloadable file artifacts are not covered outside code ZIPs and generated images. Oracle now handles current-turn assistant files from known ChatGPT endpoints, including CSV/PDF/ZIP/wheel/source-dist.
 - Deep Research extraction is still iframe-text oriented. It does not yet mirror Oracle's target-scoped OOPIF auto-attach/read-selection helper or incomplete-report rejection.
-- Later-session follow-up into an exact saved conversation is deferred. Existing `--follow-up` only handles same-command batch prompts.
+- Later-session follow-up needs an Oracle-parity audit: existing `query --session` can send a prompt into a saved session, but docs/truth-table wording and fail-closed conversation URL guards need to be reconciled.
 - Profile-copy login reuse has no direct agbrowse equivalent. Existing `BROWSER_AGENT_HOME` and CDP reuse cover the normal flow but not "clone active user profile into throwaway profile".
 - Sequential download attribution for generic generated files is not implemented because generic generated-file capture is not implemented.
 - Byte-preserving ZIP upload should be audited against `web-ai/context-pack/` and `web-ai/chatgpt-attachments.mjs`; current context-pack zip behavior is not the same feature as Oracle's mixed raw/archive/office/media bundle writer.
 - Oracle provider route diagnostics are mostly out of scope for agbrowse while agbrowse intentionally has no hosted API provider-routing layer.
 
 ## Recommended follow-up order
+
+This delta is split into two PABCD-ready implementation plan documents:
+
+| File | Scope | Priority |
+| --- | --- | --- |
+| [31_chatgpt_downloadable_artifacts_pabcd.md](31_chatgpt_downloadable_artifacts_pabcd.md) | Generic ChatGPT downloadable files, session artifact descriptor expansion, sequential download attribution, byte-preserving upload audit | P0/P2 |
+| [32_deep_research_session_followup_pabcd.md](32_deep_research_session_followup_pabcd.md) | Deep Research target-scoped capture, model picker/current-pill audit, existing `query --session` follow-up parity, profile-copy decision | P0/P1/P2 |
 
 ### P0 — Generic ChatGPT downloadable file artifact capture
 
@@ -164,15 +172,13 @@ Compare agbrowse `web-ai/chatgpt-model.mjs` against Oracle 0.14.1/0.15.0 behavio
 
 This should be an audit before a patch, because agbrowse already has several model-selection guardrails from earlier parity work.
 
-### P1 — Later-session follow-up
+### P1 — Later-session follow-up parity
 
-Add a later-session follow-up command only after the tab/session resolver contract is stable:
+Audit and harden the existing later-session path:
 
 ```text
-agbrowse web-ai follow-up --session <sessionId> --prompt <text>
+agbrowse web-ai query --session <sessionId> --prompt <text>
 ```
-
-or a subcommand under `sessions`.
 
 Required behavior:
 
@@ -180,6 +186,7 @@ Required behavior:
 - Fail closed on target mismatch unless navigation/recovery is explicitly authorized.
 - Reuse existing `tab-recovery.mjs` and conversation URL checks.
 - Do not send to provider root, a different thread, or an external URL.
+- Update help/truth-table wording so users can distinguish same-command `--follow-up` from later-session `query --session`.
 
 ### P2 — Profile-copy login reuse
 

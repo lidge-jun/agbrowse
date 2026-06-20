@@ -29,7 +29,7 @@ must be treated as historical  do not edit them after release.evidence
 | Provider expansion | `_plan/260519_provider_expansion/` | Deferred provider roadmap for Claude, Perplexity, NotebookLM. |
 | Codebase audit backlog | `_plan/260603_codebase_audit/` | Historical audit + issue tracker; keep grouped until separately closed. |
 | K-BrowseComp search gap analysis | `_plan/260608_kbrowsecomp_search_gap/` | Research/spec complete; implementation deferred. |
-| Oracle stability gap analysis | `_plan/260608_oracle_stability_gap/` | Partial follow-up backlog; includes 2026-06-20 Oracle 0.15 delta follow-up. |
+| Oracle stability gap analysis | `_plan/260608_oracle_stability_gap/` | Partial follow-up backlog; includes 2026-06-20 Oracle 0.15 delta and 31/32 PABCD follow-up plans. |
 | Web-AI tab parallel stability | `_plan/260619_webai_stability/00_index.md`, `_plan/260619_tab_parallel_stability/` | Active: timeout/watch/skill-envelope closed; tab MVV remains open. |
 | Legacy MVP phase plans | `_plan/legacy_mvp_phase_plans/` | Pre-closeout phase 8.1/9 planning references; grouped for audit hygiene. |
 | Strict migration | `_plan/strict-migration/` | Deferred migration planning and arbitration notes. |
