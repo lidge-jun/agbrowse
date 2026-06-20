@@ -13,6 +13,23 @@
 
 **Scope update (2026-06-20):** Only areas 1, 2, 4 are real code work. Area 3 (skill envelope) was found to be already-capable — a discoverability/UX problem, not architecture — and is closed to `_fin`.
 
+## Pressure-test synthesis (2026-06-20)
+
+All four areas were adversarially pressure-tested ("is this REALLY needed?"). The skill-envelope pattern repeated everywhere: **existing mitigations under-credited, plans over-engineered.** Net — the four elaborate plans collapse to a handful of small, surgical fixes. Locked decisions (pro=3600s, vendor5/global12-16) still hold; only the *implementation surface* shrank.
+
+| Area | Original plan | Survived (MVV) | Verdict |
+|------|---------------|----------------|---------|
+| **timeout** | new `timeout-policy.mjs` + 20-row table + thinking-indicator state machine + adaptive backoff | 4-entry tier-default map + export `pro=3600` + 1 doc line + 1 test | DOWNSCOPE ~80%; claims 2/3/4 dropped (`--timeout` + action-button signal already exist) |
+| **tab** | atomic-acquire + per-session mutex + heartbeat/TTL unification + admission/FIFO/priority | record-before-bind reorder + active-count cap (revert `maxTabs:Infinity`) + PID reaper + doc fix | DOWNSCOPE & split; **the real work for the multi-agent goal.** Claims 1/3 already mitigated by `active-command.target-owned` cross-process mutex; claim 5 out-of-scope |
+| **skill envelope** | `buildEnvelope` refactor + trust-tier sections + manifest | docs: `--help` + SKILL.md (done, `e88a520`) | CLOSED → `_fin` |
+| **watch** | adaptive interval + per-provider id registry + CDP nudge (Tier1+2) | ~30-line watcher consolidation (use the healed session it already discards) | DOWNSCOPE ~75%; 15s latency invisible under bgtask; registry misdiagnosed; Tier2 vetoed |
+
+**Bugs the pressure-test found in the plans themselves:** (a) timeout sketch reuses `pollTimeoutSec`, which is already the watcher's per-iteration timeout (name collision); (b) the watcher already routes through the self-healing resolver but discards the healed `session` and re-checks a stale one — so the watch fix is *deletion*, not new code.
+
+**Revised cross-cut:** the 3-TTL unification is now **deferred/out-of-scope** — `tab` needs only the single `pro=3600` constant exported from `timeout`, not the full TTL program. The dependency between areas 1 and 2 is now one constant, not a coupled rewrite.
+
+Each `260619_*` folder has a `20_pressure_test_verdict.md` with the per-claim KEEP/DOWNSCOPE/DROP table and evidence; the `10_solution_plan.md` files are retained as full background but **superseded for scope** by the verdicts.
+
 Each folder has: `00_overview.md` (problem framing), `01_root_cause.md` (verified, with `file:line` + real code), `10_solution_plan.md` (design + code sketch + test strategy + risks).
 
 ## Locked decisions (2026-06-19 interview)

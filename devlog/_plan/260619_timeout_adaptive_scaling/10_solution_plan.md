@@ -1,5 +1,7 @@
 # Timeout Adaptive Scaling — Solution Plan
 
+> ⚠️ **SUPERSEDED for scope by `20_pressure_test_verdict.md` (2026-06-20).** Pressure-test found ~80% of this plan over-engineered (the `--timeout` escape hatch + action-button done-signal already exist; claims 2/3/4 dropped). Real scope = a 4-entry tier-default map + 1 export + 1 doc line + 1 test. Also note the `pollTimeoutSec` name collision flagged in the verdict. Read the verdict first; this file is retained as the full analysis.
+
 > Locked decision: **hardcoded mapping table** (no history-learning). instant ≈ 120s, thinking/standard ≈ 600s, **pro / heavy / deep-research = 3600s**. Documentation only; code sketch is illustrative.
 
 ## A. Hardcoded `TIMEOUT_TABLE` (new module `web-ai/timeout-policy.mjs`)

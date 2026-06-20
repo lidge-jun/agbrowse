@@ -34,8 +34,12 @@ Stable multi-agent CDP sharing: multiple jaw employees or CLI agents connect to 
 ## Decision (locked 2026-06-19)
 Concurrency target **vendor ≤ 5, global 12–16** (today 3 / 8). Investigated by a CLI sub-agent AND the Backend employee independently — both converged on the same 4 root causes. **Prerequisite:** unify the 3 colliding TTLs (session lock / active-command / active-lease) on the pro=3600s model-aware deadline from `260619_timeout_adaptive_scaling` + 60s heartbeat **before** raising caps. See `01_root_cause.md`, `10_solution_plan.md` (§C sequencing).
 
+## Pressure-test (2026-06-20) — DOWNSCOPE & split
+Separate-process model + existing `active-command.target-owned` cross-process mutex kill claims 1 & 3; claim 5 out-of-scope. Must-have = record-before-bind reorder + active-count cap (revert `maxTabs:Infinity`) + PID reaper + doc fix. See `20_pressure_test_verdict.md`. **This is the one area with real, load-bearing fixes for the multi-agent goal.**
+
 ## Status
 - [x] Interview/requirements gathering
-- [x] Plan (`10_solution_plan.md`)
-- [ ] Implementation (deferred — devlog-only this round)
+- [x] Plan (`10_solution_plan.md`) — superseded for scope
+- [x] Pressure-test (`20_pressure_test_verdict.md`)
+- [ ] Implementation (MVV must-have set, if approved)
 - [ ] Verification

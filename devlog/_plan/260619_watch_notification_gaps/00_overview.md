@@ -32,8 +32,12 @@ Reduce completion detection latency. Make URL tracking format-agnostic. Evaluate
 ## Decision (locked 2026-06-19)
 Two tiers. **Tier 1 (safe, do-first):** adaptive poll interval (pro-safe backoff), per-provider conversation-id registry, self-healing URL via the existing `shouldPreferCurrentProviderUrl` (closes Issue #77 watch-path half). **Tier 2 (opt-in `--cdp-nudge`, default off):** CDP event only *nudges* an early poll — poll stays source of truth, so a broken event can never cause a false/missed completion. User's "리스키" stance confirmed correct (networkIdle is unreliable per devtools-protocol #154). See `01_root_cause.md`, `10_solution_plan.md`.
 
+## Pressure-test (2026-06-20) — DOWNSCOPE ~75%, mostly →_fin
+15s latency invisible under send→watch→bgtask (adaptive polling dropped); conversation-id registry misdiagnosed (gemini/grok don't use the regex); Tier 2 dropped. Only real win: watcher already self-heals via `resolveSessionPage` but discards the healed session — ~30-line consolidation. See `20_pressure_test_verdict.md`.
+
 ## Status
 - [x] Interview/requirements gathering
-- [x] Plan (`10_solution_plan.md`)
-- [ ] Implementation (deferred — devlog-only this round)
+- [x] Plan (`10_solution_plan.md`) — superseded for scope
+- [x] Pressure-test (`20_pressure_test_verdict.md`)
+- [ ] Implementation (~30-line watcher consolidation only, if approved)
 - [ ] Verification

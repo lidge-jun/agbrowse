@@ -22,8 +22,12 @@ Model-aware timeout scaling: instant (short), thinking/standard (medium), pro/he
 ## Decision (locked 2026-06-19)
 Hardcoded timeout table (no history-learning). instant ≈ 120s, thinking/standard ≈ 600s, **pro/heavy/deep-research = 3600s**. This `resolveTimeoutSeconds` is the single source of truth for the model-aware deadline reused by `260619_tab_parallel_stability` (lease TTL). See `01_root_cause.md`, `10_solution_plan.md`.
 
+## Pressure-test (2026-06-20) — DOWNSCOPE ~80%
+`--timeout` escape hatch + action-button done-signal already exist. Real scope = 4-entry tier-default map + export `pro=3600` + 1 doc line + 1 test. Claims 2/3/4 dropped. See `20_pressure_test_verdict.md`.
+
 ## Status
 - [x] Interview/requirements gathering
-- [x] Plan (`10_solution_plan.md`)
-- [ ] Implementation (deferred — devlog-only this round)
+- [x] Plan (`10_solution_plan.md`) — superseded for scope
+- [x] Pressure-test (`20_pressure_test_verdict.md`)
+- [ ] Implementation (MVV only, if approved)
 - [ ] Verification

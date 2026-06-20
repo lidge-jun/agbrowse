@@ -1,5 +1,7 @@
 # Watch / Notification Gaps — Solution Plan
 
+> ⚠️ **SUPERSEDED for scope by `20_pressure_test_verdict.md` (2026-06-20).** Pressure-test: 15s latency is invisible under the `send→watch→bgtask` workflow (adaptive polling DROP); the conversation-id registry is misdiagnosed (gemini/grok never use the `/c/{id}` regex — DROP); Tier 2 CDP nudge DROP. The one real win is even smaller than stated: the watcher already self-heals via `resolveSessionPage` but **discards the healed session** and re-checks against a stale one — fix is ~30 lines of deletion/consolidation. Read the verdict first; this file is the full analysis.
+
 > Documentation only; code sketch illustrative. Split into TIER 1 (safe, do-first) and TIER 2 (optional, risk-bounded). **Poll is always the source of truth**; events only ever shorten the wait, never declare completion.
 
 ## TIER 1 — Safe wins (no event dependency)

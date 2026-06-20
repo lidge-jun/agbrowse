@@ -1,5 +1,7 @@
 # Tab Parallel Stability — Solution Plan
 
+> ⚠️ **SUPERSEDED for scope by `20_pressure_test_verdict.md` (2026-06-20).** Pressure-test: each `web-ai` cmd is a separate OS process and a cross-process tab mutex (`active-command.target-owned`) already exists → claims 1 (TOCTOU) and 3 (send/poll mutex) DROP; claim 5 (3-TTL) out-of-scope. Real must-have = record-before-bind reorder + active-count cap (revert `maxTabs:Infinity`) + PID reaper + doc fix. The full atomic-acquire/heartbeat/admission program below is downscoped. Read the verdict first; this file is the full analysis.
+
 > Locked decisions: concurrency target **vendor ≤ 5, global 12–16**; **pro = 3600s** is the source of truth for the model-aware deadline. Documentation only; code sketch is illustrative. Design A–E below is the merged output of the CLI sub-agent and the Backend employee (they converged).
 
 ## Sequencing rule (read first)
