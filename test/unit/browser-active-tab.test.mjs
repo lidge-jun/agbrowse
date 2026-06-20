@@ -76,12 +76,12 @@ describe('active tab persistence contract', () => {
         expect(browserSrc).toContain("case 'uncheck'");
     });
 
-    it('keeps existing evaluate primitive policy-gated by default', () => {
+    it('keeps evaluate primitive policy-aware while defaulting to allowed', () => {
         expect(browserSrc).toContain("import { enforcePolicy } from '../../web-ai/policy/enforce.mjs'");
         expect(browserSrc).toMatch(/async function evaluate\(port, expression, opts = \{\}\)/);
         expect(browserSrc).toMatch(/evaluate: true/);
         expect(browserSrc).toMatch(/unsafeAllow: opts\.unsafeAllow/);
-        expect(browserSrc).toContain('--unsafe-allow evaluate');
+        expect(browserSrc).toContain("case 'evaluate'");
     });
 
     it('getActivePage resolves the persisted target before array-order fallback', () => {

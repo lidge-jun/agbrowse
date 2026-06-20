@@ -227,7 +227,7 @@ export function isPageDeathError(err) {
  * @param {string|null|undefined} storedUrl
  * @param {string|null|undefined} liveUrl
  */
-function urlsCompatible(storedUrl, liveUrl) {
+export function urlsCompatible(storedUrl, liveUrl) {
     if (!storedUrl || !liveUrl) return false;
     if (storedUrl === liveUrl) return true;
     try {

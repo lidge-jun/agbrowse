@@ -120,6 +120,14 @@ Pass `--timeout 1800` (30 min) or higher for unusually long Pro/Deep Think
 runs. The provider tab and the agbrowse Chrome process stay open across a
 poll timeout — only the polling loop gives up.
 
+MCP clients should preserve the `sessionId` returned by `web_ai_submit_prompt`.
+`web_ai_wait_response` and `web_ai_session_resume` use the stored-session
+recovery path and may return a recoverable timeout with `retryHint:
+poll-or-resume`. A host-level MCP request timeout, such as `-32001 Request
+timed out`, is a client/runtime boundary; after it, retry with the same
+`sessionId` or use CLI `web-ai poll --session <SID>` instead of sending a new
+prompt immediately.
+
 ## Long-Running / Background Sessions
 
 For responses that may take many minutes (ChatGPT Pro/Heavy, Gemini Deep
@@ -134,7 +142,7 @@ agbrowse web-ai watch --session "$SID" --json --navigate
 ```
 
 Key facts (verified 2026-06-11, details in
-`devlog/_plan/260611_background_runtime_hook/02_agbrowse_sufficiency.md`):
+`devlog/_fin/260611_background_runtime_hook/02_agbrowse_sufficiency.md`):
 
 - Sessions persist in `~/.browser-agent/web-ai-sessions.json` and survive
   process/machine restarts. `sessions show <SID> --json` is safe from any
@@ -201,7 +209,7 @@ reducing tab creation overhead in batch scenarios.
 
 | Pool setting | Default | Env Var |
 | --- | --- | --- |
-| TTL per pooled tab | 15 min | `AGBROWSE_PROVIDER_POOL_TTL` |
+| TTL per pooled tab | 30 min | `AGBROWSE_PROVIDER_POOL_TTL` |
 | Max warm tabs per `(owner,vendor,sessionType,origin,profile)` | 3 | `AGBROWSE_PROVIDER_POOL_MAX_PER_KEY` |
 | Global cap on warm provider tabs | 8 | `AGBROWSE_PROVIDER_POOL_GLOBAL_MAX` |
 
@@ -213,7 +221,7 @@ another in-flight Pro query without lease contention.
 
 | Setting | Default | Env Var |
 | --- | --- | --- |
-| Max tabs | 10 | `AGBROWSE_MAX_TABS` |
+| Max tabs | 20 | `AGBROWSE_MAX_TABS` |
 | Idle timeout | 30 min | `AGBROWSE_TAB_IDLE` |
 
 Idle tabs (inactive longer than the timeout) are auto-closed unless pinned or
@@ -295,6 +303,33 @@ agbrowse web-ai query \
   --inline-only \
   --prompt "Reply exactly GROK_OK"
 ```
+
+## Where instructions go — `--system` vs `--context` vs `--file`
+
+Attaching instructions *and* a file already works today; pick the right channel:
+
+- **Operating instructions / skill guidance** ("how to behave", "extract X from the
+  attached file") → `--system "..."`. Rendered in the trusted `[SYSTEM]` section and
+  honored. `--goal` / `--constraints` (USER fields) are also trusted.
+- **Untrusted reference *data*** (scraped page text, provider output) → `--context "..."`.
+  Rendered as `[UNTRUSTED_CONTEXT]`; **instructions placed here are ignored by design**
+  (prompt-injection boundary). Never put operating instructions in `--context`.
+- **A file for the model to read/analyze** → `--file <path>` (repeatable; native,
+  dialog-free attachment). The model sees it directly — you do **not** need to also
+  describe it in `--context`.
+
+Common mistake: putting instructions in `--context` and finding they are "ignored" →
+move them to `--system`. Example of the working combo:
+
+```bash
+agbrowse web-ai query --vendor chatgpt --model thinking \
+  --system "Extract every breaking change from the attached PDF and group by module." \
+  --file ./spec.pdf \
+  --prompt "Summarize the breaking changes."
+```
+
+If you are unsure whether/how a file is attached, just **ask the user** rather than
+relying on envelope guesswork.
 
 ## File Upload
 

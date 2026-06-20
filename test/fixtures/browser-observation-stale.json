@@ -1,0 +1,14 @@
+{
+  "basis": {
+    "url": "https://example.test/a",
+    "targetId": "target-a",
+    "viewport": { "width": 1200, "height": 800 },
+    "dpr": 2,
+    "capturedAt": "2026-06-17T00:00:00.000Z"
+  },
+  "current": {
+    "url": "https://example.test/b",
+    "targetId": "target-b"
+  },
+  "expected": { "stale": true }
+}

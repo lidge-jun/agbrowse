@@ -44,9 +44,9 @@
  *   tab-cleanup [--provider chatgpt --keep-provider-tabs 1]  Close idle/overflow tabs
  *   text [--format html]             Get page text
  *   get-dom [--selector CSS] [--max-chars N]  Get current DOM
- *   console [--duration ms] [--clear] [--reload] [--expression js --unsafe-allow evaluate]  Read buffered console logs
+ *   console [--duration ms] [--clear] [--reload] [--expression js]  Read buffered console logs
  *   network [--duration ms] [--filter text] [--reload]  Inspect network requests
- *   evaluate <js> --unsafe-allow evaluate  Execute JavaScript
+ *   evaluate <js>                     Execute JavaScript
  *   scroll <dir> [--amount N] [--json]  Scroll page
  *   wait <ms> [--json]               Wait fixed duration
  *   wait-for-selector <css> [--timeout ms] [--json]  Wait for selector
@@ -1410,7 +1410,14 @@ async function screenshotAction(port, opts = {}) {
         await page.screenshot({ path: filepath, fullPage: opts.fullPage, type });
     }
 
-    return { path: filepath, dpr: viewport.dpr, viewport: { width: viewport.width, height: viewport.height }, clip };
+    return {
+        path: filepath,
+        url: page.url(),
+        targetId: `cdp:${port}`,
+        dpr: viewport.dpr,
+        viewport: { width: viewport.width, height: viewport.height },
+        clip,
+    };
 }
 
 /**
@@ -2408,6 +2415,7 @@ try {
             const maxTextChars = values['max-text-chars'] ? parseInt(/** @type {string} */ (values['max-text-chars'])) : undefined;
             const page = await getReadyPage(getPort());
             const url = page.url();
+            const targetId = `cdp:${getPort()}`;
             let title = '';
             try { title = await page.title(); } catch { /* best-effort */ }
             const viewport = page.viewportSize() || { width: 0, height: 0 };
@@ -2429,7 +2437,7 @@ try {
                 try {
                     const cdp = await getCdpSession(getPort());
                     for (const n of nodes) {
-                        if (!n.ref || n.ref === '...' || !n.ref.startsWith('@')) continue;
+                        if (!n.ref || !/^@?e\d+$/.test(n.ref)) continue;
                         try {
                             const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
                             const sel = `[aria-label="${(n.name || '').replace(/"/g, '\\"')}"]`;
@@ -2440,6 +2448,13 @@ try {
                             if (model && Array.isArray(model.content) && model.content.length >= 8) {
                                 const c = model.content;
                                 boxes[n.ref] = { x: Math.round(c[0]), y: Math.round(c[1]), width: Math.round(model.width), height: Math.round(model.height) };
+                            }
+                        } catch { /* best-effort per-node */ }
+                        if (boxes[n.ref] || !n.role || !n.name) continue;
+                        try {
+                            const box = await page.getByRole(String(n.role), { name: String(n.name), exact: true }).first().boundingBox({ timeout: 500 });
+                            if (box) {
+                                boxes[n.ref] = { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) };
                             }
                         } catch { /* best-effort per-node */ }
                     }
@@ -2456,6 +2471,7 @@ try {
             const bundle = buildObservationBundle({
                 url,
                 title,
+                targetId,
                 viewport,
                 dpr,
                 snapshotNodes: nodes,
@@ -3299,7 +3315,7 @@ try {
                            [--expression "console.log('hi')"]
     network                Inspect requests [--duration ms] [--filter text]
                            [--clear] [--reload] [--live-only]
-     evaluate <js>          Execute JavaScript only with --unsafe-allow evaluate
+     evaluate <js>          Execute JavaScript
 
 	  Web AI:
       Before agent-run Web AI automation:
@@ -3352,8 +3368,10 @@ try {
 
       Tab lease policy:
         Completed provider tabs are runtime leases. Defaults: maxPerKey=3,
-        globalMax=8, TTL=15m. Override via AGBROWSE_PROVIDER_POOL_MAX_PER_KEY,
+        globalMax=8, TTL=30m. Override via AGBROWSE_PROVIDER_POOL_MAX_PER_KEY,
         AGBROWSE_PROVIDER_POOL_GLOBAL_MAX, AGBROWSE_PROVIDER_POOL_TTL.
+        Active session caps default to per-key=5 and global=14. Override via
+        AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY and AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX.
         Use --new-tab / --parallel to bypass pool reuse for a single call.
         Run tab-cleanup --json to inspect leaseClosedTabs.
 
@@ -3405,7 +3423,7 @@ try {
                            Holds web-ai-sessions.json (Phase 1 store) +
                            web-ai-baselines.json (legacy) + browser profile.
     CDP_PORT               Default CDP port (default: 9222)
-    AGBROWSE_MAX_TABS      Max open tabs before cleanup closes oldest (default: 10)
+    AGBROWSE_MAX_TABS      Max open tabs before cleanup closes oldest (default: 20)
     AGBROWSE_TAB_IDLE      Idle threshold for cleanup (default: 30m)
     AGBROWSE_REUSE_TAB=1   Legacy web-ai behavior: reuse active tab
     AGBROWSE_WEB_AI_AUTO_START=0

@@ -27,7 +27,7 @@ Out of scope for this first slice:
 - Direct `--file` browser max-size cap.
 - Nested current-UI attachment-chip hardening from Oracle PR #192.
 - Oracle ZIP proposal. That is tracked separately in
-  `devlog/_plan/260513_oracle_zip_bundle_proposal.md`.
+  `devlog/_plan/260513_oracle_zip_bundle_proposal/00_proposal.md`.
 
 ## Part 1 — Easy Explanation
 

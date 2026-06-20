@@ -1,5 +1,5 @@
 // @ts-check
-// Code-mode prompt contract (Phase 11 of devlog/_plan/260611_webai_gpt_code_mode).
+// Code-mode prompt contract (Phase 11 of devlog/_fin/260611_webai_gpt_code_mode).
 // The contract text was settled by interrogating GPT (thinking/standard) and
 // verified end-to-end: GPT used container.exec, built exactly one
 // /mnt/data/result.zip, and answered with a machine-readable path. The hardening

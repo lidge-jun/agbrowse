@@ -23,6 +23,8 @@ import { isKnownBrowserTool, validateBrowserToolInput, getDeferredBrowserToolMet
 import { enforcePolicy } from './policy/enforce.mjs';
 import { applyProviderDefaults } from './policy/default-policy.mjs';
 import { withActiveCommand } from './active-command-store.mjs';
+import { withSessionCommandLock } from './session-store.mjs';
+import { withSessionPage } from './tab-recovery.mjs';
 import { requireLatestSnapshot, setLatestSnapshot } from './mcp-state.mjs';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -209,14 +211,7 @@ async function callMcpTool(name, args, deps, state) {
         );
     }
     if (name === 'web_ai_wait_response' || name === 'web_ai_session_resume') {
-        const session = getSession(args.sessionId);
-        const provider = args.provider || args.vendor || session?.vendor || 'chatgpt';
-        return pollByProvider(providerFromArgs({ provider }), deps, {
-            ...args,
-            vendor: provider,
-            session: args.sessionId,
-            timeout: args.timeout,
-        });
+        return runMcpSessionPoll(name, args, deps);
     }
     if (name === 'web_ai_copy_markdown') {
         const provider = providerFromArgs(args);
@@ -236,6 +231,41 @@ async function callMcpTool(name, args, deps, state) {
         });
     }
     throw new Error(`unhandled tool: ${name}`);
+}
+
+/**
+ * @param {any} name
+ * @param {any} args
+ * @param {any} deps
+ */
+async function runMcpSessionPoll(name, args, deps) {
+    const sessionId = args.sessionId;
+    const stored = getSession(sessionId);
+    if (!stored) throw new Error(`no session record for ${sessionId}`);
+    providerFromArgs({ provider: args.provider || args.vendor || stored.vendor || 'chatgpt' });
+    return withSessionCommandLock(sessionId, () =>
+        withSessionPage(deps, sessionId, async ({ page, targetId, session }) => {
+            const provider = providerFromArgs({ provider: session.vendor || stored.vendor || args.provider || args.vendor || 'chatgpt' });
+            const sessionDeps = {
+                ...deps,
+                getPage: async () => page,
+                getTargetId: async () => targetId,
+                getCdpSession: async () => /** @type {any} */ (page).context?.().newCDPSession?.(page),
+            };
+            const sessionArgs = {
+                ...args,
+                sessionId,
+            };
+            return withMcpActiveCommand(name, provider, sessionDeps, sessionArgs, () =>
+                pollByProvider(provider, sessionDeps, {
+                    ...args,
+                    vendor: session.vendor || provider,
+                    session: session.sessionId,
+                    timeout: args.timeout,
+                }),
+            );
+        }),
+    );
 }
 
 /**

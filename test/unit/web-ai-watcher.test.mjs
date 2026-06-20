@@ -34,3 +34,24 @@ describe('web-ai watcher transient-timeout promotion (source-string contract)', 
         expect(watcherSrc).toContain('watcher-resumed-transient-timeout');
     });
 });
+
+describe('web-ai watcher self-heals drifted conversation URL (source-string contract)', () => {
+    it('destructures the resolver-healed session from the withSessionPage callback', () => {
+        expect(watcherSrc).toMatch(
+            /withSessionPage\(deps, options\.sessionId, async \(\{ page, targetId, session: resolvedSession \}\)/,
+        );
+    });
+
+    it('feeds the healed session (not the stale outer one) to the attach check', () => {
+        expect(watcherSrc).toContain('ensureWatcherAttached(page, resolvedSession || session, options)');
+    });
+
+    it('uses the canonical tolerant urlsCompatible predicate imported from tab-recovery', () => {
+        expect(watcherSrc).toContain("import { withSessionPage, urlsCompatible } from './tab-recovery.mjs'");
+        expect(watcherSrc).toContain('if (urlsCompatible(targetUrl, currentUrl))');
+    });
+
+    it('retires the strict urlsEquivalentForWatch helper', () => {
+        expect(watcherSrc).not.toContain('urlsEquivalentForWatch');
+    });
+});

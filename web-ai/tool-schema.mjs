@@ -66,7 +66,7 @@ export const WEB_AI_TOOLS = {
         }, ['prompt']),
     },
     web_ai_wait_response: {
-        description: 'Wait for provider response completion.',
+        description: 'Wait for a stored provider session response. Long runs may return a recoverable timeout; preserve sessionId and retry wait/resume or CLI poll.',
         inputSchema: objectSchema({
             sessionId: { type: 'string' },
             provider: providerSchema,
@@ -93,7 +93,7 @@ export const WEB_AI_TOOLS = {
         }),
     },
     web_ai_session_resume: {
-        description: 'Resume a stored session by ID.',
+        description: 'Resume a stored provider session by ID through session-bound recovery. Long runs may need repeated waits or CLI poll.',
         inputSchema: objectSchema({
             sessionId: { type: 'string' },
             provider: providerSchema,

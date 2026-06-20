@@ -26,7 +26,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 | Act | `click`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `drag`, `mouse-click`, `move-mouse`, `mouse-down`, `mouse-up` | ref 기반 또는 coordinate 기반 mutation |
 | Navigate | `navigate`, `reload`, `resize`, `tabs`, `active-tab`, `tab-switch`, `select-tab`, `new-tab`, `tab-close`, `tab-cleanup`, `scroll` | navigation, viewport, active target 조회, tab 관리 (multi-tab create/close 포함) |
 | Wait | `wait`, `wait-for-selector`, `wait-for-text`, `wait-for` | time, selector, text, legacy ref wait |
-| Diagnostics | `console`, `network`, `evaluate` | console/network capture와 explicit unsafe JS evaluation |
+| Diagnostics | `console`, `network`, `evaluate` | console/network capture와 page JS evaluation |
 | Web AI | `web-ai` | provider workflow subcommand |
 | Runway | `runway` | Runway Apps/Custom selector contract, current-tab status, read-only preflight |
 
@@ -201,10 +201,10 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 | `web_ai_snapshot` | compact accessibility snapshot과 `@eN` refs 반환 |
 | `web_ai_click_ref` | latest snapshot ref 클릭 |
 | `web_ai_submit_prompt` | provider web UI에 prompt 제출 |
-| `web_ai_wait_response` | provider response completion 대기 |
+| `web_ai_wait_response` | stored session response 대기; 긴 실행은 recoverable timeout으로 재시도 가능 |
 | `web_ai_copy_markdown` | 마지막 response를 markdown/text로 capture |
 | `web_ai_doctor` | provider diagnostics와 repair packet 반환 |
-| `web_ai_session_resume` | stored session poll resume |
+| `web_ai_session_resume` | stored session poll resume; session-bound recovery 경로 사용 |
 
 `web_ai_*` 입력은 strict schema로 검증한다. Runtime에서 쓰는 호환 alias
 (`vendor`, `policy`, submit의 `filePath`/`reasoningEffort` 등)만 명시적으로
@@ -231,7 +231,7 @@ tool description에도 그 제한을 명시한다.
 
 ## ObservationBundleV1 Schema (G06)
 
-`agbrowse observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]`은 한 번의 호출로 URL, title, viewport, DPR, snapshot refs, optional bounding boxes, optional screenshot path, body innerText 요약을 단일 record로 묶는다. Vercel agent-browser/Playwright MCP `browser_observe`/VisualWebArena 류 multimodal 벤치가 요구하는 reproducible observation step을 만족시킨다.
+`agbrowse observe-bundle [--screenshot] [--boxes] [--json] [--max-text-chars N]`은 한 번의 호출로 observation id, target id, URL, title, viewport, DPR, snapshot refs, optional bounding boxes, optional screenshot path, body innerText 요약을 단일 record로 묶는다. Vercel agent-browser/Playwright MCP `browser_observe`/VisualWebArena 류 multimodal 벤치가 요구하는 reproducible observation step을 만족시킨다. Browser action routing은 ref-first, coordinate-last 정책을 따른다. Vision coordinate fallback은 bbox/confidence candidate와 clip/DPR basis를 보존하고, confidence가 낮거나 point-only인 결과는 verification 없이 바로 클릭하지 않는다.
 
 ```json
 {

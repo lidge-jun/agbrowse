@@ -63,7 +63,7 @@ agbrowse/
 │   ├── web-ai-code-mode-prompt.test.mjs
 │   ├── web-ai-code-mode.test.mjs
 │   └── web-ai-code-dev-context.test.mjs  NEW
-└── devlog/_plan/260611_code_mode_gpt_agent_context/
+└── devlog/_fin/260611_code_mode_gpt_agent_context/
     └── 00_plan.md
 
 cli-jaw/

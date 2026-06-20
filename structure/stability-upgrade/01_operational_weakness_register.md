@@ -29,6 +29,7 @@ tags: [agbrowse, operational-weakness, web-ai]
 | STAB-06 | Deferred | Deep Research can run longer than normal poll/finalize assumptions | report may be partial or artifact warning may appear | marked experimental; report save uses structured artifact warnings and skips auto archive | Promote only after repeated live long-run smoke and report extraction fixtures |
 | STAB-07 | Closed | Temporary Chat could be archived despite being intentionally non-durable | archive claim would be misleading or no-op | Temporary Chat URL check wins even when archive is forced | None unless ChatGPT changes temporary URL shape |
 | STAB-08 | Closed | MCP `web_ai_*` accepted misspelled/unknown fields | agents could think a field worked when runtime ignored it | strict schema rejects unknown fields while preserving documented aliases | Keep deferred advanced surfaces documented in MCP descriptions |
+| STAB-09 | Closed | MCP wait/resume bypassed session-bound recovery on long provider runs | `web_ai_wait_response` could time out before a long ChatGPT Pro response while CLI `poll --session` later recovered it; later timeout polls could downgrade completed sessions | MCP wait/resume uses session lock/recovery plus active-command ownership; provider timeouts are recoverable and completed sessions are monotonic | Add a future non-blocking MCP lease/cancel protocol only if host request timeout remains a practical blocker |
 
 ## Easy Read
 
@@ -36,6 +37,7 @@ tags: [agbrowse, operational-weakness, web-ai]
   long-running browser state.
 - The newest Oracle parity gap, model evidence, is closed locally.
 - The biggest open item is recovery UX when the browser closes mid-generation.
+- MCP wait/resume now shares the stored-session recovery path, but MCP host
+  request timeout remains a client/runtime boundary rather than a provider crash.
 - Deep Research and Project Sources should stay beta/experimental until live
   smoke evidence is stronger.
-

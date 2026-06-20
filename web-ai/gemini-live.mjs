@@ -14,6 +14,7 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
+    markSessionTimeout,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
@@ -266,7 +267,6 @@ export async function geminiSendWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'gemini'),
         envelopeSummary: { ...summarizeEnvelope(input, contextPack), assistantCount: turnsBefore },
     });
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: 'gemini',
@@ -276,6 +276,7 @@ export async function geminiSendWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
     return {
         ok: true,
         vendor: 'gemini',
@@ -492,8 +493,24 @@ export async function geminiPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    if (session) updateSession(session.sessionId, { status: 'timeout' });
-    return { ok: false, vendor: 'gemini', status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for gemini response' };
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'gemini',
+        status: 'timeout',
+        url: page.url(),
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for gemini response',
+    };
 }
 
 /**

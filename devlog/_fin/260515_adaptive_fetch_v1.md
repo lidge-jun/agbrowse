@@ -45,9 +45,9 @@ Updated source-of-truth surfaces:
 - `skills/browser/SKILL.md`
 - `structure/commands.md`
 - `structure/CAPABILITY_TRUTH_TABLE.md`
-- `devlog/_plan/260514_insane_search_adaptive_fetch/README.md`
-- `devlog/_plan/260514_insane_search_adaptive_fetch/13_cli_jaw_implementation_plan_baseline.md`
-- `devlog/_plan/260514_insane_search_adaptive_fetch/15_skill_frontmatter_routing_baseline.md`
+- `devlog/_fin/260514_insane_search_adaptive_fetch/README.md`
+- `devlog/_fin/260514_insane_search_adaptive_fetch/13_cli_jaw_implementation_plan_baseline.md`
+- `devlog/_fin/260514_insane_search_adaptive_fetch/15_skill_frontmatter_routing_baseline.md`
 
 The documented product boundary is:
 

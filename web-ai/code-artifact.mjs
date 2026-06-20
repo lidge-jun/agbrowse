@@ -1,5 +1,5 @@
 // @ts-check
-// Code-mode artifact retrieval (Phase 10 of devlog/_plan/260611_webai_gpt_code_mode).
+// Code-mode artifact retrieval (Phase 10 of devlog/_fin/260611_webai_gpt_code_mode).
 // Retrieves a /mnt/data/*.zip built by ChatGPT's container tools without any
 // button click: conversation JSON → sandbox path scan → interpreter/download
 // presigned URL → in-page credentialed fetch (estuary URLs are cookie-bound;

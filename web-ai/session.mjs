@@ -10,6 +10,9 @@ import {
     patchSession,
     pruneSessions,
 } from './session-store.mjs';
+import { normalizeChatGptModelChoice } from './chatgpt-model.mjs';
+import { normalizeGrokModelChoice } from './grok-model.mjs';
+import { normalizeGeminiModelChoice, isGeminiDeepThinkChoice } from './gemini-model.mjs';
 
 /**
  * @typedef {import('./session-store.mjs').WebAiSession} WebAiSession
@@ -223,6 +226,53 @@ export function updateSession(sessionId, patch = {}) {
 }
 
 /**
+ * Mark an incomplete session as timed out without downgrading completed work.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} [patch]
+ * @returns {WebAiSession|null}
+ */
+export function markSessionTimeout(sessionId, patch = {}) {
+    const session = getSession(sessionId);
+    if (!session) return null;
+    const { warning, warnings: patchWarnings, ...sessionPatch } = patch;
+    const warnings = mergeWarnings(session.warnings || [], patchWarnings || [], warning);
+    const hasCompletedEvidence = session.status === 'complete' ||
+        session.status === 'completed' ||
+        Boolean(session.completedAt) ||
+        Boolean(session.answer);
+    if (hasCompletedEvidence) {
+        return updateSession(sessionId, {
+            warnings: mergeWarnings(warnings, ['timeout-after-complete-ignored']),
+            status: session.status === 'completed' ? 'completed' : 'complete',
+        });
+    }
+    return updateSession(sessionId, {
+        ...sessionPatch,
+        status: 'timeout',
+        warnings,
+    });
+}
+
+/**
+ * @param {unknown[]} base
+ * @param {unknown[]} extra
+ * @param {unknown} [single]
+ * @returns {unknown[]}
+ */
+function mergeWarnings(base, extra, single) {
+    const out = Array.isArray(base) ? [...base] : [];
+    for (const warning of [...(Array.isArray(extra) ? extra : []), single]) {
+        if (warning == null) continue;
+        const key = typeof warning === 'string' ? warning : JSON.stringify(warning);
+        if (!out.some((existing) => (typeof existing === 'string' ? existing : JSON.stringify(existing)) === key)) {
+            out.push(warning);
+        }
+    }
+    return out;
+}
+
+/**
  * @param {string|null|undefined} sessionId
  * @returns {WebAiSession|null}
  */
@@ -333,6 +383,73 @@ export function resolveDeadlineAt(input = {}, vendor = 'chatgpt') {
         ? Number(input.timeout)
         : VENDOR_DEFAULT_TIMEOUT_SEC[vendor] || 1200;
     return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+/**
+ * Hardcoded default poll timeout (seconds) per normalized model tier.
+ * Long-reasoning tiers (pro / deep-research) get an hour; shorter tiers scale down.
+ * An explicit --timeout / --deadline always overrides these defaults.
+ * @type {Readonly<Record<string, number>>}
+ */
+export const TIER_DEFAULT_TIMEOUT_SEC = Object.freeze({
+    instant: 120,
+    thinking: 600,
+    pro: 3600,
+    'deep-research': 3600,
+});
+
+/** Long-reasoning ceiling (seconds), exported for cross-module reuse (e.g. lease TTLs). */
+export const PRO_TIMEOUT_SEC = TIER_DEFAULT_TIMEOUT_SEC.pro;
+
+/**
+ * Resolve a tier name to a default timeout (seconds), falling back to the vendor
+ * default and finally 1200s when the tier is unknown.
+ * @param {string|null} tier
+ * @param {string} [vendor]
+ * @returns {number}
+ */
+export function tierDefaultTimeoutSec(tier, vendor = 'chatgpt') {
+    if (tier && TIER_DEFAULT_TIMEOUT_SEC[tier] != null) return TIER_DEFAULT_TIMEOUT_SEC[tier];
+    return VENDOR_DEFAULT_TIMEOUT_SEC[vendor] || 1200;
+}
+
+/**
+ * Map (vendor, model, research) to a normalized timeout tier, or null when unknown.
+ * Reuses the existing per-vendor model normalizers; deep-research is signalled by
+ * the separate `research` flag (chatgpt) or the deep-think alias (gemini).
+ * @param {string} vendor
+ * @param {unknown} model
+ * @param {unknown} [research]
+ * @returns {string|null}
+ */
+export function deriveTimeoutTier(vendor, model, research) {
+    if (vendor === 'gemini') {
+        if (isGeminiDeepThinkChoice(model)) return 'deep-research';
+        const m = normalizeGeminiModelChoice(model);
+        if (m === 'flash-lite') return 'instant';
+        if (m === 'flash' || m === 'pro') return 'thinking';
+        return null;
+    }
+    if (vendor === 'grok') {
+        const m = normalizeGrokModelChoice(model);
+        if (m === 'heavy') return 'pro';
+        if (m === 'fast') return 'instant';
+        return m ? 'thinking' : null;
+    }
+    // chatgpt (default vendor)
+    if (String(research || '').trim().toLowerCase() === 'deep') return 'deep-research';
+    return normalizeChatGptModelChoice(model);
+}
+
+/**
+ * Tier-aware default poll timeout (seconds), applied when no explicit --timeout is given.
+ * @param {{ model?: unknown, research?: unknown }} [input]
+ * @param {string} [vendor]
+ * @returns {number}
+ */
+export function resolveTimeoutDefaultSec(input = {}, vendor = 'chatgpt') {
+    const tier = deriveTimeoutTier(vendor, input.model, input.research);
+    return tierDefaultTimeoutSec(tier, vendor);
 }
 
 /**

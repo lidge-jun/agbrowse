@@ -19,6 +19,8 @@
  * @typedef {Object} ObservationBundleInput
  * @property {string} url
  * @property {string} [title]
+ * @property {string} [observationId]
+ * @property {string} [targetId]
  * @property {{width:number,height:number}} viewport
  * @property {number} [dpr]
  * @property {Array<{ref:string,role:string,name?:string,depth?:number,occurrenceIndex?:number}>} snapshotNodes
@@ -32,6 +34,8 @@
 /**
  * @typedef {Object} ObservationBundleV1
  * @property {'observation-bundle-v1'} schemaVersion
+ * @property {string} observationId
+ * @property {string} targetId
  * @property {string} url
  * @property {string} title
  * @property {{width:number,height:number}} viewport
@@ -40,6 +44,7 @@
  * @property {Array<{ref:string,role:string,name:string,depth:number,occurrenceIndex?:number,box?:{x:number,y:number,width:number,height:number}}>} refs
  * @property {string|null} screenshot
  * @property {string} textSummary
+ * @property {{url:string,targetId:string,viewport:{width:number,height:number},dpr:number,capturedAt:string}} basis
  * @property {{refCount:number,boxCount:number,textChars:number,hasScreenshot:boolean}} stats
  */
 
@@ -79,7 +84,7 @@ export function buildObservationBundle(input) {
     const refs = [];
     for (const node of input.snapshotNodes) {
         if (!node || typeof node.ref !== 'string') continue;
-        if (node.ref === '...' || !node.ref.startsWith('@')) continue;
+        if (!isElementRef(node.ref)) continue;
         const row = {
             ref: node.ref,
             role: String(node.role || ''),
@@ -99,10 +104,14 @@ export function buildObservationBundle(input) {
     const textSummary = clampText(input.textSummary || '', input.maxTextChars);
     const screenshot = input.screenshotPath || null;
     const capturedAt = input.capturedAt || new Date().toISOString();
+    const observationId = input.observationId || `obs-${hashBasis(input.url, capturedAt, refs.length)}`;
+    const targetId = input.targetId || '';
     let boxCount = 0;
     for (const r of refs) if (r.box) boxCount += 1;
     return {
         schemaVersion: SCHEMA_VERSION,
+        observationId,
+        targetId,
         url: input.url,
         title: String(input.title || ''),
         viewport: { width: input.viewport.width, height: input.viewport.height },
@@ -111,6 +120,13 @@ export function buildObservationBundle(input) {
         refs,
         screenshot,
         textSummary,
+        basis: {
+            url: input.url,
+            targetId,
+            viewport: { width: input.viewport.width, height: input.viewport.height },
+            dpr,
+            capturedAt,
+        },
         stats: {
             refCount: refs.length,
             boxCount,
@@ -118,6 +134,28 @@ export function buildObservationBundle(input) {
             hasScreenshot: Boolean(screenshot),
         },
     };
+}
+
+/**
+ * @param {string} ref
+ */
+function isElementRef(ref) {
+    return /^@?e\d+$/.test(ref);
+}
+
+/**
+ * @param {string} url
+ * @param {string} capturedAt
+ * @param {number} refCount
+ */
+function hashBasis(url, capturedAt, refCount) {
+    let hash = 2166136261;
+    const input = `${url}|${capturedAt}|${refCount}`;
+    for (let i = 0; i < input.length; i++) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
 }
 
 /**

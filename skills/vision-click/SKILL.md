@@ -37,9 +37,9 @@ Use when `agbrowse snapshot` returns **NO ref** for target:
 3. If NO ref → vision-click fallback:
    a. agbrowse screenshot --json     → { path, dpr, viewport }
    b. optional stable viewport / clip   → more deterministic framing
-   c. codex exec -i <path> --json       → NDJSON events → { found, x, y }
+   c. codex exec -i <path> --json       → NDJSON events → vision bbox candidate
    d. optional verify crop              → second-pass confirmation near center
-   e. DPR correction: x/dpr, y/dpr      → CSS pixels
+   e. DPR correction + clip origin      → CSS pixels
    f. agbrowse mouse-click <x> <y>   → click
    g. agbrowse snapshot              → verify
 ```
@@ -51,11 +51,11 @@ Use when `agbrowse snapshot` returns **NO ref** for target:
 ```jsonl
 {"type":"thread.started","thread_id":"..."}
 {"type":"turn.started"}
-{"type":"item.completed","item":{"type":"agent_message","text":"{\"found\":true,\"x\":522,\"y\":82,\"description\":\"search button\"}"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"found\":true,\"bbox\":{\"x\":500,\"y\":70,\"width\":44,\"height\":24},\"point\":{\"x\":522,\"y\":82},\"confidence\":0.88,\"description\":\"search button\"}"}}
 {"type":"turn.completed","usage":{"input_tokens":16964,"output_tokens":542}}
 ```
 
-The coordinate JSON is extracted from the `item.completed` event's `item.text` field.
+The vision candidate JSON is extracted from the `item.completed` event's `item.text` field. Legacy `{found,x,y}` point-only JSON is still parsed, but it is marked lower confidence and must be verified before click.
 
 ## Examples
 
@@ -75,6 +75,10 @@ agbrowse-vision-click "Menu" --browser-script /path/to/browser.mjs
 # Accuracy-first mode for dense UIs
 agbrowse-vision-click "first search result row" --prepare-stable --region left-panel --verify-before-click
 
+# Reconcile a vision bbox against refs from observe-bundle
+agbrowse observe-bundle --screenshot --boxes --json > /tmp/bundle.json
+agbrowse-vision-click "Submit button" --bundle /tmp/bundle.json --verify-before-click
+
 # Manual clip when you know the rough area
 agbrowse-vision-click "zoom button" --clip 980 120 220 220
 ```
@@ -85,6 +89,8 @@ agbrowse-vision-click "zoom button" --clip 980 120 220 220
 - Use `--region left-panel` for search result panels and `--region center-map` for map canvas targets.
 - Use `--verify-before-click` on dense UIs where a wrong click is expensive.
 - If you already know the rough target area, `--clip x y w h` is more reliable than full-screen analysis.
+- Candidates below confidence `0.75` fail closed unless verification is explicitly requested.
+- Prefer `agbrowse click <ref>` whenever `snapshot --interactive` exposes a usable ref; coordinate click remains the last fallback.
 
 ## Environment Variables
 

@@ -34,6 +34,8 @@
     "web-ai/trace/writer.mjs",
     "web-ai/action-trace.mjs",
     "web-ai/capability.mjs",
+    "web-ai/observation-bundle.mjs",
+    "web-ai/candidate-reconcile.mjs",
     "web-ai/answer-artifact.mjs",
     "web-ai/ref-registry.mjs",
     "web-ai/tool-schema.mjs",

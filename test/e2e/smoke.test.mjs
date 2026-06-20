@@ -40,7 +40,7 @@ describe.sequential('browser smoke e2e', () => {
         expect(existsSync(payload.path)).toBe(true);
         expect(payload.viewport.width).toBeGreaterThan(0);
 
-        const consoleLogs = await execBrowser(['console', '--clear', '--expression', 'console.log("smoke-console")', '--limit', '10', '--unsafe-allow', 'evaluate'], { env });
+        const consoleLogs = await execBrowser(['console', '--clear', '--expression', 'console.log("smoke-console")', '--limit', '10'], { env });
         expect(consoleLogs.stdout).toContain('smoke-console');
 
         const network = await execBrowser(['network', '--clear', '--reload', '--duration', '700', '--filter', 'ping'], { env });

@@ -12,7 +12,7 @@ import { pollWebAi } from './chatgpt.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
 import { getSession, updateSession } from './session.mjs';
-import { withSessionPage } from './tab-recovery.mjs';
+import { withSessionPage, urlsCompatible } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
@@ -172,11 +172,15 @@ export async function watchSessionOnce(deps, input = {}) {
         };
     }
 
-    // Phase 9.1: Use withSessionPage to resolve session's specific page, not active tab
-    return withSessionPage(deps, options.sessionId, async ({ page, targetId }) => {
+    // Phase 9.1: Use withSessionPage to resolve session's specific page, not active tab.
+    // resolveSessionPage (allowNavigate) already self-heals root->/c/ URL drift and
+    // returns the updated session; use that healed copy for the attach check instead
+    // of the stale outer `session`, which previously re-introduced a false
+    // reattach-mismatch (issue #77 watch-path).
+    return withSessionPage(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
         const profileLockSummary = await readProfileLockSummary()
             .catch(err => ({ state: 'unknown', error: err?.message || String(err) }));
-        const reattach = await ensureWatcherAttached(page, session, options);
+        const reattach = await ensureWatcherAttached(page, resolvedSession || session, options);
         if (!reattach.ok) {
             return {
                 ok: false, sessionId: session.sessionId, vendor,
@@ -399,7 +403,11 @@ async function ensureWatcherAttached(page, session, options) {
     const targetUrl = session.conversationUrl || session.originalUrl;
     if (!targetUrl) return { ok: true, warnings: ['session-has-no-conversation-url'] };
     const currentUrl = page.url?.() || '';
-    if (urlsEquivalentForWatch(currentUrl, targetUrl)) return { ok: true, url: currentUrl, warnings: [] };
+    // Use the canonical tolerant predicate (shared with resolveSessionPage) instead
+    // of a stricter hash-only compare: same-conversation root->/c/ drift and trailing
+    // slashes are compatible, while a genuinely different conversation or a
+    // non-provider landing still mismatches and (with --navigate) re-navigates.
+    if (urlsCompatible(targetUrl, currentUrl)) return { ok: true, url: currentUrl, warnings: [] };
     if (options.navigate) {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: options.navigateTimeoutMs });
         return { ok: true, url: targetUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
@@ -550,22 +558,6 @@ function isWatcherLockStale(metadata, staleMs) {
 function pidAlive(pid) {
     if (!Number.isFinite(pid) || pid <= 0) return false;
     try { process.kill(pid, 0); return true; } catch (err) { return (/** @type {any} */ (err))?.code === 'EPERM'; }
-}
-
-/**
- * @param {any} a
- * @param {any} b
- */
-function urlsEquivalentForWatch(a, b) {
-    try {
-        const ua = new URL(a);
-        const ub = new URL(b);
-        ua.hash = '';
-        ub.hash = '';
-        return ua.toString() === ub.toString();
-    } catch {
-        return String(a || '') === String(b || '');
-    }
 }
 
 /**

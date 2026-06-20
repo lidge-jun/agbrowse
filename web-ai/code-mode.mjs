@@ -1,5 +1,5 @@
 // @ts-check
-// Code-mode orchestration (Phase 12 of devlog/_plan/260611_webai_gpt_code_mode):
+// Code-mode orchestration (Phase 12 of devlog/_fin/260611_webai_gpt_code_mode):
 // strict contract prompt → ChatGPT query → conversation-id resolution →
 // in-page artifact retrieval → zip verification. ChatGPT-only: the contract
 // depends on container tools that Gemini/Grok do not expose the same way.

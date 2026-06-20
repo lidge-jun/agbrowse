@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "refs": [
+      { "ref": "@e1", "role": "button", "name": "Submit", "box": { "x": 100, "y": 100, "width": 120, "height": 40 } },
+      { "ref": "@e2", "role": "button", "name": "Cancel", "box": { "x": 300, "y": 100, "width": 120, "height": 40 } }
+    ]
+  },
+  "candidate": {
+    "point": { "x": 160, "y": 120 },
+    "bbox": { "x": 110, "y": 105, "width": 100, "height": 30 },
+    "confidence": 0.91
+  },
+  "expected": { "action": "ref", "ref": "@e1" }
+}

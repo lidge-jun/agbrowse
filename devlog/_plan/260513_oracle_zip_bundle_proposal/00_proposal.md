@@ -18,7 +18,7 @@ Reference point:
   - Open PR #193 discusses browser max-file-size caps and skill ZIP guidance.
 
 This proposal is intentionally separate from the local agbrowse guardrail plan
-in `devlog/_plan/260513_oracle_followup_guardrails_diff_plan.md`.
+in `devlog/_fin/260513_oracle_followup_guardrails_diff_plan.md`.
 
 ## Part 1 — Easy Explanation
 

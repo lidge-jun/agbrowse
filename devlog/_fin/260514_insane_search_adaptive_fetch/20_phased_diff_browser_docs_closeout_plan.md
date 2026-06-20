@@ -164,7 +164,7 @@ cookies unless explicitly requested.
 npm test -- browser-fetch-command
 bash structure/verify-counts.sh
 bash structure/check-doc-drift.sh
-git diff --check HEAD -- skills/browser README.md structure devlog/_plan/260514_insane_search_adaptive_fetch
+git diff --check HEAD -- skills/browser README.md structure devlog/_fin/260514_insane_search_adaptive_fetch
 ```
 
 ## Phase 07 — Integrated Gates And Mirror Readiness
@@ -174,9 +174,9 @@ git diff --check HEAD -- skills/browser README.md structure devlog/_plan/260514_
 MODIFY:
 
 ```text
-devlog/_plan/260514_insane_search_adaptive_fetch/README.md
-devlog/_plan/260514_insane_search_adaptive_fetch/13_cli_jaw_implementation_plan_baseline.md
-devlog/_plan/260514_insane_search_adaptive_fetch/15_skill_frontmatter_routing_baseline.md
+devlog/_fin/260514_insane_search_adaptive_fetch/README.md
+devlog/_fin/260514_insane_search_adaptive_fetch/13_cli_jaw_implementation_plan_baseline.md
+devlog/_fin/260514_insane_search_adaptive_fetch/15_skill_frontmatter_routing_baseline.md
 ```
 
 Optional new closeout note:

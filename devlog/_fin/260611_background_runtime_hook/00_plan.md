@@ -72,10 +72,10 @@ All research-only — no source code modifications.
 
 | Path | Purpose |
 |------|---------|
-| `devlog/_plan/260611_background_runtime_hook/00_plan.md` | This plan (you're reading it) |
-| `devlog/_plan/260611_background_runtime_hook/01_runtime_survey.md` | Task 1 결과: 런타임별 비교표 |
-| `devlog/_plan/260611_background_runtime_hook/02_agbrowse_sufficiency.md` | Task 2 결과: agbrowse 현재 구현 평가 |
-| `devlog/_plan/260611_background_runtime_hook/03_hook_design.md` | Task 3 결과: cli-jaw background hook 설계 초안 |
+| `devlog/_fin/260611_background_runtime_hook/00_plan.md` | This plan (you're reading it) |
+| `devlog/_fin/260611_background_runtime_hook/01_runtime_survey.md` | Task 1 결과: 런타임별 비교표 |
+| `devlog/_fin/260611_background_runtime_hook/02_agbrowse_sufficiency.md` | Task 2 결과: agbrowse 현재 구현 평가 |
+| `devlog/_fin/260611_background_runtime_hook/03_hook_design.md` | Task 3 결과: cli-jaw background hook 설계 초안 |
 
 ### MODIFY files
 

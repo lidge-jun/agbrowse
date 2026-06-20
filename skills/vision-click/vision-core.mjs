@@ -1,5 +1,14 @@
 // @ts-check
 import { execFileSync } from 'node:child_process';
+import { extractVisionCandidateJson } from './vision-candidate.mjs';
+
+export {
+    candidateCenter,
+    extractVisionCandidateJson,
+    isLowConfidence,
+    normalizeVisionCandidate,
+    validateVisionCandidate,
+} from './vision-candidate.mjs';
 
 /**
  * @typedef {Object} Viewport
@@ -33,12 +42,34 @@ import { execFileSync } from 'node:child_process';
  * @property {string|null} region
  * @property {Clip|null} clip
  * @property {boolean} help
+ * @property {string|null} bundle
  */
 
 /**
  * @typedef {Object} Point
  * @property {number} x
  * @property {number} y
+ */
+
+/**
+ * @typedef {Object} BBox
+ * @property {number} x
+ * @property {number} y
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
+ * @typedef {Object} VisionCandidate
+ * @property {'vision-candidate-v1'} schemaVersion
+ * @property {boolean} found
+ * @property {'vision_bbox'|'coordinate'|'not_found'} kind
+ * @property {BBox|null} bbox
+ * @property {Point} point
+ * @property {number} confidence
+ * @property {string} [description]
+ * @property {string} [reason]
+ * @property {string[]} riskFlags
  */
 
 /**
@@ -53,55 +84,6 @@ import { execFileSync } from 'node:child_process';
  * @property {(file: string, args: string[], opts: { encoding: string, timeout: number }) => unknown} [execFn]
  * @property {string} [binary]
  */
-
-// ─── JSON extraction ─────────────────────────────
-
-/**
- * @param {string} text
- * @returns {string[]}
- */
-function extractJsonObjects(text) {
-    const objects = [];
-    let start = -1;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-
-    for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-
-        if (ch === '\\') {
-            escaped = true;
-            continue;
-        }
-
-        if (ch === '"') {
-            inString = !inString;
-            continue;
-        }
-
-        if (inString) continue;
-
-        if (ch === '{') {
-            if (depth === 0) start = i;
-            depth += 1;
-        } else if (ch === '}') {
-            if (depth === 0) continue;
-            depth -= 1;
-            if (depth === 0 && start !== -1) {
-                objects.push(text.slice(start, i + 1));
-                start = -1;
-            }
-        }
-    }
-
-    return objects;
-}
 
 // ─── CLI args ────────────────────────────────────
 
@@ -123,6 +105,7 @@ export function parseVisionClickCliArgs(args, defaults = {}) {
         region: null,
         clip: null,
         help: false,
+        bundle: null,
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -175,6 +158,11 @@ export function parseVisionClickCliArgs(args, defaults = {}) {
                 height: values[3],
             };
             i += 4;
+            continue;
+        }
+        if (arg === '--bundle') {
+            opts.bundle = args[i + 1] || opts.bundle;
+            i += 1;
             continue;
         }
         if (arg.startsWith('--')) continue;
@@ -282,10 +270,11 @@ export function clipAroundPoint(point, viewport, size = {}) {
 export function buildCoordPrompt(target, options = {}) {
     const prompt = [
         'Look at this screenshot image carefully.',
-        `Find the UI element "${target}" and return its center pixel coordinate.`,
+        `Find the UI element "${target}" and return its clickable bounding box plus center pixel coordinate.`,
         'You MUST respond with ONLY this JSON format, nothing else:',
-        '{"found":true,"x":<int>,"y":<int>,"description":"<brief description>"}',
-        'If not found: {"found":false,"x":0,"y":0,"description":"not found"}',
+        '{"found":true,"bbox":{"x":<int>,"y":<int>,"width":<int>,"height":<int>},"point":{"x":<int>,"y":<int>},"confidence":<0_to_1>,"description":"<brief description>"}',
+        'If not found: {"found":false,"bbox":null,"point":{"x":0,"y":0},"confidence":0,"description":"not found"}',
+        'Only if a bounding box is impossible, return the legacy point shape {"found":true,"x":<int>,"y":<int>,"confidence":0.5,"description":"<brief description>"}.',
         'IMPORTANT: Do NOT run any commands. Just analyze the image visually and return the JSON.',
     ];
     if (options.regionHint) {
@@ -307,17 +296,14 @@ export function buildCoordPrompt(target, options = {}) {
  * @returns {{ found: boolean, x: number, y: number, description?: string } | null}
  */
 export function extractCoordJson(text) {
-    const candidates = extractJsonObjects(String(text || ''));
-    for (const candidate of candidates.reverse()) {
-        try {
-            const coords = JSON.parse(candidate);
-            if (typeof coords?.found !== 'boolean') continue;
-            if (typeof coords.x === 'number' && typeof coords.y === 'number') return coords;
-        } catch {
-            // Skip malformed JSON candidates and keep scanning.
-        }
-    }
-    return null;
+    const candidate = extractVisionCandidateJson(text);
+    if (!candidate || !candidate.found) return candidate ? { found: false, x: 0, y: 0, description: candidate.description } : null;
+    return {
+        found: true,
+        x: candidate.point.x,
+        y: candidate.point.y,
+        description: candidate.description,
+    };
 }
 
 // ─── Codex CLI check ─────────────────────────────

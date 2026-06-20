@@ -17,10 +17,10 @@ import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
 import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
-import { cleanupIdleTabs, isPinned } from '../skills/browser/tab-lifecycle.mjs';
+import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { listSessions, getSession } from './session.mjs';
+import { listSessions, getSession, resolveTimeoutDefaultSec } from './session.mjs';
 import { resolveImplicitSessionSelection } from './session-target-guard.mjs';
 import { listLeases } from './tab-lease-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
@@ -121,15 +121,21 @@ Provider:
                         Thinking: light, standard, extended, heavy
   --reasoning-effort <alias>
                       Alias for --effort
-  --timeout <sec>     Polling timeout. Defaults: ChatGPT 1200, Gemini 1200, Grok 600.
+  --timeout <sec>     Polling timeout. When omitted, the default scales by model tier:
+                      instant 120s, thinking 600s, pro/deep-research 3600s (vendor
+                      default 1200/1200/600 for unknown models). --timeout overrides.
 
 Prompt envelope (every prompt also gets a [INSTRUCTIONS] block telling the
 model to use web search and cite sources inline):
   --prompt <text>     Main user prompt/question (required)
-  --system <text>     System / role instruction
+  --system <text>     Trusted operating/role instructions — the channel for skill
+                      guidance and "how to behave". Honored, not treated as data.
+                      Put instructions HERE, not in --context.
   --project <text>    Project name
   --goal <text>       Task goal
-  --context <text>    Inline context
+  --context <text>    UNTRUSTED reference data only (scraped text, provider output).
+                      Rendered as [UNTRUSTED_CONTEXT]; instructions placed here are
+                      ignored by design. For a file the model should read, use --file.
   --question <text>   Alias for prompt detail
   --output <text>     Output preference
   --constraints <txt> Constraints to include in the prompt
@@ -210,10 +216,12 @@ Browser:
 
 Tab lease policy:
   Completed provider tabs are runtime leases, not history storage.
-  Defaults: maxPerKey=3, globalMax=8, TTL=15m. Per-key limit is the
+  Pool defaults: maxPerKey=3, globalMax=8, TTL=30m. Per-key limit is the
   number of warm pooled tabs allowed per
   (owner,vendor,sessionType,origin,profile). Override via
   AGBROWSE_PROVIDER_POOL_MAX_PER_KEY / _GLOBAL_MAX / _TTL.
+  Active session caps default to per-key=5 and global=14. Override via
+  AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY / _GLOBAL_MAX.
   Expired or overflow pooled tabs are closed with CDP.
   Use --new-tab / --parallel to bypass pool reuse for a single call.
   Use "agbrowse tab-cleanup --json" to inspect leaseClosedTabs.
@@ -638,7 +646,12 @@ async function runWebAiCliInner(argv = [], deps) {
         question: values.question,
         output: values.output,
         constraints: values.constraints,
-        timeout: values.timeout,
+        // When --timeout is omitted, default scales by model tier (instant 120s,
+        // thinking 600s, pro/deep-research 3600s) so a long pro run is not capped
+        // at the legacy 1200s. An explicit --timeout still wins.
+        timeout: values.timeout != null
+            ? values.timeout
+            : resolveTimeoutDefaultSec({ model: values.model, research: values.research }, values.vendor || 'chatgpt'),
         deadline: values.deadline,
         session: values.session,
         navigate: values.navigate === true,
@@ -975,7 +988,7 @@ async function ensureProviderTab(deps, input) {
     const port = deps.getPort?.() || 9222;
 
     await cleanupPoolTabs(port);
-    await cleanupIdleTabs(port, { maxTabs: Number.POSITIVE_INFINITY });
+    await cleanupIdleTabs(port, { maxTabs: DEFAULT_MAX_TABS });
 
     if (input.forceNewTab !== true) {
         // Phase 9.2: try tab pool first

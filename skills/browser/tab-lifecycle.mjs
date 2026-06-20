@@ -14,7 +14,7 @@ import { activeCommandTargetIds } from '../../web-ai/active-command-store.mjs';
  * @typedef {ManagedTabRow & { cleanupReason?: string, vendor?: string }} CleanupTab
  */
 
-const MAX_TABS = parseInt(process.env.AGBROWSE_MAX_TABS || '10', 10);
+const MAX_TABS = parseInt(process.env.AGBROWSE_MAX_TABS || '20', 10);
 const IDLE_TIMEOUT_MS = parseDuration(process.env.AGBROWSE_TAB_IDLE || '30m');
 
 export const DEFAULT_MAX_TABS = MAX_TABS;

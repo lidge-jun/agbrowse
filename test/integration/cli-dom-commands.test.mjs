@@ -47,11 +47,7 @@ describe.sequential('browser DOM commands', () => {
         const secondClick = await execBrowser(['click', buttonRefs[1]], { env });
         expect(secondClick.code).toBe(0);
 
-        const deniedEvaluate = await execBrowser(['evaluate', 'document.body.dataset.lastProbe'], { env });
-        expect(deniedEvaluate.code).not.toBe(0);
-        expect(deniedEvaluate.stderr).toContain('evaluate denied by policy');
-
-        const probeState = await execBrowser(['evaluate', 'document.body.dataset.lastProbe', '--unsafe-allow', 'evaluate'], { env });
+        const probeState = await execBrowser(['evaluate', 'document.body.dataset.lastProbe'], { env });
         expect(probeState.code).toBe(0);
         expect(probeState.stdout).toContain('"second"');
 
@@ -63,13 +59,13 @@ describe.sequential('browser DOM commands', () => {
         expect(select.code).toBe(0);
         expect(select.stdout).toContain(`selected "b"`);
 
-        const scrollBefore = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop', '--unsafe-allow', 'evaluate'], { env });
+        const scrollBefore = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop'], { env });
         const scroll = await execBrowser(['scroll', 'down', '--amount', '80', '--ref', scrollRef, '--json'], { env });
         expect(scroll.code).toBe(0);
         const scrollPayload = JSON.parse(scroll.stdout);
         expect(scrollPayload).toMatchObject({ ok: true, direction: 'down', pixels: 80, ref: scrollRef });
 
-        const scrollAfter = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop', '--unsafe-allow', 'evaluate'], { env });
+        const scrollAfter = await execBrowser(['evaluate', 'document.querySelector("[data-scroll-panel]").scrollTop'], { env });
         expect(Number(scrollAfter.stdout)).toBeGreaterThan(Number(scrollBefore.stdout));
 
         const reload = await execBrowser(['reload'], { env });

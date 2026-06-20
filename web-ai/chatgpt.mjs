@@ -14,6 +14,7 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
+    markSessionTimeout,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
@@ -197,7 +198,6 @@ export async function sendWebAi(deps, input = {}) {
     if (selectedModel?.modelSelection) {
         updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });
     }
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: envelope.vendor,
@@ -207,6 +207,7 @@ export async function sendWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
 
     const editorOptions = {
         insertText: async (/** @type {any} */ text) => {
@@ -523,22 +524,44 @@ export async function pollWebAi(deps, input = {}) {
                 responseStableMs: stableSince ? Date.now() - stableSince : 0,
             });
         }
-        if (session) updateSession(session.sessionId, { status: 'timeout' });
+        const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+            lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
+        }) : null;
         return {
             ok: false,
             vendor,
             status: 'timeout',
             url: page.url(),
             ...(session ? { sessionId: session.sessionId } : {}),
+            ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+            ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
             baseline,
             ...(traceSummary ? { traceSummary } : {}),
             warnings: [`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`],
             usedFallbacks: [],
+            recoverable: true,
+            retryHint: 'poll-or-resume',
             error: 'timed out waiting for answer',
         };
     }
-    if (session) updateSession(session.sessionId, { status: 'timeout' });
-    return { ok: false, vendor, status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for answer' };
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
+    }) : null;
+    return {
+        ok: false,
+        vendor,
+        status: 'timeout',
+        url: page.url(),
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
 }
 
 /**
@@ -622,7 +645,6 @@ export async function deepResearchWebAi(deps, input = {}) {
         deadlineAt: resolveDeadlineAt(input, 'chatgpt'),
         envelopeSummary: { ...summarizeEnvelope(input), assistantCount },
     });
-    if (targetId) bindSessionToTab(session.sessionId, targetId);
     if (targetId) await recordActiveLease({
         owner: 'web-ai',
         vendor: envelope.vendor,
@@ -632,6 +654,7 @@ export async function deepResearchWebAi(deps, input = {}) {
         url: page.url(),
         port: deps.getPort?.() || 9222,
     });
+    if (targetId) bindSessionToTab(session.sessionId, targetId);
     const timeoutMs = Math.max(1, Number(input.timeout || 1200)) * 1000;
     const selectedTools = await selectChatGptComposerTools(page, { ...input, research: 'deep' });
     const result = await sendDeepResearch(page, deps, {

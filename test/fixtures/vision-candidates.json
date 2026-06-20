@@ -1,0 +1,34 @@
+[
+  {
+    "id": "bbox-high-confidence",
+    "text": "Result: {\"found\":true,\"bbox\":{\"x\":80,\"y\":40,\"width\":120,\"height\":60},\"point\":{\"x\":140,\"y\":70},\"confidence\":0.84,\"description\":\"primary button\"}",
+    "expected": {
+      "found": true,
+      "kind": "vision_bbox",
+      "point": { "x": 140, "y": 70 },
+      "confidence": 0.84,
+      "riskFlags": []
+    }
+  },
+  {
+    "id": "legacy-point",
+    "text": "{\"found\":true,\"x\":320,\"y\":160,\"description\":\"legacy point\"}",
+    "expected": {
+      "found": true,
+      "kind": "coordinate",
+      "point": { "x": 320, "y": 160 },
+      "confidence": 0.5,
+      "riskFlags": ["point_only"]
+    }
+  },
+  {
+    "id": "not-found",
+    "text": "{\"found\":false,\"bbox\":null,\"point\":{\"x\":0,\"y\":0},\"confidence\":0,\"description\":\"not found\"}",
+    "expected": {
+      "found": false,
+      "kind": "not_found",
+      "point": { "x": 0, "y": 0 },
+      "confidence": 0
+    }
+  }
+]
