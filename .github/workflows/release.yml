@@ -62,7 +62,11 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright-core install chromium
+        run: |
+          set -euo pipefail
+
+          npx --yes playwright-core --version
+          timeout 180s npx --yes playwright-core install chromium
 
       - name: Verify release ref and package version
         run: |
