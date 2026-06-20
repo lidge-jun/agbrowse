@@ -14,6 +14,7 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
+    markSessionTimeout,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
@@ -523,22 +524,44 @@ export async function pollWebAi(deps, input = {}) {
                 responseStableMs: stableSince ? Date.now() - stableSince : 0,
             });
         }
-        if (session) updateSession(session.sessionId, { status: 'timeout' });
+        const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+            lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
+        }) : null;
         return {
             ok: false,
             vendor,
             status: 'timeout',
             url: page.url(),
             ...(session ? { sessionId: session.sessionId } : {}),
+            ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+            ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
             baseline,
             ...(traceSummary ? { traceSummary } : {}),
             warnings: [`copy-markdown-fallback-unavailable:${(/** @type {any} */ (copied)).status || 'unknown'}`],
             usedFallbacks: [],
+            recoverable: true,
+            retryHint: 'poll-or-resume',
             error: 'timed out waiting for answer',
         };
     }
-    if (session) updateSession(session.sessionId, { status: 'timeout' });
-    return { ok: false, vendor, status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for answer' };
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
+    }) : null;
+    return {
+        ok: false,
+        vendor,
+        status: 'timeout',
+        url: page.url(),
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
 }
 
 /**

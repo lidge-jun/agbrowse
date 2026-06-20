@@ -201,10 +201,10 @@ JSON 모드에서는 실패가 parseable envelope로 나온다. 이 shape는 MCP
 | `web_ai_snapshot` | compact accessibility snapshot과 `@eN` refs 반환 |
 | `web_ai_click_ref` | latest snapshot ref 클릭 |
 | `web_ai_submit_prompt` | provider web UI에 prompt 제출 |
-| `web_ai_wait_response` | provider response completion 대기 |
+| `web_ai_wait_response` | stored session response 대기; 긴 실행은 recoverable timeout으로 재시도 가능 |
 | `web_ai_copy_markdown` | 마지막 response를 markdown/text로 capture |
 | `web_ai_doctor` | provider diagnostics와 repair packet 반환 |
-| `web_ai_session_resume` | stored session poll resume |
+| `web_ai_session_resume` | stored session poll resume; session-bound recovery 경로 사용 |
 
 `web_ai_*` 입력은 strict schema로 검증한다. Runtime에서 쓰는 호환 alias
 (`vendor`, `policy`, submit의 `filePath`/`reasoningEffort` 등)만 명시적으로

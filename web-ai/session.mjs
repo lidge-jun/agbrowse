@@ -226,6 +226,53 @@ export function updateSession(sessionId, patch = {}) {
 }
 
 /**
+ * Mark an incomplete session as timed out without downgrading completed work.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} [patch]
+ * @returns {WebAiSession|null}
+ */
+export function markSessionTimeout(sessionId, patch = {}) {
+    const session = getSession(sessionId);
+    if (!session) return null;
+    const { warning, warnings: patchWarnings, ...sessionPatch } = patch;
+    const warnings = mergeWarnings(session.warnings || [], patchWarnings || [], warning);
+    const hasCompletedEvidence = session.status === 'complete' ||
+        session.status === 'completed' ||
+        Boolean(session.completedAt) ||
+        Boolean(session.answer);
+    if (hasCompletedEvidence) {
+        return updateSession(sessionId, {
+            warnings: mergeWarnings(warnings, ['timeout-after-complete-ignored']),
+            status: session.status === 'completed' ? 'completed' : 'complete',
+        });
+    }
+    return updateSession(sessionId, {
+        ...sessionPatch,
+        status: 'timeout',
+        warnings,
+    });
+}
+
+/**
+ * @param {unknown[]} base
+ * @param {unknown[]} extra
+ * @param {unknown} [single]
+ * @returns {unknown[]}
+ */
+function mergeWarnings(base, extra, single) {
+    const out = Array.isArray(base) ? [...base] : [];
+    for (const warning of [...(Array.isArray(extra) ? extra : []), single]) {
+        if (warning == null) continue;
+        const key = typeof warning === 'string' ? warning : JSON.stringify(warning);
+        if (!out.some((existing) => (typeof existing === 'string' ? existing : JSON.stringify(existing)) === key)) {
+            out.push(warning);
+        }
+    }
+    return out;
+}
+
+/**
  * @param {string|null|undefined} sessionId
  * @returns {WebAiSession|null}
  */

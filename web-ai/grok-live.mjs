@@ -12,6 +12,7 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
+    markSessionTimeout,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
@@ -329,8 +330,24 @@ export async function grokPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    if (session) updateSession(session.sessionId, { status: 'timeout' });
-    return { ok: false, vendor: 'grok', status: 'timeout', url: page.url(), ...(session ? { sessionId: session.sessionId } : {}), baseline, warnings: [], usedFallbacks: [], error: 'timed out waiting for grok response' };
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'grok',
+        status: 'timeout',
+        url: page.url(),
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for grok response',
+    };
 }
 
 /**

@@ -120,6 +120,14 @@ Pass `--timeout 1800` (30 min) or higher for unusually long Pro/Deep Think
 runs. The provider tab and the agbrowse Chrome process stay open across a
 poll timeout — only the polling loop gives up.
 
+MCP clients should preserve the `sessionId` returned by `web_ai_submit_prompt`.
+`web_ai_wait_response` and `web_ai_session_resume` use the stored-session
+recovery path and may return a recoverable timeout with `retryHint:
+poll-or-resume`. A host-level MCP request timeout, such as `-32001 Request
+timed out`, is a client/runtime boundary; after it, retry with the same
+`sessionId` or use CLI `web-ai poll --session <SID>` instead of sending a new
+prompt immediately.
+
 ## Long-Running / Background Sessions
 
 For responses that may take many minutes (ChatGPT Pro/Heavy, Gemini Deep

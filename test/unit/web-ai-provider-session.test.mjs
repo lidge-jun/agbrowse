@@ -65,6 +65,78 @@ describe('web-ai summarizeEnvelope', () => {
     });
 });
 
+describe('web-ai session timeout monotonicity', () => {
+    it('does not downgrade completed sessions when a later poll times out', async () => {
+        const { createSession, markSessionTimeout, updateSession, getSession } = await import('../../web-ai/session.mjs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'x', attachmentPolicy: 'inline-only' });
+        updateSession(session.sessionId, {
+            status: 'complete',
+            answer: 'done',
+            completedAt: '2026-06-21T00:00:00.000Z',
+            warnings: ['kept'],
+        });
+
+        const updated = markSessionTimeout(session.sessionId, {
+            lastError: { errorCode: 'provider.poll-timeout', message: 'late timeout' },
+        });
+
+        expect(updated.status).toBe('complete');
+        expect(updated.answer).toBe('done');
+        expect(updated.warnings).toEqual(['kept', 'timeout-after-complete-ignored']);
+        expect(getSession(session.sessionId).status).toBe('complete');
+    });
+
+    it('marks incomplete sessions as timeout with merged warning and lastError', async () => {
+        const { createSession, markSessionTimeout } = await import('../../web-ai/session.mjs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'x', attachmentPolicy: 'inline-only' });
+
+        const updated = markSessionTimeout(session.sessionId, {
+            warning: 'poll-timeout',
+            lastError: { errorCode: 'provider.poll-timeout', message: 'timeout' },
+        });
+
+        expect(updated.status).toBe('timeout');
+        expect(updated.warnings).toEqual(['poll-timeout']);
+        expect(updated.lastError).toMatchObject({ errorCode: 'provider.poll-timeout' });
+    });
+});
+
+describe('web-ai provider timeout envelope', () => {
+    it('ChatGPT poll timeout remains recoverable and keeps session evidence', async () => {
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { pollWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'slow', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-1',
+                conversationUrl: 'https://chatgpt.com/c/slow',
+                deadlineAt: '2026-06-21T01:00:00.000Z',
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+
+        const result = await pollWebAi({
+            getPage: async () => createTimeoutChatGptPage(),
+            getTargetId: async () => 'target-1',
+        }, {
+            vendor: 'chatgpt',
+            session: session.sessionId,
+            timeout: 1,
+        });
+
+        expect(result).toMatchObject({
+            ok: false,
+            vendor: 'chatgpt',
+            status: 'timeout',
+            sessionId: session.sessionId,
+            recoverable: true,
+            retryHint: 'poll-or-resume',
+            deadlineAt: '2026-06-21T01:00:00.000Z',
+            conversationUrl: 'https://chatgpt.com/c/slow',
+        });
+    });
+});
+
 describe('web-ai provider integration (source-string contracts)', () => {
     const root = process.cwd();
     const chatgptSrc = readFileSync(join(root, 'web-ai/chatgpt.mjs'), 'utf8');
@@ -88,10 +160,12 @@ describe('web-ai provider integration (source-string contracts)', () => {
         }
     });
 
-    it('all three providers finalize completion and updateSession on timeout', () => {
+    it('all three providers finalize completion and markSessionTimeout on timeout', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
             expect(src).toMatch(/finalizeProviderTab\(deps, \{[\s\S]*?session[\s\S]*?answerText/);
-            expect(src).toMatch(/updateSession\(session\.sessionId, \{ status: 'timeout' \}\)/);
+            expect(src).toMatch(/markSessionTimeout\(session\.sessionId/);
+            expect(src).toContain("retryHint: 'poll-or-resume'");
+            expect(src).toContain('recoverable: true');
         }
         expect(finalizerSrc).toMatch(/updateSession\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
         expect(finalizerSrc).toMatch(/completedAt: new Date\(\)\.toISOString\(\)/);
@@ -157,6 +231,17 @@ describe('web-ai cli session flags', () => {
         expect(cliSrc).toMatch(/case 'query': return withWebAiActiveCommand/);
     });
 
+    it('wraps MCP wait/resume in session command lock, session page recovery, and MCP active command', () => {
+        const mcpSrc = readFileSync(join(process.cwd(), 'web-ai/mcp-server.mjs'), 'utf8');
+        expect(mcpSrc).toContain("import { withSessionCommandLock } from './session-store.mjs'");
+        expect(mcpSrc).toContain("import { withSessionPage } from './tab-recovery.mjs'");
+        expect(mcpSrc).toMatch(/if \(name === 'web_ai_wait_response' \|\| name === 'web_ai_session_resume'\) \{[\s\S]*?return runMcpSessionPoll\(name, args, deps\)/);
+        expect(mcpSrc).toMatch(/async function runMcpSessionPoll\(name, args, deps\)/);
+        expect(mcpSrc).toMatch(/withSessionCommandLock\(sessionId/);
+        expect(mcpSrc).toMatch(/withSessionPage\(deps, sessionId/);
+        expect(mcpSrc).toMatch(/withMcpActiveCommand\(name, provider, sessionDeps, sessionArgs/);
+    });
+
     it('reuses inactive provider tabs before creating another ChatGPT tab', () => {
         expect(cliSrc).toContain("import { createTab, listManagedTabs, waitForPageByTargetId }");
         expect(cliSrc).toMatch(/async function findReusableProviderTab\(port, vendor, targetUrl\)/);
@@ -184,3 +269,17 @@ describe('web-ai cli session flags', () => {
         expect(recoverySrc).toContain('export async function resolveSessionPage');
     });
 });
+
+function createTimeoutChatGptPage() {
+    return {
+        url: () => 'https://chatgpt.com/c/slow',
+        evaluate: async () => [],
+        waitForTimeout: async () => undefined,
+        locator: () => ({
+            first: () => ({
+                isVisible: async () => false,
+            }),
+            all: async () => [],
+        }),
+    };
+}
