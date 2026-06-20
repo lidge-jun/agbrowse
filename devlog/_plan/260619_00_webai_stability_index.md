@@ -8,8 +8,10 @@
 |---|--------|-------|
 | 1 | `260619_timeout_adaptive_scaling/` | Per-(model, effort) timeout table; intermediate-"thinking" false-completion; adaptive poll backoff |
 | 2 | `260619_tab_parallel_stability/` | Multi-agent CDP sharing: TOCTOU, lease↔session race, send+poll mutex, crashed-lease leak |
-| 3 | `260619_skill_envelope_integration/` | Unify skill instructions + file attachment into one trust-aware envelope |
+| 3 | ~~`260619_skill_envelope_integration/`~~ → **closed** | Capability already exists (`--system` + `--file`). Reclassified code→docs-only, moved to `_fin/260620_skill_envelope_already_capable.md`. Fix = small SKILL.md + `--help` upgrade. |
 | 4 | `260619_watch_notification_gaps/` | Lower completion-detection latency; format-agnostic URL; optional CDP early-nudge |
+
+**Scope update (2026-06-20):** Only areas 1, 2, 4 are real code work. Area 3 (skill envelope) was found to be already-capable — a discoverability/UX problem, not architecture — and is closed to `_fin`.
 
 Each folder has: `00_overview.md` (problem framing), `01_root_cause.md` (verified, with `file:line` + real code), `10_solution_plan.md` (design + code sketch + test strategy + risks).
 
