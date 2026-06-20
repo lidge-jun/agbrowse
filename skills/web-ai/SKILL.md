@@ -296,6 +296,33 @@ agbrowse web-ai query \
   --prompt "Reply exactly GROK_OK"
 ```
 
+## Where instructions go — `--system` vs `--context` vs `--file`
+
+Attaching instructions *and* a file already works today; pick the right channel:
+
+- **Operating instructions / skill guidance** ("how to behave", "extract X from the
+  attached file") → `--system "..."`. Rendered in the trusted `[SYSTEM]` section and
+  honored. `--goal` / `--constraints` (USER fields) are also trusted.
+- **Untrusted reference *data*** (scraped page text, provider output) → `--context "..."`.
+  Rendered as `[UNTRUSTED_CONTEXT]`; **instructions placed here are ignored by design**
+  (prompt-injection boundary). Never put operating instructions in `--context`.
+- **A file for the model to read/analyze** → `--file <path>` (repeatable; native,
+  dialog-free attachment). The model sees it directly — you do **not** need to also
+  describe it in `--context`.
+
+Common mistake: putting instructions in `--context` and finding they are "ignored" →
+move them to `--system`. Example of the working combo:
+
+```bash
+agbrowse web-ai query --vendor chatgpt --model thinking \
+  --system "Extract every breaking change from the attached PDF and group by module." \
+  --file ./spec.pdf \
+  --prompt "Summarize the breaking changes."
+```
+
+If you are unsure whether/how a file is attached, just **ask the user** rather than
+relying on envelope guesswork.
+
 ## File Upload
 
 ```bash

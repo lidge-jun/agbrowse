@@ -126,10 +126,14 @@ Provider:
 Prompt envelope (every prompt also gets a [INSTRUCTIONS] block telling the
 model to use web search and cite sources inline):
   --prompt <text>     Main user prompt/question (required)
-  --system <text>     System / role instruction
+  --system <text>     Trusted operating/role instructions — the channel for skill
+                      guidance and "how to behave". Honored, not treated as data.
+                      Put instructions HERE, not in --context.
   --project <text>    Project name
   --goal <text>       Task goal
-  --context <text>    Inline context
+  --context <text>    UNTRUSTED reference data only (scraped text, provider output).
+                      Rendered as [UNTRUSTED_CONTEXT]; instructions placed here are
+                      ignored by design. For a file the model should read, use --file.
   --question <text>   Alias for prompt detail
   --output <text>     Output preference
   --constraints <txt> Constraints to include in the prompt
