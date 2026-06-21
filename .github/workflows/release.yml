@@ -61,12 +61,20 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Install Playwright browsers
+      - name: Find Chrome for browser smoke tests
         run: |
           set -euo pipefail
 
-          npx --yes playwright-core --version
-          timeout 420s npx --yes playwright-core install --only-shell chromium
+          for candidate in google-chrome-stable google-chrome chromium-browser chromium; do
+            if path="$(command -v "$candidate")"; then
+              echo "AGBROWSE_CHROMIUM_EXECUTABLE_PATH=$path" >> "$GITHUB_ENV"
+              "$path" --headless=new --disable-gpu --no-sandbox --version
+              exit 0
+            fi
+          done
+
+          echo "::error::Chrome or Chromium executable not found on runner"
+          exit 1
 
       - name: Verify release ref and package version
         run: |
