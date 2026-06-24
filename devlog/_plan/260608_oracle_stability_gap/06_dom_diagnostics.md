@@ -9,7 +9,7 @@ Severity: **P2** — 🟡 **OPEN** (2026-06-24 re-audit, agbrowse v0.1.15)
 | Gap (2026-06-08, v0.1.7) | 현재 상태 (v0.1.15) | 증거 |
 | --- | --- | --- |
 | 실패 시 자동 DOM snapshot | 🟡 미구현 | `web-ai/` 전역에 `logDomFailure`/`captureBrowserDiagnostics` 등가물 0건 (grep) |
-| 실패 시 자동 screenshot | 🟡 미구현 | `web-ai/` 실패 경로에 `Page.captureScreenshot` 0건. 독립 `screenshot` 기능은 존재(`web-ai/cli.mjs`, `web-ai/action-breadth.mjs`)하나 자동화 실패 시 자동 호출 안 됨 |
+| 실패 시 자동 screenshot | 🟡 미구현 | `web-ai/`에 `captureScreenshot`/`Page.captureScreenshot` 0건. web-ai는 `screenshot` **액션 디스크립터**(`action-breadth.mjs:44`) · `browser_screenshot` MCP 스키마(`browser-tool-schema.mjs:106`) · observation-bundle의 `screenshotPath` 입력 필드(`observation-bundle.mjs:105`)만 가지며, 실제 캡처는 CLI 래퍼(`skills/browser/browser.mjs`의 `screenshotAction()` `:1389`, `case 'screenshot'` 디스패치 `:2533`)에서 수행 — web-ai 자동화 실패 시 자동 캡처 경로는 없음 |
 | Conversation turn 로그 | 🟡 미구현 | 실패 경로는 `WebAiError.evidence` 일부 컨텍스트만 기록 |
 | per-session artifacts 미활용 | 🟡 부분 | `web-ai/session-artifacts.mjs` 존재하나 실패-시점 진단 자동 저장 경로 없음 |
 | (신규) 진단 명령 표면 | ✅ 추가됨(별개 기능) | `web-ai/doctor.mjs:diagnoseFeature()`, `web-ai/session-doctor.mjs`(read-only 세션 리포트), CLI `doctor` / `sessions doctor`(`web-ai/cli.mjs:48,54-55,738,783`) — **사용자 호출형**, 실패 시 자동 트리거 아님 |

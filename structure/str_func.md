@@ -35,7 +35,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 2635 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
-| `devlog/` | 374 | 47160 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 376 | 47498 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 

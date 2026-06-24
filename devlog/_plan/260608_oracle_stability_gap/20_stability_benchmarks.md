@@ -11,7 +11,7 @@ Derived from: oracle vs agbrowse gap analysis (docs 01–08)
 | Benchmark | 상태 (v0.1.15) | 증거 |
 | --- | --- | --- |
 | B1 send / B2 attach / B3 error (offline) | ✅ 통과 | `npx vitest run test/unit/stability-benchmarks.test.mjs` → **22 passed (22)** (2026-06-24 실행) |
-| B3 error code count (목표 ≥12) | ✅ 36개 | `web-ai/` 전역 distinct `errorCode` 36개 — 목표 대비 3배 |
+| B3 error code count (목표 ≥12) | ✅ 37개 | `web-ai/` 전역 distinct `errorCode` 37개 (`errorCode:` 키 36 + `this.errorCode=` 1) — 목표 대비 3배 |
 | B4 session resilience (live-only) | 🟡 미검증 | 라이브 브라우저 + Chrome 재시작 필요 |
 | B5 response capture (live-only) | 🟡 미검증 | 라이브 브라우저 + Pro 계정 필요 |
 
