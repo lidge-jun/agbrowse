@@ -12,7 +12,7 @@ import { trySaveFileArtifact, appendArtifactRecord } from './session-artifacts.m
  * Trust boundary: the browser DOM (assistant turn) provides untrusted URLs.
  * Only known ChatGPT file endpoints on the ChatGPT origin are accepted; path
  * traversal, foreign hosts, non-HTTPS, ports, and unsafe schemes are rejected.
- * See devlog/_plan/260608_oracle_stability_gap/31_chatgpt_downloadable_artifacts_pabcd.md
+ * See devlog/_fin/260608_oracle_stability_gap/31_chatgpt_downloadable_artifacts_pabcd.md
  */
 
 /** Hosts that may serve ChatGPT downloadable files. */

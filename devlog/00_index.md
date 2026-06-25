@@ -23,7 +23,7 @@ must be treated as historical  do not edit them after release.evidence
 
 | Topic | Folder | Status |
 | --- | --- | --- |
-| Oracle stability gap analysis | `_plan/260608_oracle_stability_gap/` | Partial follow-up backlog; includes 2026-06-20 Oracle 0.15 delta and 31/32 PABCD follow-up plans. |
+| Oracle stability gap analysis | `_fin/260608_oracle_stability_gap/` | ✅ Done — 31–35 backlog implemented (v0.1.16-preview); 05/07/08·profile-copy·ZIP deferred by decision; live B4/B5 = QA. |
 | cli-jaw web-ai parity mirror | `_plan/260621_cli_jaw_webai_parity/` | External cli-jaw mirror plan; verify closeout in cli-jaw before moving from agbrowse `_plan`. |
 | Strict migration | `_plan/strict-migration/` | Deferred migration planning and arbitration notes. |
 
