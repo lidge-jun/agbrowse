@@ -61,11 +61,15 @@
     navigates to `chatgpt.com/c/<id>` first → `code-extract.navigation-failed` on error; untrusted ref
     rebuilt from id. Tests BWAI-CODENAV-001/002.
 
+- **104.17 — copy scroll-jump suppression** — ✅ DONE — cli-jaw `41081655`
+  - copy evaluate patches `scrollIntoView`→noop + `focus`→preventScroll around the copy, restored in
+    finally. Browser-only behavior → verified by tsc + no-regression (no unit test); GPT-Pro live gate covers it.
+
 **Gate so far:** full cli-jaw `npm test` → **4803 tests, 4785 pass, 0 fail**; tsc 0.
 
 ### Remaining Cycle-6 items (next continuations — browser-context-heavy)
 104.8/.9 vendor capability+model probes · 104.12 composer resolved-targets · 104.14 composer CDP insertText ·
-104.17 copy scroll-suppression · 104.18 pollWebAi per-tick drift/crash. (104.7 deferred.)
+104.18 pollWebAi per-tick drift/crash. (104.7 deferred.)
 
 ## Verification
 Per-item gates above; A-phase audit (Cycle 1) confirmed these as line-diff divergences.
