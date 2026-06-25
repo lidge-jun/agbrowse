@@ -25,5 +25,7 @@ GitHub (both on `dev`):
 - GPT-Pro send submitted: agbrowse web-ai session **`01KVZVXFW608PTZ7TY1CS1P67Q`** (status `sent`, pro-tier 60-min deadline), zip attached.
 - Server-owned watcher registered: **bgtask `bg_191817b5-6b6f-4510-9645-ab77c749fb9f`** (`web-ai watch --session … --json`, completion=exit, stall-after 70m). Boss is re-invoked with the verdict on completion.
 
-## Verification
-- **Completion gate (pending):** goal completes only when the bgtask returns the GPT-Pro verdict. The earlier summary-only attempt (`bg_bb5f64c9`) was cancelled/superseded — it lacked the real diff/devlog context this run provides.
+## Verification — OUTCOME (2026-06-26)
+- **Verdict received: CONCERNS — not mainline-ready.** Captured after the first watcher (`bg_191817b5`) and a retry (`bg_40dd4126`) both hit the timeout/tab-close failure modes; the final verdict was read by re-opening the saved conversation `/c/6a3d5ff2`.
+- **The goal `[complete]` flag is from the bgtask-return mechanism, NOT a passing verdict** — the first watcher returned a *timeout* (the watch/poll resume path ignored the pro-tier 60-min deadline; this is GPT-Pro finding #2). The per-cycle mechanical "green tests" overstated closure.
+- Full verdict, ranked findings, maintainer triage, and the remediation roadmap → **[130_gptpro_verdict_remediation.md](130_gptpro_verdict_remediation.md)**.
