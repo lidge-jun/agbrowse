@@ -10,11 +10,18 @@
 ## Gaps in scope
 104.3 watcher cross-process FS lock (mkdir+heartbeat+PID staleness); 104.19 AX-tree CDP fallback (Playwright >=1.55); 105.4 model-tier -> poll-timeout table
 
-## Plan (filled at cycle P-phase)
-_Diff-level precision (exact files NEW/MODIFY, before/after) added when this cycle begins. Source evidence: ../260621_cli_jaw_webai_parity/ catalog rows above._
+## Build log
 
-## Build log (filled at cycle B-phase)
-_Commits + gate output recorded here._
+- **105.4 — tier-aware default poll timeout** — ✅ DONE — cli-jaw `4a314622`
+  - NEW `tier-timeout.ts` (`TIER_DEFAULT_TIMEOUT_SEC` {instant:120, thinking:600, pro:3600,
+    deep-research:3600} + `deriveTimeoutTier` reusing cli-jaw's per-vendor model normalizers +
+    `resolveTimeoutDefaultSec`). Wired at both `createSession` sites (send + DR); DR run reuses
+    `session.timeoutMs`. Fixes deep-research timing out at 20 min instead of 60. Tests BWAI-TIER-001..003.
+- **104.3 — watcher cross-process FS lock** — ⬜ PENDING (next). `watcher.ts:activeWatchers` is an
+  in-process Map only; port agbrowse `acquireWatcherSessionLock` (mkdir lockdir + heartbeat +
+  PID-staleness → `watcher.already-running`).
+- **104.19 — AX-tree CDP fallback** — ⬜ PENDING. `ax-snapshot.ts:211` throws `snapshot.unavailable`
+  when `page.accessibility.snapshot` is gone (Playwright ≥1.55); add a CDP `Accessibility.getFullAXTree`
+  fallback (port agbrowse `captureAxViaCdp`/`cdpNodesToAxTree`).
 
-## Verification
-_A-phase audit result (advisory) + C-phase gate result._
+**Gate so far:** full cli-jaw `npm test` → **4783 tests, 4765 pass, 0 fail**; tsc 0 (after 105.4).
