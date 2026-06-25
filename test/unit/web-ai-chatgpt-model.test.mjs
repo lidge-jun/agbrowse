@@ -1031,3 +1031,19 @@ function makeLocator(elements, selector = '') {
     };
     return loc;
 }
+
+describe('selectChatGptModel hardening (32.2 source contract)', () => {
+    const src = readFileSync(join(process.cwd(), 'web-ai/chatgpt-model.mjs'), 'utf8');
+
+    it('waits for the model pill to mount before reading it (Oracle #271 parity)', () => {
+        expect(src).toContain('async function waitForModelPillEvidence(');
+        expect(src).toContain('let currentEvidence = await waitForModelPillEvidence(page, requested || null)');
+        expect(src).toContain('MODEL_PILL_SETTLE_MS = 8_000');
+    });
+
+    it('bounds model-option selection with retries and surfaces an unverified warning', () => {
+        expect(src).toContain('MODEL_SELECT_MAX_ATTEMPTS = 3');
+        expect(src).toMatch(/while \(currentModel !== requested && attempt < MODEL_SELECT_MAX_ATTEMPTS\)/);
+        expect(src).toContain("warnings.push('model-selection-unverified')");
+    });
+});

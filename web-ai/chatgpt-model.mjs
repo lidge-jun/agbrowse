@@ -184,6 +184,29 @@ export function isChatGptEffortSupported(model, effort) {
  * @param {SelectModelOptions} [options]
  * @returns {Promise<SelectModelResult | null>}
  */
+const MODEL_PILL_SETTLE_MS = 8_000;
+const MODEL_SELECT_MAX_ATTEMPTS = 3;
+
+/**
+ * Wait for the ChatGPT model pill to mount before reading it. ChatGPT renders
+ * the picker pill 1-4s after the page is interactive (later on a cold profile),
+ * so a single read can miss it. Re-reads until evidence has a resolved choice
+ * or the deadline elapses; never throws. (Mirrors Oracle #271 / 0.15.1.)
+ * @param {any} page
+ * @param {string|null} requested
+ * @param {number} [deadlineMs]
+ * @returns {Promise<any>}
+ */
+async function waitForModelPillEvidence(page, requested, deadlineMs = MODEL_PILL_SETTLE_MS) {
+    const deadline = Date.now() + deadlineMs;
+    let evidence = await readCheckedModelEvidence(page, requested);
+    while (!evidence?.choice && Date.now() < deadline) {
+        await page.waitForTimeout(400).catch(() => undefined);
+        evidence = await readCheckedModelEvidence(page, requested);
+    }
+    return evidence;
+}
+
 export async function selectChatGptModel(page, model, options = {}) {
     const requested = normalizeChatGptModelChoice(model);
     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
@@ -220,7 +243,7 @@ export async function selectChatGptModel(page, model, options = {}) {
             }),
         };
     }
-    let currentEvidence = await readCheckedModelEvidence(page, requested || null);
+    let currentEvidence = await waitForModelPillEvidence(page, requested || null);
     let currentModel = currentEvidence?.choice || null;
     const targetModel = requested || currentModel;
     let modelChanged = false;
@@ -229,14 +252,26 @@ export async function selectChatGptModel(page, model, options = {}) {
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: 'ChatGPT model must be selected before setting reasoning effort', evidence: { effort: requestedEffort } });
     }
     if (requested && currentModel !== requested) {
-        const option = await findModelOption(page, requested);
-        if (!option) throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT model option not found: ${requested}`, evidence: { requested } });
-        await option.click({ timeout: 5_000 });
-        await page.waitForTimeout(750).catch(() => undefined);
-        await openModelMenu(page, usedFallbacks);
-        currentEvidence = await readCheckedModelEvidence(page, requested);
-        currentModel = currentEvidence?.choice || null;
-        modelChanged = true;
+        // Bounded retry: ChatGPT occasionally drops the first option click (menu
+        // re-render race), leaving the model unchanged. Re-click and re-verify up
+        // to MODEL_SELECT_MAX_ATTEMPTS; a genuinely missing option still fails fast.
+        let attempt = 0;
+        while (currentModel !== requested && attempt < MODEL_SELECT_MAX_ATTEMPTS) {
+            attempt += 1;
+            const option = await findModelOption(page, requested);
+            if (!option) throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT model option not found: ${requested}`, evidence: { requested } });
+            await option.click({ timeout: 5_000 });
+            await page.waitForTimeout(750).catch(() => undefined);
+            await openModelMenu(page, usedFallbacks);
+            currentEvidence = await readCheckedModelEvidence(page, requested);
+            currentModel = currentEvidence?.choice || null;
+            modelChanged = true;
+        }
+        // Explicit model requested but unverified after retries — surface it.
+        // Effort selection (below) still fails closed on mismatch.
+        if (currentModel !== requested && !warnings.includes('model-selection-unverified')) {
+            warnings.push('model-selection-unverified');
+        }
     }
     /** @type {{ requested: string, selected: string|null, changed: boolean } | null} */
     let selectedEffort = null;
