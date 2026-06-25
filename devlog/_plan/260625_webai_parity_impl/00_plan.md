@@ -113,7 +113,7 @@ Audit verdict: plan feasible & safe; proceed to B. Employee/sub-agent verificati
 
 | Cyc | Status | Commit(s) | Gate | Checkpoint |
 |---|---|---|---|---|
-| 1 | ⬜ PENDING | — | — | — |
+| 1 | 🔄 IN PROGRESS | cli-jaw `0d80a71f` (multi-turn) | tsc 0 + BWAI-MULTITURN-001 ✓ | multi-turn done; DR 1.2 next |
 | 2 | ⬜ PENDING | — | — | — |
 | 3 | ⬜ PENDING | — | — | — |
 | 4 | ⬜ PENDING | — | — | — |

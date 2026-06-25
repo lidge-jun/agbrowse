@@ -32,8 +32,19 @@ Ordered atomic slices (each its own commit, behind `npm test` + `tsc --noEmit`):
   timeout path persists only `completed ? text : null`. Mirrors agbrowse `chatgpt-deep-research.mjs:242-369`.
 - **1.x — TDD:** each slice gets a failing unit test reproducing the bug first, then the fix.
 
-## Build log (filled at cycle B-phase)
-_Branch: `feat/webai-parity-100-260625` off `dev`. Commits + gate output recorded here._
+## Build log (cli-jaw branch `feat/webai-parity-100-260625` off `dev`)
+
+- **Slice 1.0 + 1.1 — multi-turn history+index fix (106.2/106.5)** — ✅ DONE — cli-jaw `0d80a71f`
+  - `types.ts`: + `WebAiTurnRecord`, + `turns?`/`followUpCount?` on `WebAiSessionRecord`.
+  - `session.ts`: `updateSessionResult` accepts + persists `turns`/`followUpCount`.
+  - `chatgpt-multi-turn.ts`: `existingTurns = session.turns ?? []`, `turnIndex = existingTurns.length`,
+    merge `[...existing, ...new]` into transcript + every persist; `TurnResult` aliases `WebAiTurnRecord`.
+  - Gate: `tsc --noEmit` 0 errors; new regression `tests/unit/browser-web-ai-multi-turn.test.ts`
+    (BWAI-MULTITURN-001) green.
+  - Deferred: 106.6 transcript-artifact-save on partial → Cycle 2 (needs `session-artifacts.ts`).
+- **Slice 1.2 — deep-research not-started guard + completeness (106.1)** — ⬜ PENDING (next).
+  Port NEW `chatgpt-deep-research-report.ts` + add `researchActivityObserved` guard +
+  `completed` flag in `chatgpt-deep-research.ts`.
 
 ## Verification
 **A-phase audit (2026-06-25, 3 parallel read-only sub-agents vs live cli-jaw repo):**
