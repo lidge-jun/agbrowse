@@ -32,13 +32,20 @@
   labels (Standard/Extended Pro/Heavy); agbrowse's rejects legacy GPT-5.x-Pro *model rows* — different
   purposes. Matching agbrowse risks breaking cli-jaw's effort handling; needs deeper model-flow review.
 
-**Gate so far:** full cli-jaw `npm test` → **4795 tests, 4777 pass, 0 fail**; tsc 0.
+- **104.20 — occurrenceIndex on interactive refs** — ✅ DONE — cli-jaw `768386d6`
+  - per-(role,name) occurrence counts in both ref builders → 0-based `occurrenceIndex` on `ElementRef`.
+    Test BWAI-OCCUR-001.
+- **104.22 — observation-bundle element-ref filter + id/basis** — ✅ DONE — cli-jaw `4d285c80`
+  - `isElementRef` (`@?e\d+`) accepts bare `e3`, rejects `@x`; emits `observationId`/`targetId`/`basis`.
+    Test BWAI-OBSBUNDLE-001.
+
+**Gate so far:** full cli-jaw `npm test` → **4797 tests, 4779 pass, 0 fail**; tsc 0.
 
 ### Remaining Cycle-6 items (next continuations)
 104.8/.9 vendor capability+model probes · 104.10 code-extract nav · 104.11 zip chronological order ·
 104.12 composer resolved-targets · 104.13 attachment filename-verify · 104.14 composer CDP insertText ·
 104.16 typed code-mode error · 104.17 copy scroll-suppression · 104.18 pollWebAi per-tick drift/crash ·
-104.20 occurrenceIndex · 104.21 contract-audit 7-feature · 104.22 observation-bundle shape. (104.7 deferred.)
+104.21 contract-audit 7-feature. (104.7 deferred.)
 
 ## Verification
 Per-item gates above; A-phase audit (Cycle 1) confirmed these as line-diff divergences.

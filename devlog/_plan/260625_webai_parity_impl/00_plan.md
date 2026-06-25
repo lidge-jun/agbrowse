@@ -132,7 +132,7 @@ streaming-recovery + #6 model-pill, which are chatgpt.ts-resident).
 | 3 | ✅ DONE (modules) | cli-jaw `a943ba84` (dedup) + `1517d1f0` (observer) | full suite 4761 pass / 0 fail; tsc 0 | 106.13 + 101#2 symbols; wiring = follow-up 3.3 |
 | 4 | ✅ DONE (core) | `017b4a31`+`a460cd74` (wirings) + `db005fb7` (101#9 lock) | full suite 4762 pass / 0 fail; tsc 0 | wirings active; 101#9 core satisfied by Cycle 3 + locked; 105.5 = P2 follow-up |
 | 5 | ✅ DONE | `4a314622` (105.4) + `4b03ddd4` (104.19) + `81855bf6` (104.3) | full suite 4770 pass / 0 fail; tsc 0 | all 3 P1 infra fixes done |
-| 6 | 🔄 IN PROGRESS | 104.6/.15/.1/.2 + 104.5 `efcce949` | full suite 4777 pass / 0 fail; tsc 0 | +104.3/104.19 (C5); 5 done; 104.7 deferred; ~11 items remain |
+| 6 | 🔄 IN PROGRESS | 104.1/.2/.5/.6/.15 + 104.20 `768386d6` + 104.22 `4d285c80` | full suite 4779 pass / 0 fail; tsc 0 | +104.3/104.19 (C5); 7 done; 104.7 deferred; ~9 items remain |
 | 7 | ⬜ PENDING | — | — | — |
 | 8 | ⬜ PENDING | — | — | — |
 | 9 | ⬜ PENDING | — | — | — |
