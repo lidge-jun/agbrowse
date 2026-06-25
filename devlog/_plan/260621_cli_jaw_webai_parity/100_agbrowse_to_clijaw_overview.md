@@ -15,6 +15,7 @@ The agbrowse → cli-jaw backlog: features agbrowse has that cli-jaw lacks or is
 | [101_webai_stability_patches.md](101_webai_stability_patches.md) | The 31–35 stability patches just shipped in agbrowse v0.1.16-preview + the session-artifacts foundation they depend on |
 | [102_webai_remaining_modules.md](102_webai_remaining_modules.md) | Other agbrowse web-ai modules cli-jaw lacks (images, archive, project-sources, upload-surface, navigation-ready, …) + agbrowse-only out-of-scope list |
 | [103_search_agbrowse_research_for_clijaw.md](103_search_agbrowse_research_for_clijaw.md) | cli-jaw `search` skill should leverage agbrowse's coded `research`/`enrich-fetch`/`browse-plan` pipeline (it currently cites only `research plan`) |
+| [104_webai_shared_module_divergences.md](104_webai_shared_module_divergences.md) | **Pass 1** — 18 shared-module + vendor behavioral gaps found by line-diff (session lock/active, model evidence+i18n, code-mode nav, composer resolved-targets, attachment filename-verify, watcher/profile locks, vendor capability probes) |
 
 ## Headline (port priority)
 

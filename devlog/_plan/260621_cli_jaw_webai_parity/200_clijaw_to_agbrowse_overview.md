@@ -14,6 +14,7 @@ The parity model is "agbrowse owns evolution," so the interesting finds are **ge
 | --- | --- |
 | [201_webai_capability_registry_and_tools.md](201_webai_capability_registry_and_tools.md) | cli-jaw-only web-ai capabilities: declarative capability registry cluster, annotated/set-of-mark screenshot, unified interstitial detector, product-surface detector, richer diagnostics taxonomy, provider-adapter interface |
 | [202_search_discipline_to_agbrowse.md](202_search_discipline_to_agbrowse.md) | The *algorithmic* parts of the cli-jaw `search` skill that port to agbrowse's `research` code (M1–M5 candidate-space discipline, era-sweep, disconfirmation) — the orchestration prose does NOT port |
+| [203_adaptive_fetch_and_misc.md](203_adaptive_fetch_and_misc.md) | **Pass 1** — cli-jaw's richer **fetch ladder** agbrowse lacks: TLS-impersonation (JA3), yt-dlp, camoufox, feed-parser, BM25 reranker, structured table extractor + lane-classified discovery; plus typed status report + copy-markdown leniency |
 
 ## Headline (port priority)
 

@@ -19,6 +19,21 @@ work into two numbered series. **Docs-only — no code changes in either repo, n
 
 **Top of each backlog:** 100 → P0 `session-artifacts` foundation, then `chatgpt-files` + response-observer; 200 → P1 declarative capability-registry cluster + annotated-screenshot + interstitial detector.
 
+### Convergence log (analysis exhaustiveness)
+
+The gap analysis is driven to **convergence**: parallel cross-repo sub-agent passes run repeatedly until 2 consecutive passes surface nothing new (the analysis "admits" exhaustion), capped at 5 passes. Each pass widens scope beyond the prior one.
+
+| Pass | Scope/lens | New gaps found | Dry? |
+| --- | --- | --- | --- |
+| 0 | initial 3-agent analysis (web-ai modules + search), both directions | 100: 31–35 + remaining modules; 200: capability-registry cluster + 3 tools; search both ways | — |
+| 0b | known-missing sweep (WIP that landed mid-analysis) | +101 #9 streaming false-complete + watcher streaming-recovery (cff76ed) | — |
+| 1 | 3 agents: shared-module **line-diff** + adjacent layers (skills/browser, adaptive-fetch) + non-ChatGPT vendors | **~27 new** → [104](104_webai_shared_module_divergences.md) (18 shared/vendor, 100-dir) + [203](203_adaptive_fetch_and_misc.md) (9 fetch-ladder/misc, 200-dir) | **No** |
+| 2+ | re-sweep + completeness critic ("what did 0–1 miss?") | _pending_ | _pending_ |
+
+Convergence = 2 consecutive passes with **0 new gaps after dedup**. Status updated each pass.
+
+> **Pass 1 takeaway:** the initial analysis was NOT exhaustive — line-diffing shared modules surfaced 18 agbrowse→cli-jaw behavioral gaps the spot-check missed (session/model/code-mode/composer/attachments/watcher/vendor probes), and the adjacent-layer lens surfaced a whole cli-jaw→agbrowse **fetch-ladder** dimension (TLS-impersonation, yt-dlp, camoufox, feed-parser, BM25). Not converged; continue.
+
 > Note: the original Phase 1–4 scope below predates the analysis. cli-jaw now
 > **has** `chatgpt-tools.ts`, `chatgpt-deep-research.ts`, `chatgpt-multi-turn.ts`,
 > `chatgpt-model.ts`, `cli-sessions.ts` — so those items are largely done (deep-research

@@ -17,6 +17,7 @@ The Oracle stability-gap backlog (devlog `_fin/260608_oracle_stability_gap/` spe
 | 6 | **Model-pill mount-wait + bounded retry** | `chatgpt-model.mjs`: `waitForModelPillEvidence`, `MODEL_SELECT_MAX_ATTEMPTS=3` | **BEHIND** (flat 8s deadline, unbounded selector loop) | `chatgpt-model.ts` | **P1** |
 | 8 | **Resume `researchMode:'deep'` routing + new-tab reattach** | `cli-sessions.mjs` (`researchMode === 'deep'` → `resumeDeepResearch`; reattach → `openConversationInNewTab`) | **BEHIND** (no deep branch, no new-tab path) | `cli-sessions.ts` | **P1** (deps #4,#5) |
 | 3 | **Failure-time DOM+screenshot artifact** | `failure-diagnostics.mjs`: `captureFailureDiagnostics`, `readConversationSnapshot`, `diagnosticsEnabled` → `kind:'diagnostics'` | **BEHIND** (cli-jaw `diagnostics.ts` is a redacted error *envelope*, not a saved DOM/screenshot artifact) | `diagnostics.ts` | **P1** (dep #7) |
+| 9 | **Streaming false-complete fix + watcher streaming-recovery** (cff76ed, 2026-06-25 — landed during the parity analysis) | `chatgpt.mjs` + `chatgpt-response-observer.mjs` (`readStreaming`/`readFinished` finality evidence, `responseStableMs`, top-level-fragment dedupe) + `watcher.mjs` (streaming-recovery) + `chatgpt-response-dom.mjs` (`readTopLevelAssistantTexts`); tests `web-ai-provider-session.test.mjs`, `web-ai-chatgpt-response-fragments.test.mjs` | **ABSENT** | `chatgpt-response.ts` / `watcher.ts` | **P1** |
 
 ## Suggested porting order
 1. **#7 session-artifacts** (P0 foundation — unblocks #1 and #3).
