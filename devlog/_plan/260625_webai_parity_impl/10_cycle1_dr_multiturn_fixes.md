@@ -10,11 +10,36 @@
 ## Gaps in scope
 106.1 deep-research persists a non-report as a 'report'; 106.2 multi-turn drops prior history + corrupts indices on resume; 106.5 related secondary
 
-## Plan (filled at cycle P-phase)
-_Diff-level precision (exact files NEW/MODIFY, before/after) added when this cycle begins. Source evidence: ../260621_cli_jaw_webai_parity/ catalog rows above._
+## Plan (A-phase audit confirmed — both bugs REAL in live cli-jaw)
+
+Ordered atomic slices (each its own commit, behind `npm test` + `tsc --noEmit`):
+
+- **1.0 — schema prerequisite (audit-flagged, NOT in catalog).** `src/browser/web-ai/types.ts`:
+  add `turns?: WebAiTurnRecord[]` + `followUpCount?: number` to `WebAiSessionRecord`; extend the
+  session persistence path (`session.ts`/`cli-sessions.ts` `updateSessionResult`) to accept/persist
+  them. Without this the multi-turn merge has nothing to read/write. Additive optional fields →
+  backward-compatible.
+- **1.1 — multi-turn history+index fix (106.2/106.5).** `chatgpt-multi-turn.ts`: replace
+  `let turnIndex = 0` → `const existingTurns = session.turns ?? []; let turnIndex = existingTurns.length`;
+  render transcript + return from `allTurns = [...existingTurns, ...turns]`; persist `turns: allTurns`
+  + `followUpCount`. Mirrors agbrowse `chatgpt-multi-turn.mjs:138-216`.
+- **1.2 — deep-research not-started guard + completeness (106.1).** Port NEW
+  `chatgpt-deep-research-report.ts` (`chooseDeepResearchReportRead`, `isIncompleteDeepResearchText`,
+  120-char + status-marker regexes) from agbrowse; in `chatgpt-deep-research.ts` add
+  `researchActivityObserved` tracking (set on progress UI / frame read), return
+  `status:'failed' + warnings:['deep-research-not-started']` when still false at stable-answer point,
+  and have `extractResearchReport` yield a `completed` flag so incomplete reads keep waiting and the
+  timeout path persists only `completed ? text : null`. Mirrors agbrowse `chatgpt-deep-research.mjs:242-369`.
+- **1.x — TDD:** each slice gets a failing unit test reproducing the bug first, then the fix.
 
 ## Build log (filled at cycle B-phase)
-_Commits + gate output recorded here._
+_Branch: `feat/webai-parity-100-260625` off `dev`. Commits + gate output recorded here._
 
 ## Verification
-_A-phase audit result (advisory) + C-phase gate result._
+**A-phase audit (2026-06-25, 3 parallel read-only sub-agents vs live cli-jaw repo):**
+- 106.1 DR non-report-as-report → **REAL** (no `researchActivityObserved`/`completed` guard;
+  `chatgpt-deep-research.ts:121-147,228-269`; no `chatgpt-deep-research-report.ts`).
+- 106.2/106.5 multi-turn → **REAL** (`chatgpt-multi-turn.ts:108,111,134-176` hardcoded `turnIndex=0`,
+  new-turns-only, never persists `turns`; `types.ts` `WebAiSessionRecord` has no `turns` field).
+- Verdict: **CYCLE-1 PLAN VALID, NEEDS-ADJUST** → schema prerequisite (slice 1.0) added above.
+- C-phase gate result: _pending._

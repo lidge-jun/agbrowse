@@ -99,6 +99,16 @@ Goal completes only when:
 | Scope creep across 60 gaps / 12 cycles / multi-session | This tracker is the single source of truth; each cycle checkpoints via `cli-jaw goal update`; convergence = all rows ✅ + Cycle 12 verdict |
 | Two repos' gates diverge | Gate command pinned per repo in the table above |
 
+## A-phase audit (2026-06-25) — PASS with one refinement
+
+3 parallel read-only sub-agents verified the load-bearing claims against the **live cli-jaw repo**:
+- **Cycle 1 bugs both REAL** (106.1 DR non-report-as-report; 106.2/106.5 multi-turn history-drop/index-corruption) — confirmed in live code with file:line evidence.
+- **Refinement baked into [10_](10_cycle1_dr_multiturn_fixes.md):** multi-turn fix needs a `turns`/`followUpCount` schema addition to `WebAiSessionRecord` (`types.ts`) **first** (slice 1.0) — not in the original catalog.
+- **P0 absences CONFIRMED** (no MutationObserver observer, no session-artifacts/chatgpt-files, flat `readAssistantTexts`); full **68-file** cli-jaw web-ai surface mapped — cli-jaw already HAS `capability-registry.ts`/`annotated-screenshot.ts`/`interstitial.ts`/`product-surfaces.ts`, which confirms they are the **200-series source** (port INTO agbrowse), not cli-jaw gaps.
+- **P1 sample ALL HOLD** (104.3 watcher in-process Map only; 104.19 `ax-snapshot.ts:211` throws `snapshot.unavailable` w/ no CDP fallback; 105.4 flat 1200s/20min default, no tier table).
+
+Audit verdict: plan feasible & safe; proceed to B. Employee/sub-agent verification is advisory (non-blocking) per goal.
+
 ## Convergence tracker (filled per cycle)
 
 | Cyc | Status | Commit(s) | Gate | Checkpoint |
