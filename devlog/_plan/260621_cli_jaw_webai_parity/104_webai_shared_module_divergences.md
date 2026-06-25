@@ -38,7 +38,22 @@ Pass 1 line-diffed SHARED modules (the initial analysis only spot-checked them a
 | 104.17 | Copy-markdown **scroll-jump suppression** (patches `scrollIntoView`→noop, `focus`→`preventScroll`) | `copy-markdown.mjs:captureCopiedResponseText` | none | P2 |
 | 104.18 | `pollWebAi` **per-tick** `conversation-mismatch` (convo-id drift) + `tab-crashed` (recoverable) guards | `chatgpt.mjs:pollWebAi` (+`buildTargetMismatchResult`) | one-shot `assertSameTarget`, no per-tick drift/crash result | P2 |
 
+## AX / observation / contract-audit pipeline — **Pass 3** (corrects the parity clearance in Notes)
+
+Pass 3's deeper line-diff found the original "behavioral parity (TS-bloat only)" clearance was **wrong** for four of these modules — they carry real behavioral divergences:
+
+| # | Gap | agbrowse file:symbol | cli-jaw status | Pri |
+| --- | --- | --- | --- | --- |
+| 104.19 | **AX-tree CDP fallback** — when `page.accessibility` is gone (playwright-core ≥~1.55) fall back to CDP `Accessibility.getFullAXTree`; cli-jaw **throws** `snapshot.unavailable`, killing the whole snapshot→self-heal→contract-audit pipeline | `ax-snapshot.mjs:captureAxViaCdp`/`cdpNodesToAxTree`/`mapCdpNode` (:236-284) | `ax-snapshot.ts:captureAccessibilitySnapshot` throws at :211 (no CDP path) | **P1** |
+| 104.20 | **`occurrenceIndex`** on interactive refs — disambiguates duplicate role+name elements | `ax-snapshot.mjs:serializeNode`/`extractInteractiveRefs` (`occurrenceCounts`, `InteractiveRef.occurrenceIndex`) | `ElementRef` omits it | P2 |
+| 104.21 | **contract-audit uses the shared 7-feature vendor contract** (`editorContractForVendor` w/ `excludeNames`); cli-jaw forks a hardcoded 4-feature `CONTRACTS` map → never flags drift on sendButton/responseFeed/streamingIndicator, a "search" textbox false-satisfies composer | `contract-audit.mjs:auditContractAgainstSnapshot` (`editorContractForVendor`+`buildWebAiSnapshot`) | `contract-audit.ts:CONTRACTS` inline copy — ignores cli-jaw's own `editorContractForVendor` | P2 |
+| 104.22 | **observation-bundle** ref-filter + output shape: agbrowse accepts `@?e\d+`, emits `observationId`/`targetId`/`basis`; cli-jaw rejects bare `e3`, accepts non-element `@x`, omits all three | `observation-bundle.mjs:buildObservationBundle`/`isElementRef` | `observation-bundle.ts:buildObservationBundle` (`@`-prefix filter, no ids) | P2 |
+
+Secondary (lower-confidence, same pipeline):
+- `self-heal.ts:runValidationContract` drops agbrowse's `aria-labelledby`→`getElementById().textContent` name resolution + the `input[type=text]` role guard (cli-jaw maps all `<input>`→textbox) → skews validation confidence. `self-heal.mjs:348-355`.
+- `session-target-guard.ts:sanitizeSessionCandidate` hardcodes `deadlineAt:null` (agbrowse passes `session.deadlineAt`); concrete data-loss adjacent to 104.2.
+
 ## Notes
 - **104.13 multi-file batch** (agbrowse `attachLocalFilesLive`): 00_plan listed multi-file as OOS (PRD32.7 Phase B), but agbrowse has since shipped it — reclassify as a real P2 gap.
 - The vendor probe arrays (104.8/104.9) are **runtime/live** behaviors, distinct from cli-jaw's **declarative** capability-registry ([201](201_webai_capability_registry_and_tools.md)) — both directions have a piece the other lacks here.
-- `action-*`/`ref-registry`/`ax-snapshot`/`observation-bundle`/`session-target-guard`/`self-heal`/`source-audit`/`contract-audit`/`dom-hash` confirmed at **behavioral parity** (TS type-export bloat only) — no gap.
+- ⚠️ **CORRECTED (Pass 3):** the original claim that `ax-snapshot`/`observation-bundle`/`contract-audit`/`self-heal` were "behavioral parity (TS-bloat only)" was **wrong** — they carry real gaps (104.19–104.22 + secondary above). Still confirmed at **true behavioral parity** (TS type-export bloat only): `action-breadth/intent/memory/cache`, `ref-registry`, `source-audit`, `dom-hash`. `session-target-guard` is mostly parity with one secondary data-loss (`deadlineAt`).

@@ -46,6 +46,31 @@ agbrowse `web-ai/cli.mjs` exposes **73** distinct `--flags`; cli-jaw `bin/comman
 
 agbrowse has ~74 web-ai/chatgpt test files vs cli-jaw ~50. The agbrowse-only suites (`chatgpt-images.test`, `deep-research-resume.test`, `open-conversation-newtab.test`, `safe-conversation-url.test`) are the **test halves of the P0/P1 module ports already in 101/102** — they port *with* their modules, not separately. Tracked here only so the convergence audit accounts for the delta; not an independent gap.
 
+## 105.4 — Model-tier → timeout numeric table (agbrowse → cli-jaw) · **Pass 3**
+
+agbrowse derives the session deadline from a **model-tier table**; cli-jaw has **no tier scaling** — flat per-vendor literals. So a ChatGPT **pro / deep-research** run gets cli-jaw's default **1200s** instead of agbrowse's **3600s** → it times out at 20 min where agbrowse waits 60.
+
+- agbrowse `session.mjs`: `TIER_DEFAULT_TIMEOUT_SEC = {instant, thinking:600, pro:3600, 'deep-research':3600}` (:394) + `VENDOR_DEFAULT_TIMEOUT_SEC` + `tierDefaultTimeoutSec()` (:411) + `resolveTimeoutDefaultSec()` / `deriveTimeoutTier()`.
+- cli-jaw: those symbols **absent** (`grep`=0); deadline = inline `Number(input.timeout||1200)` (chatgpt.ts:478/662/671/715), `||600` (grok-live.ts:207), `||1200` (gemini-live.ts:517).
+- **Pri: P1** — a real early-timeout bug for long ChatGPT runs, not a missing nicety. Verified by grep.
+
+## 105.5 — Persisted session streaming-progress fields (agbrowse → cli-jaw) · **Pass 3**
+
+Beyond `modelSelection` ([104.5](104_webai_shared_module_divergences.md)), agbrowse seeds + `updateSession()`-persists 5 progress fields cli-jaw's `StoredSession` never carries: `envelopeSummary`, `lastDomHash`, `lastAxHash`, `lastStreamingState`, `lastResponseCharCount`.
+
+- agbrowse: seeded `session.mjs:204-212`, persisted live `watcher.mjs:257-266`.
+- cli-jaw: `StoredSession` (session-store.ts:15) lacks all 5 (`grep`=0 under web-ai).
+- **Pri: P2** — enables cross-process resume / progress display; ties to the watcher-lock gap ([104.3](104_webai_shared_module_divergences.md)) + streaming-recovery ([101 #9](101_webai_stability_patches.md)).
+
+## 105.6 — retryHint vocabulary (agbrowse → cli-jaw, + small reverse) · **Pass 3**
+
+Distinct from [105.1](#1051--error-code-taxonomy-agbrowse--cli-jaw)'s *error-code* taxonomy: the `retryHint` recovery-instruction set is also unsynchronized. agbrowse emits **34** distinct values, cli-jaw **22** (verified by grep).
+
+- **agbrowse-only (~20)** e.g. `pass-session-or-navigate`, `watch-or-poll`, `reduce-files`, `re-upload`, `reuse-existing-watcher-or-remove-stale-lock`, `policy` — most map to module gaps in 102/104.
+- **cli-jaw-only (~8)** e.g. `feature-fallback`, `reset-cache`, `wait-and-retry`, `retry-or-skip-visual` (200-dir, minor).
+- **Pri: P3** — adopt hints alongside their owning module ports; like 105.1, a checklist not a module.
+
 ## Notes
-- Both 105.1 and 105.2 are **derivative aggregations** — they re-frame already-documented module gaps as contract surfaces, plus surface a few genuinely-new items (the inline prompt-channel flags `--system`/`--context`, `cdp.headless`/`cdp.unreachable` codes). They do not invalidate any prior doc.
+- 105.1 and 105.2 are **derivative aggregations** — they re-frame already-documented module gaps as contract surfaces, plus surface a few genuinely-new items (inline prompt-channel `--system`/`--context`, `cdp.headless`/`cdp.unreachable` codes). They do not invalidate any prior doc.
+- **Pass 3 (105.4–105.6):** 105.4 (tier-timeout) is **NOT** derivative — a genuine early-timeout bug for long ChatGPT runs (**P1**). 105.5/105.6 are schema/vocabulary surfaces that partly map to module gaps.
 - One file-coverage miss from the critic — `code-dev-context-template.ts` (cli-jaw split it out; agbrowse inlines the template in `code-dev-context.mjs`) — is noted in [201](201_webai_capability_registry_and_tools.md); near-trivial.
