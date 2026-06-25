@@ -25,9 +25,11 @@
     `page.context().newCDPSession`, `Accessibility.getFullAXTree`/`getPartialAXTree`) +
     `cdpNodesToAxTree`/`mapCdpNode`/role-aliases, adapted to cli-jaw's strict `AxNode`.
     Tests BWAI-AXCDP-001..003.
-- **104.3 — watcher cross-process FS lock** — ⬜ PENDING (next). Port `acquireWatcherSessionLock`
-  (atomic `mkdirSync` lockdir + EEXIST staleness via PID-liveness/`process.kill(pid,0)` + heartbeat-age
-  → `watcher.already-running`) + wire into `watcher.ts` lifecycle (acquire on start, heartbeat, release
-  on end). Higher risk (live-session lifecycle) → dedicated pass with concurrency tests.
+- **104.3 — watcher cross-process FS lock** — ✅ DONE — cli-jaw `81855bf6`
+  - NEW `watcher-lock.ts` (`acquireWatcherSessionLock`: atomic `mkdir` lockdir + heartbeat +
+    PID-liveness staleness → `watcher.already-running`, reclaims stale/dead locks). Wired into
+    `watcher.ts`: acquire on start, heartbeat each tick, release via `deactivateWatcher` routed
+    through every terminal path + `stopWebAiWatchers`. Tests BWAI-WLOCK-001/002.
 
-**Gate so far:** full cli-jaw `npm test` → **4786 tests, 4768 pass, 0 fail**; tsc 0 (after 104.19).
+**Cycle 5 gate (full cli-jaw suite):** `npm test` → **4788 tests, 4770 pass, 0 fail**; tsc 0. ✅
+**Cycle 5 COMPLETE** (105.4 + 104.19 + 104.3).
