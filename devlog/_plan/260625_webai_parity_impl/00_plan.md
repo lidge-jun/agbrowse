@@ -114,7 +114,7 @@ Audit verdict: plan feasible & safe; proceed to B. Employee/sub-agent verificati
 | Cyc | Status | Commit(s) | Gate | Checkpoint |
 |---|---|---|---|---|
 | 1 | ✅ DONE | cli-jaw `0d80a71f` (multi-turn) + `f3b2708f` (deep-research) | full suite 4747 pass / 0 fail; tsc 0 | 106.1 + 106.2/.5 fixed |
-| 2 | 🔄 IN PROGRESS | cli-jaw `98760f5b` (artifacts) + `7fa38482` (wiring) | full suite 4749 pass / 0 fail; tsc 0 | 2.1+2.3 done; 2.2 chatgpt-files next |
+| 2 | ✅ DONE (planned) | cli-jaw `98760f5b` + `7fa38482` + `bcc8268c` | full suite 4754 pass / 0 fail; tsc 0 | 2.1/2.2/2.3 done; #1 auto-wire = follow-up 2.4 |
 | 3 | ⬜ PENDING | — | — | — |
 | 4 | ⬜ PENDING | — | — | — |
 | 5 | ⬜ PENDING | — | — | — |

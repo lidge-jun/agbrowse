@@ -49,10 +49,20 @@ Integration confirmed: cli-jaw home = `JAW_HOME` (`../../core/config.js`), store
     complete+timeout → `trySaveReport`+`appendSessionArtifact`. Test BWAI-MULTITURN-002 exercises
     the append path; mocks → context-scoped `t.mock.module`. tsc 0.
   - **Regression gate:** full cli-jaw `npm test` → **4767 tests, 4749 pass, 0 fail**.
-- **2.2 — chatgpt-files (generic downloadable-file capture, P0)** — ⬜ PENDING (next).
-  NEW `chatgpt-files.ts`: `normalizeChatGptFileDownloadUrl`/`normalizeChatGptSandboxUrl` allowlist,
-  `readAssistantDownloadableFiles` (CDP DOM scan), `saveAssistantDownloadableFiles` (sequential
-  download + `trySaveFileArtifact`). Pure URL/filename tests first.
+- **2.2 — chatgpt-files (generic downloadable-file capture, P0)** — ✅ DONE (capability) — cli-jaw `bcc8268c`
+  - NEW `chatgpt-files.ts`: URL allowlist (`normalizeChatGptFileDownloadUrl`/`normalizeChatGptSandboxUrl`),
+    `readAssistantDownloadableFiles` (CDP DOM scan), `saveAssistantDownloadableFiles` (sequential
+    download + per-download timeout + attribution-stop + `trySaveFileArtifact`/`appendSessionArtifact`).
+  - Tests BWAI-FILES-001..005 (security boundary: foreign host / non-https / port / traversal /
+    bad-id all rejected; sandbox `/mnt/data` scoping; filename resolution; dedupe; timeout attribution).
+- **2.4 — FOLLOW-UP (tracked, NOT yet done): wire `saveAssistantDownloadableFiles` into `chatgpt.ts`.**
+  agbrowse invokes it in `chatgpt.mjs:483` (post-answer, gated `session && !skipFinalize`, before
+  `finalizeProviderTab`). cli-jaw `chatgpt.ts` has multiple `status:'complete'` returns + CDP via
+  `getCdpSession(port)` — orchestrator surgery. Group with the other `chatgpt.ts` catalog items
+  (101 #9 streaming-recovery, #6 model-pill) in a dedicated chatgpt.ts integration cycle.
+
+**Cycle 2 gate (full cli-jaw suite):** `npm test` → **4772 tests, 4754 pass, 0 fail**; tsc 0. ✅
+**Cycle 2 planned scope (2.1/2.2/2.3) DONE.** Catalog #1 capability implemented+tested; auto-capture wiring = follow-up 2.4.
 
 ## Verification
 _A-phase audit result (advisory) + C-phase gate result._
