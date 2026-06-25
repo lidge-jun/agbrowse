@@ -26,6 +26,7 @@ cli-jaw-only web-ai capabilities (no agbrowse counterpart) that are genuine, por
 - `context-pack/zip-writer.ts` (`writeStoredZip`) — agbrowse achieves the same via the `archiver` dep; not a capability gap.
 - `context-pack/runtime.ts`, `index.ts` barrel — thin orchestration/packaging.
 - `chatgpt-response.ts` (placeholder/streaming) — **already present** in agbrowse (`chatgpt.mjs` patterns + `chatgpt-response-dom.mjs`/`-observer.mjs`); agbrowse arguably more decomposed.
+- `code-dev-context-template.ts` (Pass 2 file-coverage miss) — cli-jaw split the dev-context template into its own module; agbrowse inlines the same template inside `code-dev-context.mjs` (no separate file). Pure layout, **not** a capability gap. Was the only file (either side) previously unnamed in any doc.
 
 ## Shared modules — agbrowse already ahead (no back-port)
 `chatgpt.ts` (950 ln vs agbrowse 1101), `chatgpt-model.ts` (801 vs 1160; identical model id sets), `cli-sessions.ts` (208 vs 291) — agbrowse is the strict superset on every spot-check; cli-jaw "unique" symbols are command-handler glue agbrowse relocated to `cli.mjs`/`planner-loop.mjs`. No cli-jaw-only behavioral fixes surfaced.

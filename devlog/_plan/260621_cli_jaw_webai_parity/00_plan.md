@@ -28,11 +28,14 @@ The gap analysis is driven to **convergence**: parallel cross-repo sub-agent pas
 | 0 | initial 3-agent analysis (web-ai modules + search), both directions | 100: 31–35 + remaining modules; 200: capability-registry cluster + 3 tools; search both ways | — |
 | 0b | known-missing sweep (WIP that landed mid-analysis) | +101 #9 streaming false-complete + watcher streaming-recovery (cff76ed) | — |
 | 1 | 3 agents: shared-module **line-diff** + adjacent layers (skills/browser, adaptive-fetch) + non-ChatGPT vendors | **~27 new** → [104](104_webai_shared_module_divergences.md) (18 shared/vendor, 100-dir) + [203](203_adaptive_fetch_and_misc.md) (9 fetch-ladder/misc, 200-dir) | **No** |
-| 2+ | re-sweep + completeness critic ("what did 0–1 miss?") | _pending_ | _pending_ |
+| 2 | 2 agents: remaining-modules sweep + completeness critic ("what did 0–1 miss?") | **2 systemic surfaces** → [105](105_systemic_parity_surfaces.md) (error-code taxonomy 33v15 + CLI flag delta 73v37 incl. inline prompt-channel); remaining-modules **near-dry** (resolved/upgraded [102](102_webai_remaining_modules.md) "verify" rows: navigation-ready→P1, tab-inspect/candidate-reconcile/session-doctor/control-summary confirmed — enrichment, ~0 brand-new) | **No** |
+| 3+ | re-sweep modules (dry-check) + 2nd completeness lens (more systemic surfaces?) | _pending_ | _pending_ |
 
 Convergence = 2 consecutive passes with **0 new gaps after dedup**. Status updated each pass.
 
 > **Pass 1 takeaway:** the initial analysis was NOT exhaustive — line-diffing shared modules surfaced 18 agbrowse→cli-jaw behavioral gaps the spot-check missed (session/model/code-mode/composer/attachments/watcher/vendor probes), and the adjacent-layer lens surfaced a whole cli-jaw→agbrowse **fetch-ladder** dimension (TLS-impersonation, yt-dlp, camoufox, feed-parser, BM25). Not converged; continue.
+
+> **Pass 2 takeaway:** the *module* well is drying — Agent D found ~0 brand-new modules (only resolved/enriched existing 102 "verify" rows). But the completeness critic found a new *axis*: **cross-cutting contract surfaces** (error-code vocabulary, CLI flag surface) that no per-module doc tracked. Verified by direct count (agbrowse 33 codes/73 flags vs cli-jaw 15/37; the agent's flag count was corrected down — ~15 of the 36 flag-deltas are eval/policy/trace OOS). Mostly derivative of documented module gaps, but the inline `--system`/`--context` prompt-channel + `cdp.headless`/`cdp.unreachable` codes are genuinely new. Not converged (found a new surface class); Pass 3 must check for *more* systemic surfaces before declaring dry.
 
 > Note: the original Phase 1–4 scope below predates the analysis. cli-jaw now
 > **has** `chatgpt-tools.ts`, `chatgpt-deep-research.ts`, `chatgpt-multi-turn.ts`,
