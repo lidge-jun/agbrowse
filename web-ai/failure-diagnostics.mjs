@@ -81,3 +81,129 @@ export async function captureFailureDiagnostics(deps, { sessionId, context, page
         return { saved: false, reason: `diagnostics-error:${/** @type {any} */ (err)?.message || 'unknown'}` };
     }
 }
+
+// ---- Parity catalog 201 #6 (P2): richer diagnostics stage taxonomy + stage-typed envelope.
+// agbrowse's capture above is slim; cli-jaw web-ai/diagnostics.ts carries a stage vocabulary,
+// a selectorCounts/sendButtonStates envelope shape, text redaction, and a typed error
+// envelope. Folded in here (additive — the capture path above is unchanged).
+
+/**
+ * @typedef {'status'|'composer-focus'|'composer-insert'|'composer-verify'|'send-click'|'prompt-commit'|'poll-timeout'|'attachment-preflight'|'attachment-upload'|'capability-preflight'|'provider-select-model'|'provider-select-mode'|'provider-interstitial'|'session-reattach'|'connect'|'poll'|'commit-verify'|'composer-prereq'|'context-preflight'|'attachment-verify'|'unknown'} WebAiFailureStage
+ *
+ * @typedef {Object} WebAiDiagnostics
+ * @property {WebAiFailureStage} stage
+ * @property {string} [url]
+ * @property {string} [title]
+ * @property {Record<string, number>} selectorCounts
+ * @property {number} visibleComposerCandidates
+ * @property {Array<'enabled'|'disabled'|'absent'>} sendButtonStates
+ * @property {number} conversationTurnCount
+ * @property {number} assistantTurnCount
+ * @property {boolean} stopVisible
+ * @property {Record<string, number|boolean>} uploadSignals
+ * @property {number} [promptLengthOnly]
+ * @property {string[]} usedFallbacks
+ * @property {string[]} artifactRefs
+ * @property {string[]} warnings
+ */
+
+const KNOWN_STAGES = new Set([
+    'status', 'composer-focus', 'composer-insert', 'composer-verify', 'send-click',
+    'prompt-commit', 'poll-timeout', 'attachment-preflight', 'attachment-upload',
+    'capability-preflight', 'provider-select-model', 'provider-select-mode',
+    'provider-interstitial', 'session-reattach', 'connect', 'poll', 'commit-verify',
+    'composer-prereq', 'context-preflight', 'attachment-verify', 'unknown',
+]);
+
+/**
+ * Normalize an arbitrary value to a known failure stage (or 'unknown').
+ * @param {unknown} stage
+ * @returns {WebAiFailureStage}
+ */
+export function normalizeFailureStage(stage) {
+    if (typeof stage === 'string' && KNOWN_STAGES.has(stage)) {
+        return /** @type {WebAiFailureStage} */ (stage);
+    }
+    return 'unknown';
+}
+
+const DEFAULT_DIAG_MAX_CHARS = 1024;
+const REDACT_PATTERNS = [
+    { pattern: /bearer\s+[A-Za-z0-9._\-]+/gi, replacement: 'bearer [redacted]' },
+    { pattern: /sk-[A-Za-z0-9_\-]{8,}/g, replacement: 'sk-[redacted]' },
+    { pattern: /[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, replacement: '[email redacted]' },
+    { pattern: /\b[A-Fa-f0-9]{32,}\b/g, replacement: '[hex redacted]' },
+];
+
+/**
+ * Redact tokens/emails/hex blobs from diagnostic text and cap its length.
+ * @param {unknown} value
+ * @param {{ maxChars?: number, stripCodeFences?: boolean }} [options]
+ * @returns {string}
+ */
+export function redactDiagnosticText(value, options = {}) {
+    let text = value === undefined || value === null ? '' : String(value);
+    if (options.stripCodeFences) {
+        text = text.replace(/```[\s\S]*?```/g, '[code redacted]');
+    }
+    for (const rule of REDACT_PATTERNS) {
+        text = text.replace(rule.pattern, rule.replacement);
+    }
+    const cap = Math.max(64, options.maxChars ?? DEFAULT_DIAG_MAX_CHARS);
+    if (text.length > cap) text = text.slice(0, cap) + '…[truncated]';
+    return text;
+}
+
+/**
+ * An empty diagnostics envelope at the given stage.
+ * @param {WebAiFailureStage} [stage]
+ * @returns {WebAiDiagnostics}
+ */
+export function emptyDiagnostics(stage = 'unknown') {
+    return {
+        stage: normalizeFailureStage(stage),
+        selectorCounts: {},
+        visibleComposerCandidates: 0,
+        sendButtonStates: [],
+        conversationTurnCount: 0,
+        assistantTurnCount: 0,
+        stopVisible: false,
+        uploadSignals: {},
+        usedFallbacks: [],
+        artifactRefs: [],
+        warnings: [],
+    };
+}
+
+/**
+ * Build a stage-typed error envelope, preserving a typed WebAiError's structured fields
+ * (errorCode/retryHint/vendor/mutationAllowed/selectorsTried/evidence) so HTTP/CLI/agbrowse
+ * all see the same failure shape.
+ * @param {unknown} error
+ * @param {WebAiFailureStage} [fallbackStage]
+ * @param {WebAiDiagnostics} [diagnostics]
+ */
+export function toWebAiErrorEnvelope(error, fallbackStage = 'unknown', diagnostics) {
+    const e = /** @type {any} */ (error);
+    const typed = (e && typeof e === 'object' && e.name === 'WebAiError' && typeof e.toJSON === 'function') ? e.toJSON() : null;
+    if (typed) {
+        const stage = normalizeFailureStage(String(typed.stage ?? diagnostics?.stage ?? fallbackStage));
+        const envelope = {
+            ok: false,
+            error: redactDiagnosticText(String(typed.message ?? ''), { maxChars: 512 }),
+            stage,
+            ...(typed.errorCode ? { errorCode: String(typed.errorCode) } : {}),
+            ...(typed.retryHint ? { retryHint: String(typed.retryHint) } : {}),
+            ...(typed.vendor ? { vendor: String(typed.vendor) } : {}),
+            ...(typeof typed.mutationAllowed === 'boolean' ? { mutationAllowed: typed.mutationAllowed } : {}),
+            ...(Array.isArray(typed.selectorsTried) ? { selectorsTried: typed.selectorsTried } : {}),
+            ...(typed.evidence !== undefined ? { evidence: typed.evidence } : {}),
+        };
+        if (diagnostics) envelope.diagnostics = diagnostics;
+        return envelope;
+    }
+    const message = redactDiagnosticText(e && typeof e === 'object' && 'message' in e ? e.message : String(e ?? ''), { maxChars: 512 });
+    const envelope = { ok: false, error: message, stage: normalizeFailureStage(diagnostics?.stage ?? fallbackStage) };
+    if (diagnostics) envelope.diagnostics = diagnostics;
+    return envelope;
+}
