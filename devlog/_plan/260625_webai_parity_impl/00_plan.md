@@ -135,7 +135,7 @@ streaming-recovery + #6 model-pill, which are chatgpt.ts-resident).
 | 6 | ✅ DONE | `cae7b825`(104.14) `2c2b22c6`(104.12) `d4dc46d7`(104.18) `0bb92f5d`+`5ea6af26`(104.8) `a561f835`(104.9) — +earlier 104.1/.2/.5/.6/.10/.11/.13/.15/.16/.17/.20/.21/.22 | full suite 4815 pass / 0 fail; tsc 0 | ALL 104.x done except 104.7 (deferred w/ rationale); +104.3/104.19 from C5 |
 | 7 | ✅ DONE | `ffcc402b`(105.8) `4aa9e977`(105.5) `ec8dfef1`(105.7+105.1 composer) | full suite 4825 pass / 0 fail; tsc 0 | genuine non-derivative 105.x done; 105.4 was C5; 105.2 CLI→Phase4; 105.6/.9 + rest of 105.1 → checklists port w/ Cycle-8 modules |
 | 8 | ✅ DONE | cli-jaw `62729bc3`/`6bd10768`/`9d0cd326`/`7eac22e4`/`44a86c4c`/`18d4eeff`/`02e1eaef`/`d6665458`/`712e6b88` (9 NEW modules) + `3e02b05b`(106 More-submenu) + `02c8f0ea`(106 lease capacity) | full suite 4916 tests / 4898 pass / 0 fail; tsc 0 | all 102 modules ported (images P1, navigation-ready P1, archive/project-sources/upload-surface/tab-inspect/session-doctor/candidate-reconcile/control-summary) + 106 tools/lease items; +73 tests |
-| 9 | ⬜ PENDING | — | — | — |
+| 9 | ✅ DONE | agbrowse `58a3a4a` (branch `feat/webai-parity-200-260625`) | gate:typecheck + gate:tests + docs:drift 144 + docs:counts 63 all PASS | 203.1 TLS-impersonation rung (curl-impersonate JA3 spoof) wired into fetch ladder Phase 04b before browser escalation; 203.2–.9 → Cycle 11 |
 | 10 | ⬜ PENDING | — | — | — |
 | 11 | ⬜ PENDING | — | — | — |
 | 12 | ⬜ PENDING | — | — | — |
