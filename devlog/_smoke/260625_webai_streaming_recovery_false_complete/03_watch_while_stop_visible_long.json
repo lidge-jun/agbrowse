@@ -1,0 +1,51 @@
+{"capturedAt":"2026-06-25T05:17:29.862Z","sessionId":"01KVYKBY2GJFCVAGRJFN5R06ZZ","type":"watch.start","status":"watching","intervalMs":15000,"pollTimeoutSec":1}
+{"capturedAt":"2026-06-25T05:17:31.274Z","sessionId":"01KVYKBY2GJFCVAGRJFN5R06ZZ","type":"watch.tick","iteration":1,"status":"polling","terminal":false,"vendor":"chatgpt","url":"https://chatgpt.com/c/6a3cb9db-1604-83e8-9406-8ff4fef4f733","warnings":[]}
+{
+  "ok": true,
+  "status": "watch-once",
+  "sessionId": "01KVYKBY2GJFCVAGRJFN5R06ZZ",
+  "final": {
+    "ok": true,
+    "sessionId": "01KVYKBY2GJFCVAGRJFN5R06ZZ",
+    "vendor": "chatgpt",
+    "status": "watch-once",
+    "terminal": false,
+    "url": "https://chatgpt.com/c/6a3cb9db-1604-83e8-9406-8ff4fef4f733",
+    "answerText": null,
+    "warnings": [],
+    "preflight": {
+      "rows": [
+        {
+          "capabilityId": "provider.host",
+          "state": "ok",
+          "evidence": {
+            "url": "https://chatgpt.com/c/6a3cb9db-1604-83e8-9406-8ff4fef4f733",
+            "host": "chatgpt.com"
+          },
+          "next": "send"
+        },
+        {
+          "capabilityId": "provider.composer-visible",
+          "state": "ok",
+          "evidence": {
+            "matched": "#prompt-textarea",
+            "visible": true
+          },
+          "next": "poll"
+        }
+      ],
+      "worst": "ok"
+    },
+    "profileLock": {
+      "state": "ok",
+      "source": "readProfileLock",
+      "evidence": {
+        "pid": 91255,
+        "token": "b3379ac79a6114dd",
+        "acquiredAt": "2026-06-25T04:20:35.469Z"
+      }
+    },
+    "watchStatus": "polling"
+  },
+  "eventsPrinted": true
+}

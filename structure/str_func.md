@@ -24,18 +24,18 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 46 | 13870 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, Runway task-runner preflight/poll |
 | `skills/vision-click/` | 4 | 1182 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 850 | bundled agent workflow skill |
-| `web-ai/` | 101 | 23642 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 102 | 23944 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 858 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 552 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 114 | 13864 | deterministic module tests |
+| `test/unit/` | 115 | 14213 | deterministic module tests |
 | `test/integration/` | 18 | 2527 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 2635 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
-| `devlog/` | 378 | 47748 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 393 | 49059 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -68,7 +68,9 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/adaptive-fetch/browser-runtime.mjs` | 38 | browser page acquisition and cleanup |
 | `web-ai/cli.mjs` | 1903 | `web-ai` subcommand parser and command orchestration |
 | `web-ai/session-target-guard.mjs` | 151 | shared CDP session candidate selection, ambiguity errors, and target-mismatch recovery envelopes |
-| `web-ai/chatgpt.mjs` | 1046 | ChatGPT provider send/poll/query/status |
+| `web-ai/chatgpt.mjs` | 1102 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
+| `web-ai/chatgpt-response-dom.mjs` | 74 | shared ChatGPT top-level assistant DOM extraction helpers |
+| `web-ai/chatgpt-response-observer.mjs` | 190 | ChatGPT observer wake signal and timeout recovery metadata |
 | `web-ai/gemini-live.mjs` | 801 | Gemini provider send/poll/query/status |
 | `web-ai/grok-live.mjs` | 593 | Grok provider send/poll/query/status |
 | `web-ai/mcp-server.mjs` | 384 | stdio JSON-RPC MCP bridge |
@@ -132,6 +134,7 @@ sequenceDiagram
 
 ## 변경 기록
 
+- 2026-06-25: ChatGPT web-ai false-complete 방지를 위해 top-level assistant DOM helper, recovery finality metadata, watcher streaming guard를 source map에 반영했다.
 - 2026-05-27: Runway poll progress fix 이후 `skills/browser/`, `test/unit/`, `browser.mjs` line count를 갱신하고 Runway command/poller 주요 파일을 source map에 추가했다.
 - 2026-05-06: 파일 수/라인 수 스냅샷을 strict-migration P02–P51 + Phase 22 머지 이후 기준으로 갱신했고, 새로 추가된 release-gate / strict-baseline / module-graph / bin smoke 스크립트와 EXTERNAL_CDP·migration·traces 문서를 source map에 포함했다.
 - 2026-05-05: 현재 repo 기준 파일 수, 라인 수, 주요 runtime flow, cli-jaw mirror 기준을 추가했다.

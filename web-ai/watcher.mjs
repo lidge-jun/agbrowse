@@ -28,6 +28,12 @@ export const DEFAULT_WATCH_POLL_TIMEOUT_SEC = 30;
 export const DEFAULT_WATCH_LOCK_STALE_MS = 5 * 60_000;
 export const TERMINAL_SESSION_STATUSES = new Set(['complete', 'timeout', 'error']);
 
+const WATCHER_STREAMING_SELECTORS = {
+    chatgpt: ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]'],
+    grok: ['button[aria-label*="Stop" i]', 'button:has-text("Stop")'],
+    gemini: ['button[aria-label*="Stop" i]', 'button[aria-label*="Stop generating" i]'],
+};
+
 const PROVIDER_HOSTS = {
     chatgpt: new Set(['chatgpt.com', 'chat.openai.com']),
     gemini: new Set(['gemini.google.com']),
@@ -153,6 +159,10 @@ export async function watchSessionOnce(deps, input = {}) {
         }, { ttlMs: 30_000, heartbeatMs: 0 });
     }
     if (TERMINAL_SESSION_STATUSES.has(session.status)) {
+        if (session.status === 'complete') {
+            const downgraded = await downgradeCompleteIfStillStreaming(deps, session, vendor);
+            if (downgraded) return downgraded;
+        }
         return {
             ok: true, sessionId: session.sessionId, vendor,
             status: session.status, terminal: true,
@@ -223,6 +233,8 @@ export async function watchSessionOnce(deps, input = {}) {
             : (typeof (/** @type {any} */ (pollResult)).answer === 'string' ? (/** @type {any} */ (pollResult)).answer : null);
         const refreshed = getSession(session.sessionId) || session;
         let status = refreshed.status || pollResult.status || 'polling';
+        /** @type {string[]} */
+        const watcherWarnings = [];
 
         if (status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt || session.deadlineAt)) {
             status = 'polling';
@@ -233,6 +245,19 @@ export async function watchSessionOnce(deps, input = {}) {
                     `watcher-transient-poll-timeout:${options.pollTimeoutSec}s`,
                 ),
             });
+        }
+        if (status === 'complete' && await hasStreamingIndicator(page, vendor)) {
+            const latest = getSession(session.sessionId) || refreshed;
+            const warning = 'watcher-complete-deferred-streaming';
+            watcherWarnings.push(warning);
+            updateSession(session.sessionId, {
+                status: 'polling',
+                answer: null,
+                completedAt: null,
+                lastStreamingState: 'streaming',
+                warnings: appendUniqueWarning(latest.warnings || [], warning),
+            });
+            status = 'polling';
         }
 
         updateSession(session.sessionId, {
@@ -249,7 +274,7 @@ export async function watchSessionOnce(deps, input = {}) {
             terminal: TERMINAL_SESSION_STATUSES.has(status),
             url: (/** @type {any} */ (page)).url?.() || null,
             answerText,
-            warnings: [...(reattach.warnings || []), ...(pollResult.warnings || [])],
+            warnings: mergeWarnings(reattach.warnings || [], pollResult.warnings || [], watcherWarnings),
             preflight,
             profileLock: profileLockSummary,
         };
@@ -392,7 +417,53 @@ export async function readProfileLockSummary() {
     return { state: 'unknown', reason: 'no-compatible-profile-lock-export' };
 }
 
+/**
+ * @param {any} page
+ * @param {string} vendor
+ */
+export async function hasStreamingIndicator(page, vendor) {
+    const selectors = (/** @type {Record<string, string[]>} */ (WATCHER_STREAMING_SELECTORS))[vendor] || [];
+    for (const selector of selectors) {
+        const first = page.locator?.(selector)?.first?.();
+        if (typeof first?.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
+    }
+    return false;
+}
+
 // --- internal helpers ---
+
+/**
+ * @param {any} deps
+ * @param {any} session
+ * @param {string} vendor
+ */
+async function downgradeCompleteIfStillStreaming(deps, session, vendor) {
+    try {
+        return await withSessionPage(deps, session.sessionId, async ({ page }) => {
+            if (!await hasStreamingIndicator(page, vendor)) return null;
+            const warning = 'watcher-complete-deferred-streaming';
+            updateSession(session.sessionId, {
+                status: 'polling',
+                answer: null,
+                completedAt: null,
+                lastStreamingState: 'streaming',
+                warnings: appendUniqueWarning(session.warnings || [], warning),
+            });
+            return {
+                ok: true,
+                sessionId: session.sessionId,
+                vendor,
+                status: 'polling',
+                terminal: false,
+                url: (/** @type {any} */ (page)).url?.() || null,
+                answerText: typeof session.answer === 'string' ? session.answer : null,
+                warnings: appendUniqueWarning(session.warnings || [], warning),
+            };
+        });
+    } catch {
+        return null;
+    }
+}
 
 /**
  * @param {any} page
@@ -466,6 +537,21 @@ function deriveStreamingState(status, result = {}) {
  */
 function appendUniqueWarning(warnings, warning) {
     return warnings.includes(warning) ? warnings : [...warnings, warning];
+}
+
+/**
+ * @param  {...unknown[]} groups
+ * @returns {string[]}
+ */
+function mergeWarnings(...groups) {
+    /** @type {string[]} */
+    const out = [];
+    for (const group of groups) {
+        for (const item of Array.isArray(group) ? group : []) {
+            if (!out.includes(String(item))) out.push(String(item));
+        }
+    }
+    return out;
 }
 
 /**

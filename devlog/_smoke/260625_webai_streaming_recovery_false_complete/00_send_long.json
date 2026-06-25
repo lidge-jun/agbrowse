@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "vendor": "chatgpt",
+  "status": "sent",
+  "url": "https://chatgpt.com/",
+  "sessionId": "01KVYKBY2GJFCVAGRJFN5R06ZZ",
+  "baseline": {
+    "vendor": "chatgpt",
+    "url": "https://chatgpt.com/",
+    "promptHash": "f24e740e74a7f978e1f1f792b3cc4fb84d2b60df54825aa6b4389daaa1dec417",
+    "assistantCount": 0,
+    "textHash": "683",
+    "capturedAt": "2026-06-25T05:17:13.167Z"
+  },
+  "usedFallbacks": [],
+  "traceSummary": {
+    "sessionId": "01KVYKBY2GJFCVAGRJFN5R06ZZ",
+    "totalSteps": 2,
+    "resolutionSources": [
+      "css-fallback"
+    ],
+    "errorCount": 0,
+    "firstTs": "2026-06-25T05:17:13.249Z",
+    "lastTs": "2026-06-25T05:17:13.820Z"
+  },
+  "warnings": [
+    "project omitted",
+    "goal omitted",
+    "output preference omitted"
+  ]
+}

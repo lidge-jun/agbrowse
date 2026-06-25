@@ -1,0 +1,126 @@
+{
+  "ok": true,
+  "status": "show",
+  "session": {
+    "sessionId": "01KVYK7NR5D21EBAFD5MFM7GVA",
+    "vendor": "chatgpt",
+    "createdAt": "2026-06-25T05:14:53.573Z",
+    "updatedAt": "2026-06-25T05:15:15.879Z",
+    "deadlineAt": "2026-06-25T05:34:53.573Z",
+    "targetId": "A6270F8702C3FFA6D3A829EF9B25406E",
+    "tabId": "A6270F8702C3FFA6D3A829EF9B25406E",
+    "tabState": {
+      "createdAt": "2026-06-25T05:14:53.593Z",
+      "lastActiveAt": "2026-06-25T05:14:53.593Z",
+      "recoveryCount": 0,
+      "closeCount": 0
+    },
+    "originalUrl": "https://chatgpt.com/",
+    "conversationUrl": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+    "promptHash": "sha256:7c07d752dd496059b4ff2df41602aa9ce94ae254304b479b9fd6a6e9d6e9af3e",
+    "envelopeSummary": {
+      "attachmentPolicy": "inline-only",
+      "assistantCount": 0
+    },
+    "status": "timeout",
+    "answer": null,
+    "lastError": {
+      "errorCode": "provider.poll-timeout",
+      "message": "timed out waiting for answer"
+    },
+    "warnings": [],
+    "lastDomHash": null,
+    "lastAxHash": null,
+    "lastStreamingState": "unknown",
+    "lastResponseCharCount": 0,
+    "trace": [
+      {
+        "stepId": "fdf3cc7e34ae43b0",
+        "ts": "2026-06-25T05:14:53.635Z",
+        "action": "target-resolve",
+        "provider": "chatgpt",
+        "intentId": "composer.fill",
+        "operation": "fill",
+        "status": "ok",
+        "target": {
+          "resolution": "css-fallback",
+          "source": "css-fallback",
+          "ref": null,
+          "selector": "#prompt-textarea",
+          "role": null
+        },
+        "confidence": 3,
+        "resolutionSource": "css-fallback",
+        "errorCode": null,
+        "attempts": [
+          {
+            "source": "css-fallback",
+            "selector": "textarea:not([disabled])",
+            "ref": null,
+            "validation": {
+              "ok": false,
+              "reason": "not-visible",
+              "confidence": null,
+              "count": null
+            }
+          },
+          {
+            "source": "css-fallback",
+            "selector": "textarea[name=\"prompt-textarea\"]",
+            "ref": null,
+            "validation": {
+              "ok": false,
+              "reason": "not-visible",
+              "confidence": null,
+              "count": null
+            }
+          },
+          {
+            "source": "css-fallback",
+            "selector": "#prompt-textarea",
+            "ref": null,
+            "validation": {
+              "ok": true,
+              "reason": null,
+              "confidence": 1,
+              "count": null
+            }
+          }
+        ]
+      },
+      {
+        "stepId": "d5de4ac534fc4bc6",
+        "ts": "2026-06-25T05:14:54.218Z",
+        "action": "target-resolve",
+        "provider": "chatgpt",
+        "intentId": "send.click",
+        "operation": "click",
+        "status": "ok",
+        "target": {
+          "resolution": "css-fallback",
+          "source": "css-fallback",
+          "ref": null,
+          "selector": "button[data-testid=\"send-button\"]",
+          "role": null
+        },
+        "confidence": 3,
+        "resolutionSource": "css-fallback",
+        "errorCode": null,
+        "attempts": [
+          {
+            "source": "css-fallback",
+            "selector": "button[data-testid=\"send-button\"]",
+            "ref": null,
+            "validation": {
+              "ok": true,
+              "reason": null,
+              "confidence": 1,
+              "count": null
+            }
+          }
+        ]
+      }
+    ],
+    "artifacts": []
+  }
+}

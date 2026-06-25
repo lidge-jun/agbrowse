@@ -50,13 +50,15 @@ import { resolveArtifactsDir } from './session-artifacts.mjs';
 import { sendDeepResearch } from './chatgpt-deep-research.mjs';
 import { selectChatGptComposerTools } from './chatgpt-tools.mjs';
 import { buildTargetMismatchResult } from './session-target-guard.mjs';
+import {
+    CHATGPT_ASSISTANT_SELECTORS,
+    CHATGPT_STOP_SELECTORS,
+    readTopLevelAssistantTexts,
+    readTopLevelAssistantTextsFromLocators,
+} from './chatgpt-response-dom.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
-const ASSISTANT_SELECTORS = [
-    '[data-message-author-role="assistant"]',
-    '[data-turn="assistant"]',
-    'article[data-testid^="conversation-turn"]',
-];
+const ASSISTANT_SELECTORS = CHATGPT_ASSISTANT_SELECTORS;
 const FINISHED_ACTIONS_SELECTOR = [
     'button[data-testid="copy-turn-action-button"]',
     'button[data-testid="good-response-turn-action-button"]',
@@ -102,11 +104,6 @@ export async function renderWebAi(input = {}) {
         warnings: [...rendered.warnings, ...(contextPack?.warnings || [])],
     };
 }
-
-const CHATGPT_STOP_SELECTORS = [
-    'button[data-testid="stop-button"]',
-    'button[aria-label*="Stop" i]',
-];
 
 export const chatGptCapabilities = [
     defineCapability('chatgpt-active-tab-verification', async (/** @type {any} */ deps) => probeHostMatches(await deps.getPage(), CHATGPT_HOSTS)),
@@ -552,8 +549,29 @@ export async function pollWebAi(deps, input = {}) {
         const recovered = await recoverAssistantResponse(page, {
             baselineAssistantCount: baseline.assistantCount,
             isFinalAnswer,
+            readStreaming: () => isStreaming(page),
+            readFinished: () => isResponseFinished(page),
         });
         if (recovered?.text) {
+            if (recovered.streaming === true) {
+                return buildDeferredPollingResult({
+                    vendor, page, session, baseline,
+                    answerText: recovered.text,
+                    usedFallbacks: ['recovery'],
+                    warning: 'recovery-deferred-streaming',
+                    streamingState: 'streaming',
+                });
+            }
+            const canComplete = recovered.finished === true || Number(recovered.responseStableMs || 0) > 0;
+            if (!canComplete) {
+                return buildDeferredPollingResult({
+                    vendor, page, session, baseline,
+                    answerText: recovered.text,
+                    usedFallbacks: ['recovery'],
+                    warning: 'recovery-deferred-unverified',
+                    streamingState: 'unknown',
+                });
+            }
             const answerText = recovered.text;
             if (!input.skipFinalize) {
                 await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
@@ -568,7 +586,7 @@ export async function pollWebAi(deps, input = {}) {
                 baseline,
                 usedFallbacks: ['recovery'],
                 warnings: ['response-recovered-after-timeout'],
-                responseStableMs: 0,
+                responseStableMs: Math.max(1, Number(recovered.responseStableMs || 0)),
             });
         }
     }
@@ -577,6 +595,26 @@ export async function pollWebAi(deps, input = {}) {
     // DOM snapshot + screenshot when gated. Fire-and-forget; never throws.
     if (session && diagnosticsEnabled(input)) {
         await captureFailureDiagnostics(deps, { sessionId: session.sessionId, context: 'response-timeout', page });
+    }
+
+    if (input.allowCopyMarkdownFallback === true && stableText) {
+        const streaming = await isStreaming(page);
+        const responseStableMs = stableSince ? Date.now() - stableSince : 0;
+        if (streaming) {
+            if (session) {
+                return buildDeferredPollingResult({
+                    vendor, page, session, baseline,
+                    answerText: stableText,
+                    usedFallbacks: ['copy-markdown'],
+                    warning: 'copy-markdown-deferred-streaming',
+                    streamingState: 'streaming',
+                });
+            }
+            stableText = '';
+        }
+        if (responseStableMs <= 0) {
+            stableText = '';
+        }
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
@@ -602,7 +640,7 @@ export async function pollWebAi(deps, input = {}) {
                 usedFallbacks: ['copy-markdown'],
                 warnings: [],
                 ...(traceSummary ? { traceSummary } : {}),
-                responseStableMs: stableSince ? Date.now() - stableSince : 0,
+                responseStableMs: Date.now() - stableSince,
             });
         }
         const timedOutSession = session ? markSessionTimeout(session.sessionId, {
@@ -983,27 +1021,45 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
  * @param {any} page
  */
 async function readAssistantMessages(page) {
-    const evaluated = await page.evaluate((/** @type {any} */ selectors) => {
-        for (const selector of selectors) {
-            const texts = Array.from(document.querySelectorAll(selector))
-                .map(el => String(el.innerText || el.textContent || '').trim())
-                .filter(Boolean);
-            if (texts.length) return texts;
-        }
-        return [];
-    }, ASSISTANT_SELECTORS).catch(() => []);
+    const evaluated = await page.evaluate(readTopLevelAssistantTexts, ASSISTANT_SELECTORS).catch(() => []);
     if (Array.isArray(evaluated) && evaluated.length) return evaluated.map(cleanAssistantText).filter(Boolean);
+    const fallback = await readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS);
+    return fallback.map(cleanAssistantText).filter(Boolean);
+}
 
-    const messages = [];
-    for (const selector of ASSISTANT_SELECTORS) {
-        const locators = await page.locator(selector).all().catch(() => []);
-        for (const locator of locators) {
-            const text = cleanAssistantText(await locator.innerText().catch(() => ''));
-            if (text) messages.push(text);
-        }
-        if (messages.length > 0) break;
-    }
-    return messages;
+/**
+ * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
+ */
+function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState }) {
+    const current = getSession(session.sessionId) || session;
+    updateSession(session.sessionId, {
+        status: 'polling',
+        answer: null,
+        completedAt: null,
+        lastStreamingState: streamingState,
+        warnings: appendUniqueWarningLocal(current.warnings || [], warning),
+    });
+    return {
+        ok: true,
+        vendor,
+        status: 'polling',
+        url: page.url(),
+        sessionId: session.sessionId,
+        answerText,
+        baseline,
+        usedFallbacks,
+        warnings: [warning],
+        recoverable: true,
+        retryHint: 'watch-or-poll',
+    };
+}
+
+/**
+ * @param {any[]} warnings
+ * @param {string} warning
+ */
+function appendUniqueWarningLocal(warnings, warning) {
+    return warnings.includes(warning) ? warnings : [...warnings, warning];
 }
 
 /**

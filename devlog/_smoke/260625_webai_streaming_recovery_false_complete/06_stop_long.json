@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "vendor": "chatgpt",
+  "status": "blocked",
+  "url": "https://chatgpt.com/c/6a3cb9db-1604-83e8-9406-8ff4fef4f733",
+  "warnings": [
+    "sent Escape to stop generation"
+  ],
+  "sessionId": "01KVYKBY2GJFCVAGRJFN5R06ZZ",
+  "targetId": "6C8569C43C1B504FFEA33EFCCB1839AF",
+  "interrupt": true
+}

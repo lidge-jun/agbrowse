@@ -17,7 +17,7 @@ partial phase must not be marketed as complete.
 | 14 active command ownership | ready | `web-ai/active-command-store.mjs` | Keep active target cleanup protection |
 | 15 browser primitives | ready | `skills/browser/browser.mjs`, primitive tests | Keep general CLI claims local-only |
 | 16 semantic resolver | ready in agbrowse | `web-ai/action-intent.mjs`, `web-ai/target-resolver.mjs` | Mirror into cli-jaw before cross-repo ready claim |
-| 17 provider contracts/source audit | ready in agbrowse | `web-ai/answer-artifact.mjs`, `web-ai/source-audit.mjs` | Mirror into cli-jaw before cross-repo ready claim |
+| 17 provider contracts/source audit | ready in agbrowse | `web-ai/answer-artifact.mjs`, `web-ai/source-audit.mjs`, `web-ai/chatgpt-response-dom.mjs` | Keep streaming finality and nested DOM fragment tests green before claiming provider-ready behavior |
 | 18 MCP/AI SDK | partial | `web-ai/mcp-server.mjs`, `web-ai/tool-schema.mjs`, `browser_snapshot`, `browser_click_ref` | Either keep narrow ready scope or implement remaining generic browser tools |
 | 19 remote CDP adapters | deferred | No `external-cdp` provider runtime yet | Do not claim hosted/cloud/external-CDP support |
 | 20 benchmark trajectory | ready for trajectory bundles | `benchmarks/agbrowse/trajectory.mjs`, `benchmarks/agbrowse/run-task.mjs`, `docs/benchmarks.md` | Do not publish scores until fixed tasks/planner/environment exist |

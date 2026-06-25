@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "status": "session-doctor",
+  "sessionId": "01KVYK7NR5D21EBAFD5MFM7GVA",
+  "vendor": "chatgpt",
+  "summary": "timeout on live target",
+  "session": {
+    "status": "timeout",
+    "conversationUrl": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+    "deadlineAt": "2026-06-25T05:34:53.573Z",
+    "warnings": [],
+    "answerTextLength": 0
+  },
+  "target": {
+    "targetId": "A6270F8702C3FFA6D3A829EF9B25406E"
+  },
+  "activeCommandCount": 786,
+  "recommendations": [
+    "If the provider tab is still streaming and deadline is future, retry poll/watch with --session."
+  ]
+}

@@ -4,6 +4,7 @@ import {
     observeAssistantResponse,
     recoverAssistantResponse,
 } from '../../web-ai/chatgpt-response-observer.mjs';
+import { CHATGPT_ASSISTANT_SELECTORS } from '../../web-ai/chatgpt-response-dom.mjs';
 
 describe('buildResponseObserverExpression', () => {
     it('embeds clamped baseline / quiet / timeout literals', () => {
@@ -55,13 +56,22 @@ describe('recoverAssistantResponse', () => {
     it('returns the latest assistant turn when it passes isFinalAnswer', async () => {
         const r = await recoverAssistantResponse(pageWith(['old', 'the real final answer']), {
             isFinalAnswer: (t) => !/^answer now$/i.test(t),
+            stabilityWindowMs: 0,
         });
-        expect(r).toEqual({ from: 'recovery', text: 'the real final answer', recovered: true });
+        expect(r).toEqual({
+            from: 'recovery',
+            text: 'the real final answer',
+            recovered: true,
+            streaming: false,
+            finished: false,
+            responseStableMs: 0,
+        });
     });
 
     it('rejects a placeholder latest turn', async () => {
         const r = await recoverAssistantResponse(pageWith(['Answer now']), {
             isFinalAnswer: (t) => !/^answer now$/i.test(t),
+            stabilityWindowMs: 0,
         });
         expect(r).toBeNull();
     });
@@ -71,7 +81,7 @@ describe('recoverAssistantResponse', () => {
     });
 
     it('returns the latest turn when no predicate is supplied', async () => {
-        const r = await recoverAssistantResponse(pageWith(['x', 'y']));
+        const r = await recoverAssistantResponse(pageWith(['x', 'y']), { stabilityWindowMs: 0 });
         expect(r?.text).toBe('y');
     });
 
@@ -79,4 +89,71 @@ describe('recoverAssistantResponse', () => {
         const r = await recoverAssistantResponse({ evaluate: async () => { throw new Error('boom'); } });
         expect(r).toBeNull();
     });
+
+    it('returns non-terminal streaming metadata when stop button is visible', async () => {
+        const r = await recoverAssistantResponse(pageWith(['partial answer']), {
+            readStreaming: async () => true,
+            readFinished: async () => true,
+            stabilityWindowMs: 0,
+        });
+        expect(r).toMatchObject({
+            text: 'partial answer',
+            streaming: true,
+            finished: false,
+            responseStableMs: 0,
+        });
+    });
+
+    it('marks finished recovery with non-zero finality evidence', async () => {
+        const r = await recoverAssistantResponse(pageWith(['final answer']), {
+            readStreaming: async () => false,
+            readFinished: async () => true,
+            stabilityWindowMs: 0,
+        });
+        expect(r).toMatchObject({
+            text: 'final answer',
+            streaming: false,
+            finished: true,
+            responseStableMs: 1,
+        });
+    });
+
+    it('prefers top-level assistant text over nested child fragments', async () => {
+        const parent = fakeNode('Full assistant answer\nFragment');
+        const child = fakeNode('Fragment');
+        parent.children.add(child);
+        const r = await recoverAssistantResponse(pageWithDocument({ [CHATGPT_ASSISTANT_SELECTORS[0]]: [parent, child] }), {
+            stabilityWindowMs: 0,
+        });
+        expect(r?.text).toBe('Full assistant answer\nFragment');
+    });
 });
+
+function fakeNode(text) {
+    return {
+        innerText: text,
+        textContent: text,
+        children: new Set(),
+        contains(other) {
+            if (this.children.has(other)) return true;
+            return Array.from(this.children).some(child => child.contains?.(other));
+        },
+    };
+}
+
+function pageWithDocument(nodesBySelector) {
+    return {
+        evaluate: async (fn, selectors) => {
+            const previous = globalThis.document;
+            globalThis.document = {
+                querySelectorAll: (selector) => nodesBySelector[selector] || [],
+            };
+            try {
+                return fn(selectors);
+            } finally {
+                if (previous === undefined) delete globalThis.document;
+                else globalThis.document = previous;
+            }
+        },
+    };
+}

@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "vendor": "chatgpt",
+  "status": "timeout",
+  "url": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+  "sessionId": "01KVYK7NR5D21EBAFD5MFM7GVA",
+  "deadlineAt": "2026-06-25T05:34:53.573Z",
+  "conversationUrl": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+  "baseline": {
+    "vendor": "chatgpt",
+    "url": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+    "promptHash": "7c07d752dd496059b4ff2df41602aa9ce94ae254304b479b9fd6a6e9d6e9af3e",
+    "assistantCount": 0,
+    "textHash": "0",
+    "capturedAt": "2026-06-25T05:14:53.573Z"
+  },
+  "warnings": [],
+  "usedFallbacks": [],
+  "recoverable": true,
+  "retryHint": "poll-or-resume",
+  "error": "timed out waiting for answer"
+}

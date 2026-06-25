@@ -1,0 +1,75 @@
+{
+  "ok": true,
+  "status": "complete",
+  "sessionId": "01KVYK7NR5D21EBAFD5MFM7GVA",
+  "events": [
+    {
+      "type": "watch.start",
+      "status": "watching",
+      "terminal": false,
+      "warnings": []
+    },
+    {
+      "type": "watch.tick",
+      "status": "complete",
+      "terminal": true,
+      "warnings": [
+        "response-recovered-after-timeout"
+      ],
+      "url": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47"
+    },
+    {
+      "type": "watch.complete",
+      "status": "complete",
+      "terminal": true,
+      "warnings": []
+    }
+  ],
+  "final": {
+    "ok": true,
+    "sessionId": "01KVYK7NR5D21EBAFD5MFM7GVA",
+    "vendor": "chatgpt",
+    "status": "complete",
+    "terminal": true,
+    "url": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+    "warnings": [
+      "response-recovered-after-timeout"
+    ],
+    "preflight": {
+      "rows": [
+        {
+          "capabilityId": "provider.host",
+          "state": "ok",
+          "evidence": {
+            "url": "https://chatgpt.com/c/6a3cb94e-f428-83ee-a333-c8179e1d8e47",
+            "host": "chatgpt.com"
+          },
+          "next": "send"
+        },
+        {
+          "capabilityId": "provider.composer-visible",
+          "state": "ok",
+          "evidence": {
+            "matched": "#prompt-textarea",
+            "visible": true
+          },
+          "next": "poll"
+        }
+      ],
+      "worst": "ok"
+    },
+    "profileLock": {
+      "state": "ok",
+      "source": "readProfileLock",
+      "evidence": {
+        "pid": 91255,
+        "token": "b3379ac79a6114dd",
+        "acquiredAt": "2026-06-25T04:20:35.469Z"
+      }
+    },
+    "answerTextLength": 7545,
+    "answerTextPreview": "AGBROWSE_STREAM_SMOKE 1. The stream opened cleanly.\nAGBROWSE_STREAM_SMOKE 2. The first token arrived promptly.\nAGBROWSE_STREAM_SMOKE 3. The connection remained stable.\nAGBROWSE_STREAM_SMOKE 4. The output advanced smoothly.\nAGBROWSE_STREAM_S",
+    "answerTextTail": "SMOKE 117. The response reached the closing stretch.\nAGBROWSE_STREAM_SMOKE 118. The channel carried the penultimate pair.\nAGBROWSE_STREAM_SMOKE 119. The final line was now next.\nAGBROWSE_STREAM_SMOKE 120. The streaming smoke test completed."
+  },
+  "eventsPrinted": true
+}

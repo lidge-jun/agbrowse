@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { hasStreamingIndicator } from '../../web-ai/watcher.mjs';
 
 const watcherSrc = readFileSync(join(process.cwd(), 'web-ai/watcher.mjs'), 'utf8');
 
@@ -55,3 +56,37 @@ describe('web-ai watcher self-heals drifted conversation URL (source-string cont
         expect(watcherSrc).not.toContain('urlsEquivalentForWatch');
     });
 });
+
+describe('web-ai watcher streaming guard', () => {
+    it('detects ChatGPT stop controls as in-flight streaming', async () => {
+        const page = fakeVisibilityPage({
+            'button[data-testid="stop-button"]': true,
+        });
+        await expect(hasStreamingIndicator(page, 'chatgpt')).resolves.toBe(true);
+    });
+
+    it('does not treat Gemini completion footers as in-flight streaming', async () => {
+        const page = fakeVisibilityPage({
+            '.response-footer.complete': true,
+            messageActions: true,
+            '[aria-label*="Good response" i]': true,
+        });
+        await expect(hasStreamingIndicator(page, 'gemini')).resolves.toBe(false);
+    });
+
+    it('contains a complete-plus-streaming downgrade path', () => {
+        expect(watcherSrc).toContain('watcher-complete-deferred-streaming');
+        expect(watcherSrc).toMatch(/status === 'complete' && await hasStreamingIndicator\(page, vendor\)/);
+        expect(watcherSrc).toMatch(/status:\s*'polling'[\s\S]*?terminal:\s*false/);
+    });
+});
+
+function fakeVisibilityPage(visibleBySelector) {
+    return {
+        locator: (selector) => ({
+            first: () => ({
+                isVisible: async () => Boolean(visibleBySelector[selector]),
+            }),
+        }),
+    };
+}

@@ -135,6 +135,79 @@ describe('web-ai provider timeout envelope', () => {
             conversationUrl: 'https://chatgpt.com/c/slow',
         });
     });
+
+    it('ChatGPT timeout recovery defers completion while stop button is visible', async () => {
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { pollWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'slow', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-streaming',
+                conversationUrl: 'https://chatgpt.com/c/streaming',
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+
+        const result = await pollWebAi({
+            getPage: async () => createStreamingRecoveryChatGptPage('partial but not final yet'),
+            getTargetId: async () => 'target-streaming',
+        }, {
+            vendor: 'chatgpt',
+            session: session.sessionId,
+            timeout: 1,
+            skipFinalize: true,
+        });
+
+        expect(result).toMatchObject({
+            ok: true,
+            vendor: 'chatgpt',
+            status: 'polling',
+            sessionId: session.sessionId,
+            answerText: 'partial but not final yet',
+            warnings: ['recovery-deferred-streaming'],
+            recoverable: true,
+            retryHint: 'watch-or-poll',
+        });
+        expect(getSession(session.sessionId).status).toBe('polling');
+    });
+
+    it('ChatGPT copy-markdown timeout fallback defers completion if stop button becomes visible', async () => {
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { pollWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'slow', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-copy-streaming',
+                conversationUrl: 'https://chatgpt.com/c/copy-streaming',
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+
+        const result = await pollWebAi({
+            getPage: async () => createCopyMarkdownDeferredChatGptPage('stable text before stop returns'),
+            getTargetId: async () => 'target-copy-streaming',
+        }, {
+            vendor: 'chatgpt',
+            session: session.sessionId,
+            timeout: 1,
+            allowCopyMarkdownFallback: true,
+            skipFinalize: true,
+        });
+
+        expect(result).toMatchObject({
+            ok: true,
+            vendor: 'chatgpt',
+            status: 'polling',
+            sessionId: session.sessionId,
+            answerText: 'stable text before stop returns',
+            warnings: ['copy-markdown-deferred-streaming'],
+            recoverable: true,
+            retryHint: 'watch-or-poll',
+        });
+        expect(getSession(session.sessionId).status).toBe('polling');
+    });
 });
 
 describe('web-ai provider integration (source-string contracts)', () => {
@@ -284,6 +357,78 @@ function createTimeoutChatGptPage() {
         locator: () => ({
             first: () => ({
                 isVisible: async () => false,
+            }),
+            all: async () => [],
+        }),
+    };
+}
+
+function createStreamingRecoveryChatGptPage(text) {
+    const node = {
+        innerText: text,
+        textContent: text,
+        contains: () => false,
+    };
+    return {
+        url: () => 'https://chatgpt.com/c/streaming',
+        evaluate: async (fn, selectors) => {
+            const previous = globalThis.document;
+            globalThis.document = {
+                querySelectorAll: (selector) => selector === selectors[0] ? [node] : [],
+            };
+            try {
+                return fn(selectors);
+            } finally {
+                if (previous === undefined) delete globalThis.document;
+                else globalThis.document = previous;
+            }
+        },
+        waitForTimeout: async (ms) => new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 10))),
+        locator: (selector) => ({
+            first: () => ({
+                isVisible: async () => selector.includes('stop-button') || selector.includes('Stop'),
+            }),
+            all: async () => [],
+        }),
+    };
+}
+
+function createCopyMarkdownDeferredChatGptPage(text) {
+    const node = {
+        innerText: text,
+        textContent: text,
+        contains: () => false,
+    };
+    const placeholderNode = {
+        innerText: 'Answer now',
+        textContent: 'Answer now',
+        contains: () => false,
+    };
+    let evaluateCount = 0;
+    let stopVisible = false;
+    return {
+        url: () => 'https://chatgpt.com/c/copy-streaming',
+        evaluate: async (fn, selectors) => {
+            evaluateCount += 1;
+            const currentNode = evaluateCount === 1 ? node : placeholderNode;
+            const previous = globalThis.document;
+            globalThis.document = {
+                querySelectorAll: (selector) => selector === selectors[0] ? [currentNode] : [],
+            };
+            try {
+                return fn(selectors);
+            } finally {
+                if (previous === undefined) delete globalThis.document;
+                else globalThis.document = previous;
+            }
+        },
+        waitForTimeout: async () => {
+            stopVisible = true;
+            await new Promise(resolve => setTimeout(resolve, 1050));
+        },
+        locator: (selector) => ({
+            first: () => ({
+                isVisible: async () => stopVisible && (selector.includes('stop-button') || selector.includes('Stop')),
             }),
             all: async () => [],
         }),
