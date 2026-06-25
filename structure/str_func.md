@@ -29,7 +29,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/eval/` | 5 | 552 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
-| `scripts/` | 10 | 1617 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
+| `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
 | `test/unit/` | 114 | 13864 | deterministic module tests |
 | `test/integration/` | 18 | 2513 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
@@ -81,7 +81,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/target-resolver.mjs` | 45 | explainable target resolver wrapper |
 | `scripts/run-web-ai-eval.mjs` | 59 | provider fixture eval CLI wrapper |
 | `scripts/release.sh` | 260 | latest release gate and dispatch helper |
-| `scripts/release-preview.sh` | 65 | preview release dispatcher wrapper |
+| `scripts/release-preview.sh` | 69 | preview release dispatcher wrapper |
 | `scripts/release-gates.mjs` | 596 | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) |
 | `scripts/check-strict-baseline.mjs` | 135 | strict-mode baseline guard for `tsc --noEmit` JSDoc opt-in surface |
 | `scripts/check-module-graph.mjs` | 233 | module dependency graph regression check |

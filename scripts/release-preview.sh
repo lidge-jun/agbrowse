@@ -61,4 +61,8 @@ echo "npm latest:      ${NPM_LATEST:-'(not published)'}"
 echo "package.json:    $PKG_VERSION"
 echo "preview version: $VERSION"
 
-exec bash scripts/release.sh "$VERSION" --tag preview "${EXTRA_ARGS[@]}"
+if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+  exec bash scripts/release.sh "$VERSION" --tag preview "${EXTRA_ARGS[@]}"
+else
+  exec bash scripts/release.sh "$VERSION" --tag preview
+fi
