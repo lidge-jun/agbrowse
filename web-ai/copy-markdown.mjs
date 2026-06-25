@@ -84,7 +84,10 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                 let button = null;
                 for (const selector of selectorSet.copyButtonSelectors) {
                     const scoped = /** @type {HTMLElement[]} */ (Array.from(turn.querySelectorAll(selector)));
-                    button = scoped.find((/** @type {HTMLElement} */ candidate) => candidate.offsetParent !== null || candidate.getClientRects().length > 0) || null;
+                    // 203.9: prefer a visible candidate but fall back to the last scoped button
+                    // rather than returning missing-button — copy controls are often present but
+                    // report offsetParent=null until hover.
+                    button = scoped.find((/** @type {HTMLElement} */ candidate) => candidate.offsetParent !== null || candidate.getClientRects().length > 0) || scoped.at(-1) || null;
                     if (button) break;
                 }
                 if (!button) return { ok: false, status: 'missing-button' };
@@ -139,6 +142,9 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                     button.dispatchEvent(new PointerEvent('pointerup', init));
                     button.dispatchEvent(new MouseEvent('mouseup', init));
                     button.dispatchEvent(new MouseEvent('click', init));
+                    // 203.9: also fire the element's real click handler — synthetic events alone
+                    // miss React onClick handlers bound via the property, not addEventListener.
+                    button.click?.();
 
                     const deadline = Date.now() + timeoutMs;
                     while (Date.now() < deadline) {
