@@ -228,14 +228,16 @@ export function chooseDeepResearchReportRead(targetRead, frameRead) {
 }
 
 /**
- * Extract the research report from the page.
- * Checks assistant content first, then looks for Deep Research iframes.
+ * Extract the Deep Research report, scoped to the active page. Prefers a
+ * COMPLETED page-scoped assistant (target) read over a legacy deep-research
+ * frame read, and rejects planning/progress/incomplete text via
+ * chooseDeepResearchReportRead (32.1). Returns null when nothing is readable.
  * @param {any} page
- * @param {any} deps
- * @returns {Promise<{ text: string, sources: string[], fromIframe: boolean }>}
+ * @param {any} _deps
+ * @returns {Promise<{ text: string, sources: string[], from: string, completed: boolean } | null>}
  */
-async function extractResearchReport(page, deps) {
-    const text = (await readLatestAssistant(page)).trim();
+export async function extractResearchReport(page, _deps) {
+    const assistantText = (await readLatestAssistant(page)).trim();
 
     const sources = await page.evaluate(() => {
         const links = Array.from(document.querySelectorAll(
@@ -246,24 +248,26 @@ async function extractResearchReport(page, deps) {
             .filter(h => h.startsWith('http'));
     }).catch(() => []);
 
-    if (text) {
-        return { text, sources, fromIframe: false };
-    }
+    const targetRead = assistantText ? { text: assistantText, sources, from: 'assistant' } : null;
 
-    const frames = page.frames();
+    // Legacy fallback: a deep-research app iframe on THIS page (page-scoped —
+    // never another tab). Only used when the target read is missing/incomplete.
+    let frameRead = null;
+    const frames = typeof page.frames === 'function' ? page.frames() : [];
     for (const frame of frames) {
-        const frameUrl = frame.url();
+        const frameUrl = frame.url?.() || '';
         if (frameUrl.includes('deep-research') || frameUrl.includes('research')) {
-            const frameText = await frame.evaluate(() =>
+            const frameText = (await frame.evaluate(() =>
                 document.body?.innerText?.trim() || ''
-            ).catch(() => '');
+            ).catch(() => '')).trim();
             if (frameText) {
-                return { text: frameText, sources, fromIframe: true };
+                frameRead = { text: frameText, sources, from: 'frame' };
+                break;
             }
         }
     }
 
-    return { text: '', sources, fromIframe: false };
+    return chooseDeepResearchReportRead(targetRead, frameRead);
 }
 
 /**
@@ -297,6 +301,9 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
     }
 
     const baselineCount = await countAssistants(page);
+    // Track whether any Deep Research activity (progress UI / app frame) is ever
+    // observed. If not, a final assistant answer is a normal reply, not a report.
+    let researchActivityObserved = false;
 
     const editorOptions = {
         insertText: async (/** @type {string} */ text) => {
@@ -333,7 +340,9 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
             };
         }
         const count = await countAssistants(page);
-        if (count > baselineCount || await isStreaming(page) || await hasProgressIndicator(page)) {
+        const progress = await hasProgressIndicator(page);
+        if (progress) researchActivityObserved = true;
+        if (count > baselineCount || await isStreaming(page) || progress) {
             break;
         }
         await page.waitForTimeout(500);
@@ -348,6 +357,7 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
 
         const streaming = await isStreaming(page);
         const progress = await hasProgressIndicator(page);
+        if (progress) researchActivityObserved = true;
         const count = await countAssistants(page);
 
         if (count > baselineCount && !streaming && !progress) {
@@ -356,7 +366,35 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
                 if (latest === stableText) {
                     if (Date.now() - stableSince >= 5000) {
                         const report = await extractResearchReport(page, deps);
-                        if (report.fromIframe) warnings.push('report-extracted-from-iframe');
+                        // A frame report is definitive proof DR ran.
+                        if (report?.from === 'frame') researchActivityObserved = true;
+
+                        if (!researchActivityObserved) {
+                            // Stable assistant answer but no research activity ever
+                            // observed → a normal reply, not a Deep Research report.
+                            updateSession(session.sessionId, { status: 'failed', conversationUrl: page.url() });
+                            return {
+                                ok: false,
+                                sessionId: session.sessionId,
+                                conversationUrl: page.url(),
+                                reportText: null,
+                                sources: [],
+                                warnings: [...warnings, 'deep-research-not-started'],
+                                status: 'failed',
+                            };
+                        }
+
+                        if (!report || !report.completed) {
+                            // Planning/progress/incomplete text — not a final report; keep waiting.
+                            if (!warnings.includes('deep-research-incomplete-report-skipped')) {
+                                warnings.push('deep-research-incomplete-report-skipped');
+                            }
+                            stableText = '';
+                            stableSince = 0;
+                            continue;
+                        }
+
+                        if (report.from === 'frame') warnings.push('report-extracted-from-iframe');
 
                         updateSession(session.sessionId, {
                             status: 'complete',
@@ -364,7 +402,7 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
                             conversationUrl: page.url(),
                         });
 
-                        const saved = trySaveReport(session.sessionId, report);
+                        const saved = trySaveReport(session.sessionId, { text: report.text, sources: report.sources });
                         if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
                         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
 
@@ -390,13 +428,16 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
     }
 
     const finalReport = await extractResearchReport(page, deps);
+    // On timeout, only persist a COMPLETED report — never a planning/progress
+    // fragment (32.1 incomplete-rejection).
+    const finalText = finalReport?.completed ? finalReport.text : null;
     updateSession(session.sessionId, {
         status: 'timeout',
-        answer: finalReport.text || null,
+        answer: finalText,
     });
 
-    if (finalReport.text) {
-        const saved = trySaveReport(session.sessionId, finalReport);
+    if (finalText) {
+        const saved = trySaveReport(session.sessionId, { text: finalText, sources: finalReport.sources });
         if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
     }
@@ -405,8 +446,8 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
         ok: false,
         sessionId: session.sessionId,
         conversationUrl: page.url(),
-        reportText: finalReport.text || null,
-        sources: finalReport.sources,
+        reportText: finalText,
+        sources: finalReport?.sources || [],
         warnings: [...warnings, 'deep-research-timeout'],
         status: 'timeout',
     };
