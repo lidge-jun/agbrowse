@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { execBrowser } from '../helpers/exec-browser.mjs';
 import { execVisionClick } from '../helpers/exec-vision-click.mjs';
-import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
+import { createTempBrowserEnv, getAvailablePort } from '../helpers/temp-env.mjs';
 
 describe.sequential('CLI help', () => {
     it('shows browser help with new PLAN_2 commands', async () => {
@@ -110,16 +110,18 @@ describe.sequential('CLI help', () => {
 
     it('does not emit update notices for json CLI runs', async () => {
         const temp = createTempBrowserEnv('agbrowse-update-json-');
+        const closedPort = await getAvailablePort();
         try {
             const result = await execBrowser(['tabs', '--json'], {
                 env: {
                     ...temp.env,
+                    CDP_PORT: closedPort,
                     AGBROWSE_UPDATE_CHECK: '1',
                     AGBROWSE_UPDATE_CHECK_LATEST: '9.9.9',
                 },
             });
             expect(result.code).toBe(0);
-            expect(() => JSON.parse(result.stdout)).not.toThrow();
+            expect(JSON.parse(result.stdout)).toEqual([]);
             expect(result.stderr).not.toContain('new version is available');
         } finally {
             temp.cleanup();

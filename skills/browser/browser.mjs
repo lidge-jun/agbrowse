@@ -2669,7 +2669,11 @@ try {
                 break;
             }
 
-            const tabs = (await listManagedTabs(getPort())).map(tab => {
+            const managedTabs = await listManagedTabs(getPort()).catch(error => {
+                if (json) return [];
+                throw error;
+            });
+            const tabs = managedTabs.map(tab => {
                 const displayed = tabDisplayState(tab);
                 const activeCommand = activeCommandSummary(activeByTargetId.get(displayed.targetId));
                 return activeCommand ? { ...displayed, activeCommand } : displayed;
