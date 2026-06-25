@@ -20,8 +20,14 @@
 - **104.3 — watcher cross-process FS lock** — ⬜ PENDING (next). `watcher.ts:activeWatchers` is an
   in-process Map only; port agbrowse `acquireWatcherSessionLock` (mkdir lockdir + heartbeat +
   PID-staleness → `watcher.already-running`).
-- **104.19 — AX-tree CDP fallback** — ⬜ PENDING. `ax-snapshot.ts:211` throws `snapshot.unavailable`
-  when `page.accessibility.snapshot` is gone (Playwright ≥1.55); add a CDP `Accessibility.getFullAXTree`
-  fallback (port agbrowse `captureAxViaCdp`/`cdpNodesToAxTree`).
+- **104.19 — AX-tree CDP fallback** — ✅ DONE — cli-jaw `4b03ddd4`
+  - `captureAccessibilitySnapshot` now falls back to `captureAxViaCdp` (CDP session from
+    `page.context().newCDPSession`, `Accessibility.getFullAXTree`/`getPartialAXTree`) +
+    `cdpNodesToAxTree`/`mapCdpNode`/role-aliases, adapted to cli-jaw's strict `AxNode`.
+    Tests BWAI-AXCDP-001..003.
+- **104.3 — watcher cross-process FS lock** — ⬜ PENDING (next). Port `acquireWatcherSessionLock`
+  (atomic `mkdirSync` lockdir + EEXIST staleness via PID-liveness/`process.kill(pid,0)` + heartbeat-age
+  → `watcher.already-running`) + wire into `watcher.ts` lifecycle (acquire on start, heartbeat, release
+  on end). Higher risk (live-session lifecycle) → dedicated pass with concurrency tests.
 
-**Gate so far:** full cli-jaw `npm test` → **4783 tests, 4765 pass, 0 fail**; tsc 0 (after 105.4).
+**Gate so far:** full cli-jaw `npm test` → **4786 tests, 4768 pass, 0 fail**; tsc 0 (after 104.19).
