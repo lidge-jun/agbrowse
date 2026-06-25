@@ -8,12 +8,13 @@ const BROWSER_AGENT_HOME = process.env.BROWSER_AGENT_HOME || join(homedir(), '.b
 
 /**
  * @typedef {Object} ArtifactDescriptor
- * @property {'transcript'|'report'|'image'|'file'} kind
+ * @property {'transcript'|'report'|'image'|'file'|'diagnostics'} kind
  * @property {string} label
  * @property {string} path
  * @property {string} [mimeType]
  * @property {number} [sizeBytes]
  * @property {string} [sourceUrl]
+ * @property {string} [screenshotPath]
  * @property {string} savedAt
  */
 
@@ -231,6 +232,55 @@ export function trySaveFileArtifact(sessionId, file) {
         return {
             ok: false,
             stage: 'artifact-file',
+            error: /** @type {Error} */ (err)?.message || String(err),
+        };
+    }
+}
+
+/**
+ * Save a failure-diagnostics artifact (DOM snapshot JSON + optional screenshot
+ * PNG) under the session artifacts dir. Same-context captures overwrite (latest
+ * failure wins). Returns a `kind:'diagnostics'` descriptor (with screenshotPath
+ * when a screenshot was provided).
+ * @param {string} sessionId
+ * @param {{ context?: string, domJson?: unknown, screenshotBuffer?: Buffer|null }} diag
+ * @returns {ArtifactDescriptor}
+ */
+export function saveDiagnosticsArtifact(sessionId, { context, domJson, screenshotBuffer }) {
+    const dir = resolveArtifactsDir(sessionId);
+    ensureDir(dir);
+    const stem = `diagnostics-${sanitizeSegment(context || 'failure')}`;
+    const jsonPath = `${stem}.json`;
+    writeFileSync(join(dir, jsonPath), JSON.stringify(domJson ?? {}, null, 2));
+    /** @type {ArtifactDescriptor} */
+    const descriptor = {
+        kind: 'diagnostics',
+        label: context || 'failure',
+        path: jsonPath,
+        mimeType: 'application/json',
+        savedAt: new Date().toISOString(),
+    };
+    if (screenshotBuffer) {
+        const pngPath = `${stem}.png`;
+        writeFileSync(join(dir, pngPath), screenshotBuffer);
+        descriptor.screenshotPath = pngPath;
+    }
+    return descriptor;
+}
+
+/**
+ * Save a diagnostics artifact and convert failures into a result.
+ * @param {string} sessionId
+ * @param {{ context?: string, domJson?: unknown, screenshotBuffer?: Buffer|null }} diag
+ * @returns {ArtifactSaveResult}
+ */
+export function trySaveDiagnosticsArtifact(sessionId, diag) {
+    try {
+        return { ok: true, descriptor: saveDiagnosticsArtifact(sessionId, diag) };
+    } catch (err) {
+        return {
+            ok: false,
+            stage: 'artifact-diagnostics',
             error: /** @type {Error} */ (err)?.message || String(err),
         };
     }
