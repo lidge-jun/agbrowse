@@ -5,6 +5,7 @@ import { validateFetchUrl, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safet
 import { appendAttempt, createAttemptTrace, summarizeAttempts } from './trace.mjs';
 import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
+import { tlsFetchCandidate } from './tls-fetch.mjs';
 import { fromFetchResult, fromHumanResolvedResult, fromUserSessionResult } from './reader-adapters.mjs';
 import { chooseBestReaderCandidate, scoreReaderCandidate } from './content-scorer.mjs';
 import { fetchThirdPartyReaderCandidate } from './third-party-readers.mjs';
@@ -142,6 +143,27 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     reason: `challenge:${challengeResult.type}`,
                     waf: challengeResult.primary?.profile?.id,
                 });
+            }
+        }
+
+        // Phase 04b (203.1): TLS-impersonation fallback. When a plain fetch is blocked
+        // (403/429) or a challenge is detected, retry through curl-impersonate (JA3 spoof)
+        // before paying for browser escalation. No-op when the binary is unavailable.
+        if (candidate.source === 'fetch' && !fetched.ok && (fetched.status === 403 || fetched.status === 429 || detectedChallenge)) {
+            const tlsResult = await tlsFetchCandidate(candidate.url, {
+                timeoutMs: options.timeoutMs,
+                maxBytes: options.maxBytes,
+            }).catch(() => null);
+            if (tlsResult?.ok) {
+                appendAttempt(trace, {
+                    source: 'tls_fetch',
+                    verdict: 'strong_ok',
+                    url: candidate.url,
+                    status: tlsResult.status,
+                    reason: `tls-profile:${tlsResult.profile}`,
+                });
+                fetched = tlsResult;
+                detectedChallenge = null;
             }
         }
 
