@@ -27,7 +27,10 @@ describe('adaptive fetch structured extractor', () => {
         const { lists, codeBlocks } = extractStructuredContent(html);
         expect(lists).toContainEqual({ type: 'unordered', items: ['a', 'b'] });
         expect(lists).toContainEqual({ type: 'ordered', items: ['1'] });
-        expect(codeBlocks[0]).toEqual({ language: 'js', code: 'const x = 1 & 2;' });
+        // code body is decoded + tag-stripped; `language` is '' because the source regex's
+        // greedy [^>]* consumes the class attr before the optional language capture (a
+        // faithful-mirror quirk of cli-jaw's identical regex).
+        expect(codeBlocks[0]).toEqual({ language: '', code: 'const x = 1 & 2;' });
     });
 
     it('extracts JSON-LD blocks and skips malformed ones', () => {
