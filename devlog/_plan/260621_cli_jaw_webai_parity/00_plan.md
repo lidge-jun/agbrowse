@@ -6,6 +6,26 @@ Bring cli-jaw's `src/browser/web-ai/` TypeScript modules to functional parity
 with agbrowse's `web-ai/` JavaScript modules for the core command surface.
 agbrowse owns evolution; cli-jaw mirrors stabilized pieces.
 
+## 2026-06-25 — Bidirectional parity (numbered docs)
+
+This folder is now the **bidirectional** agbrowse↔cli-jaw parity tracker. A
+2026-06-25 cross-repo gap analysis (3 independent read-only analyzers) split the
+work into two numbered series. **Docs-only — no code changes in either repo, no push.**
+
+| Series | Direction | Docs |
+| --- | --- | --- |
+| **100** | agbrowse → cli-jaw (cli-jaw mirrors agbrowse) | [100 overview](100_agbrowse_to_clijaw_overview.md) · [101 stability patches 31–35](101_webai_stability_patches.md) · [102 remaining modules + OOS](102_webai_remaining_modules.md) · [103 search: cli-jaw should leverage agbrowse research](103_search_agbrowse_research_for_clijaw.md) |
+| **200** | cli-jaw → agbrowse (reverse — deliberate agbrowse evolution) | [200 overview](200_clijaw_to_agbrowse_overview.md) · [201 capability-registry + tools](201_webai_capability_registry_and_tools.md) · [202 search discipline → research](202_search_discipline_to_agbrowse.md) |
+
+**Top of each backlog:** 100 → P0 `session-artifacts` foundation, then `chatgpt-files` + response-observer; 200 → P1 declarative capability-registry cluster + annotated-screenshot + interstitial detector.
+
+> Note: the original Phase 1–4 scope below predates the analysis. cli-jaw now
+> **has** `chatgpt-tools.ts`, `chatgpt-deep-research.ts`, `chatgpt-multi-turn.ts`,
+> `chatgpt-model.ts`, `cli-sessions.ts` — so those items are largely done (deep-research
+> is now BEHIND, not absent; model is BEHIND on pill-wait/retry). The current,
+> authoritative gap is the 100/200 series above; the section below is kept as the
+> original seed.
+
 ## Scope
 
 ### Phase 1: chatgpt-model i18n + session-target-guard (C1)
