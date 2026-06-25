@@ -107,6 +107,15 @@ function buildAtomicQueries(problem, constraints, sourceHints, maxQueries) {
         });
     }
 
+    // 202 A2: era-sweep for cultural-phenomenon clues (원조/최초/시초) to beat recency bias.
+    if (looksLikeCulturalPhenomenon(problem)) {
+        for (const spec of buildEraSweepQueries(anchor, route)) {
+            querySpecs.push({ constraintIds: constraints.slice(0, 1).map(c => c.id), ...spec });
+        }
+    }
+    // 202 A3: auto-emit a disconfirmation ("find a DIFFERENT entity") query.
+    querySpecs.push({ constraintIds: [], ...buildDisconfirmQuery(anchor, route) });
+
     return dedupeQueries(querySpecs)
         .filter(spec => spec.query.length > 0)
         .slice(0, maxQueries)
@@ -114,6 +123,44 @@ function buildAtomicQueries(problem, constraints, sourceHints, maxQueries) {
             ...spec,
             url: buildRouteUrl(spec.route, spec.query),
         }));
+}
+
+const ERA_SWEEP_MARKERS = ['원조', '최초', '시초', '유래', '기원'];
+
+/**
+ * 202 A2: does the problem describe a cultural phenomenon whose origin matters (so a
+ * recency-biased search would miss the original)?
+ * @param {string} problem
+ * @returns {boolean}
+ */
+export function looksLikeCulturalPhenomenon(problem = '') {
+    return ERA_SWEEP_MARKERS.some(marker => problem.includes(marker)) || /밈|유행|짤|meme|trend/i.test(problem);
+}
+
+/**
+ * 202 A2: era-sweep query specs — inject origin markers (+ anchor) to surface the original,
+ * not the most recent, source.
+ * @param {string[]} anchor
+ * @param {string} [route]
+ * @returns {Array<{ query: string, route: string, purpose: 'era-sweep' }>}
+ */
+export function buildEraSweepQueries(anchor = [], route = 'native_search') {
+    const base = anchor.slice(0, 5);
+    return [
+        { query: compactQuery(['원조', '최초', ...base]), route, purpose: 'era-sweep' },
+        { query: compactQuery(['시초', '유래', ...base]), route, purpose: 'era-sweep' },
+    ].filter(spec => spec.query.length > 0);
+}
+
+/**
+ * 202 A3: a disconfirmation query that actively looks for a DIFFERENT entity than the
+ * leading candidate, to avoid confirmation bias.
+ * @param {string[]} anchor
+ * @param {string} [route]
+ * @returns {{ query: string, route: string, purpose: 'disconfirm' }}
+ */
+export function buildDisconfirmQuery(anchor = [], route = 'native_search') {
+    return { query: compactQuery([...anchor.slice(0, 5), '아닌', '다른', '비교']), route, purpose: 'disconfirm' };
 }
 
 /**
