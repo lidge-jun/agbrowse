@@ -51,12 +51,17 @@
     drift) + honours `excludeNames` (a "search" textbox no longer false-satisfies composer); forked
     `CONTRACTS` map removed. Existing test reworked + new excludeNames case.
 
-**Gate so far:** full cli-jaw `npm test` → **4800 tests, 4782 pass, 0 fail**; tsc 0.
+- **104.13 — attachment filename-verify (P1)** — ✅ DONE — cli-jaw `7ab682b3`
+  - `buildAttachmentReadyExpression` verifies the SPECIFIC uploaded files appear in chips
+    (name/stem in text/attrs), not chip-count only; threaded from the single-file upload path.
+    Test BWAI-ATTACH-001.
+
+**Gate so far:** full cli-jaw `npm test` → **4801 tests, 4783 pass, 0 fail**; tsc 0.
 
 ### Remaining Cycle-6 items (next continuations — browser-context-heavy)
 104.8/.9 vendor capability+model probes · 104.10 code-extract nav · 104.12 composer resolved-targets ·
-104.13 attachment filename-verify · 104.14 composer CDP insertText · 104.17 copy scroll-suppression ·
-104.18 pollWebAi per-tick drift/crash. (104.7 deferred.)
+104.14 composer CDP insertText · 104.17 copy scroll-suppression · 104.18 pollWebAi per-tick drift/crash.
+(104.7 deferred.)
 
 ## Verification
 Per-item gates above; A-phase audit (Cycle 1) confirmed these as line-diff divergences.
