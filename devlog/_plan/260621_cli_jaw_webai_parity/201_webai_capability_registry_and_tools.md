@@ -9,7 +9,7 @@ cli-jaw-only web-ai capabilities (no agbrowse counterpart) that are genuine, por
 
 | # | Capability | cli-jaw file:symbol | agbrowse status | Pri | Note |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **Declarative capability registry** (entries w/ status, ownerPrd, browserGate, fail-closed stage, family) | `capability-registry.ts:REGISTRY`/`getCapabilityEntry` | ABSENT — agbrowse `capability.mjs` is runtime probes only | **P1** | The structural centerpiece. agbrowse has no declarative capability inventory/gating model. |
+| 1 | **Declarative capability registry** (entries w/ status, ownerPrd, browserGate, fail-closed stage, family) | `capability-registry.ts:REGISTRY`/`lookupCapability` (+`listCapabilities`/`isCapabilityEnabled`/`requireCapabilityOrFailClosed`) | ABSENT — agbrowse `capability.mjs` is runtime probes only | **P1** | The structural centerpiece. agbrowse has no declarative capability inventory/gating model. |
 | 1a | Capability type model (CapabilityEntry, FrontendCapabilityObservation, MutationRisk) | `capability-types.ts` | ABSENT | **P1** | Required substrate for #1/#2. |
 | 2 | **Frontend observation presets** (selector/text/activation-path/active-signals per capability: model switcher, web search, image gen, deep think) | `capability-observation-presets.ts:CHATGPT_*_OBSERVATION`, `GEMINI_*_OBSERVATION` | ABSENT | **P1** | Curated live-UI selector intel as data; complements agbrowse vendor selector contracts. |
 | 3 | **Annotated / set-of-mark screenshot** (highlight refs, bounding boxes, image hash) | `annotated-screenshot.ts:buildAnnotatedScreenshot` | ABSENT (agbrowse uses inline boundingBox only) | **P1** | Genuine visual-grounding capability agbrowse lacks. |
