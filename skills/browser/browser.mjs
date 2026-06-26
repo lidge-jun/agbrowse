@@ -16,6 +16,7 @@
  *   observe-actions <instruction> [--json] [--top-n N] [--include-disabled]  Rank candidate next actions (G02)
  *   runway <command>                    Runway full-surface CLI (13 commands, 3 safety levels)
  *   research plan --query <problem> [--json]  Korean query rewrite and evidence plan
+ *   search "<query>" [--json] [--deep] [--verify <url>]  Standalone deep search for any CLI agent
  *   research normalize-results --file <json> [--backend name] [--json]  Normalize search URL candidates
  *   research enrich-fetch --plan <json> --results <json> [--json]  Fetch original-page evidence
  *   research browse-plan --plan <json> --enrichment <json> [--json]  Plan browser escalation actions
@@ -83,6 +84,7 @@ import { enforcePolicy } from '../../web-ai/policy/enforce.mjs';
 import { createTab, closeTab, switchToTab, listManagedTabs } from './tab-manager.mjs';
 import { cleanupIdleTabs, planCleanupIdleTabs, pickCleanupCandidates, isPinned, parseDuration, DEFAULT_MAX_TABS } from './tab-lifecycle.mjs';
 import { runAdaptiveFetchCli } from './adaptive-fetch/index.mjs';
+import { runSearchCli } from './search.mjs';
 import { runRunwayCli } from './runway.mjs';
 import { maybeEmitUpdateNotice } from './update-check.mjs';
 import { planKoreanResearch } from './search-research/search-strategy.mjs';
@@ -2287,6 +2289,9 @@ try {
             console.log(result.stdout);
             break;
         }
+        case 'search':
+            await runSearchCli(process.argv.slice(3));
+            break;
         case 'skills': {
             const result = runSkillsCli(process.argv.slice(3), { sourceRoot: SKILLS_ROOT });
             if (result.type === 'json') {
@@ -3222,6 +3227,14 @@ try {
         browser       Chrome/CDP browser control skill
         web-ai        ChatGPT, Gemini, and Grok browser web-ai workflow skill
         vision-click  Screenshot-to-coordinate click helper skill
+
+  Search (standalone — any CLI agent can use):
+    search "<query>" [--json] [--deep] [--browser auto|never] [--max-results N]
+      Full pipeline: query rewrite → candidate fetch → evidence score → verdict.
+      Pipe external results: echo '<json>' | agbrowse search "<query>" --stdin-results
+
+    search --verify <url> [--json] [--browser auto|never]
+      Fetch and score a single URL. Returns verdict + evidence excerpt.
 
   Research planning:
     research plan --query <problem> [--max-queries N] [--json]
