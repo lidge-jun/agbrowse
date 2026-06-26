@@ -52,6 +52,7 @@ export function selectProfile(url) {
  * @property {number} status
  * @property {Record<string,string>} headers
  * @property {string} body
+ * @property {string} finalUrl
  * @property {typeof PROFILES[number]} profile
  */
 
@@ -70,6 +71,7 @@ export async function tlsFetch(rawUrl, options = {}) {
     const profile = selectProfile(safeUrl.href);
     const timeout = Math.ceil((options.timeoutMs || 15_000) / 1000);
 
+    const EFFECTIVE_URL_SENTINEL = '\n__EFFECTIVE_URL__=';
     try {
         const args = [
             '--impersonate', profile,
@@ -77,14 +79,23 @@ export async function tlsFetch(rawUrl, options = {}) {
             '--max-filesize', String(options.maxBytes || 5_000_000),
             '-L', '-s',
             '-i',
+            '--write-out', EFFECTIVE_URL_SENTINEL + '%{url_effective}',
         ];
         if (options.proxy) args.push('--proxy', options.proxy);
         args.push(safeUrl.href);
         const { stdout } = await execFileAsync(binary, args, { timeout: (timeout + 5) * 1000, maxBuffer: 10_000_000 });
 
-        const sep = stdout.indexOf('\r\n\r\n');
-        const headerText = sep > 0 ? stdout.slice(0, sep) : '';
-        const body = sep > 0 ? stdout.slice(sep + 4) : stdout;
+        let effectiveUrl = safeUrl.href;
+        let rawOutput = stdout;
+        const sentinelIdx = stdout.lastIndexOf(EFFECTIVE_URL_SENTINEL);
+        if (sentinelIdx >= 0) {
+            effectiveUrl = stdout.slice(sentinelIdx + EFFECTIVE_URL_SENTINEL.length).trim();
+            rawOutput = stdout.slice(0, sentinelIdx);
+        }
+
+        const lastResponseSep = findLastResponseSeparator(rawOutput);
+        const headerText = lastResponseSep.headerText;
+        const body = lastResponseSep.body;
         const statusMatch = headerText.match(/HTTP\/\S+\s+(\d+)/);
         const status = statusMatch ? Number(statusMatch[1]) : 200;
         /** @type {Record<string,string>} */
@@ -94,14 +105,13 @@ export async function tlsFetch(rawUrl, options = {}) {
             if (idx > 0) headers[line.slice(0, idx).toLowerCase().trim()] = line.slice(idx + 1).trim();
         }
 
-        const finalUrl = extractFinalUrl(headerText) || safeUrl.href;
         try {
-            validateFetchUrl(finalUrl, { allowPrivateNetwork: false });
+            validateFetchUrl(effectiveUrl, { allowPrivateNetwork: false });
         } catch {
             return null;
         }
 
-        return { ok: status >= 200 && status < 400, status, headers, body, profile };
+        return { ok: status >= 200 && status < 400, status, headers, body, finalUrl: effectiveUrl, profile };
     } catch {
         return null;
     }
@@ -133,7 +143,7 @@ export async function tlsFetchCandidate(rawUrl, options = {}) {
     return {
         ok: result.ok,
         status: result.status,
-        finalUrl: rawUrl,
+        finalUrl: result.finalUrl,
         contentType: result.headers['content-type'] || '',
         text: result.body,
         headers: result.headers,
@@ -144,14 +154,30 @@ export async function tlsFetchCandidate(rawUrl, options = {}) {
 }
 
 /**
- * @param {string} headerText
- * @returns {string|null}
+ * When curl -L -i follows redirects, each hop's headers+body are concatenated.
+ * This finds the LAST HTTP response boundary so we parse the final response's
+ * headers and body, not an intermediate 3xx.
+ * @param {string} raw
+ * @returns {{ headerText: string, body: string }}
  */
-function extractFinalUrl(headerText) {
-    const lines = headerText.split('\r\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-        const match = lines[i]?.match(/^location:\s*(.+)/i);
-        if (match) return match[1]?.trim() || null;
+function findLastResponseSeparator(raw) {
+    let lastSep = -1;
+    let searchFrom = 0;
+    while (true) {
+        const idx = raw.indexOf('\r\n\r\n', searchFrom);
+        if (idx < 0) break;
+        const after = raw.slice(idx + 4);
+        if (after.startsWith('HTTP/')) {
+            lastSep = idx;
+            searchFrom = idx + 4;
+        } else {
+            return { headerText: raw.slice(lastSep >= 0 ? lastSep + 4 : 0, idx), body: after };
+        }
     }
-    return null;
+    if (lastSep >= 0) {
+        const finalPart = raw.slice(lastSep + 4);
+        const sep2 = finalPart.indexOf('\r\n\r\n');
+        if (sep2 >= 0) return { headerText: finalPart.slice(0, sep2), body: finalPart.slice(sep2 + 4) };
+    }
+    return { headerText: '', body: raw };
 }
