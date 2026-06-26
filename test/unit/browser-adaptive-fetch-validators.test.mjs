@@ -44,7 +44,8 @@ describe('adaptive fetch validators', () => {
     });
 
     it('dnsRebindingGuard passes for public IPs', async () => {
-        await expect(dnsRebindingGuard('8.8.8.8')).resolves.toBeUndefined();
+        const ips = await dnsRebindingGuard('8.8.8.8');
+        expect(ips).toEqual(['8.8.8.8']);
     });
 
     it('dnsRebindingGuard rejects localhost hostnames', async () => {

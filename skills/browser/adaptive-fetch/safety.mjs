@@ -213,9 +213,13 @@ function ipv6ToBigInt(ip) {
  * @param {string} hostname
  * @returns {Promise<void>}
  */
+/**
+ * @param {string} hostname
+ * @returns {Promise<string[]>} vetted public IP addresses (empty if DNS returned nothing)
+ */
 export async function dnsRebindingGuard(hostname) {
     const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    if (net.isIP(host)) return;
+    if (net.isIP(host)) return [host];
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
         throw new AdaptiveFetchInputError(`private or local host is not allowed: ${hostname}`, {
             code: 'private-network', url: hostname,
@@ -223,7 +227,7 @@ export async function dnsRebindingGuard(hostname) {
     }
     const results = await Promise.allSettled([dns.resolve4(host), dns.resolve6(host)]);
     const addresses = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
-    if (addresses.length === 0) return;
+    if (addresses.length === 0) return [];
     for (const addr of addresses) {
         const version = net.isIP(addr);
         const isPrivate = version === 4 ? isPrivateIpv4(addr) : version === 6 ? isPrivateIpv6(addr) : false;
@@ -234,6 +238,7 @@ export async function dnsRebindingGuard(hostname) {
             );
         }
     }
+    return addresses;
 }
 
 /**

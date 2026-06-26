@@ -75,9 +75,11 @@ export async function tlsFetch(rawUrl, options = {}) {
 
     let currentUrl = safeUrl.href;
     for (let hop = 0; hop <= maxRedirects; hop++) {
+        /** @type {string[]} */
+        let vettedIps;
         try {
             const parsed = validateFetchUrl(currentUrl, { allowPrivateNetwork: false });
-            await dnsRebindingGuard(parsed.hostname);
+            vettedIps = await dnsRebindingGuard(parsed.hostname);
         } catch {
             return null;
         }
@@ -90,6 +92,11 @@ export async function tlsFetch(rawUrl, options = {}) {
                 '--max-redirs', '0',
                 '-s', '-i',
             ];
+            if (vettedIps.length > 0) {
+                const parsed = new URL(currentUrl);
+                const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+                args.push('--resolve', `${parsed.hostname}:${port}:${vettedIps[0]}`);
+            }
             if (options.proxy) args.push('--proxy', options.proxy);
             args.push(currentUrl);
             const { stdout } = await execFileAsync(binary, args, { timeout: (timeout + 5) * 1000, maxBuffer: 10_000_000 });
