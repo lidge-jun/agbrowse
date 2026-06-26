@@ -238,6 +238,16 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 evidence: scored.evidence,
                 warnings: readerCandidate.warnings,
             });
+            if (discovered.label === 'rss-atom-discovered' && fetched.text) {
+                try {
+                    const isJson = fetched.contentType?.includes('json') || fetched.text.trim().startsWith('{');
+                    const feed = parsePublicFeed(fetched.text, isJson ? fetched.text : undefined);
+                    if (feed?.items?.length) {
+                        const feedEvidence = formatFeedEvidence(feed);
+                        readerCandidate.evidence = [...(readerCandidate.evidence || []), ...(feedEvidence.evidence || []), `feed:${feed.items.length}-items`];
+                    }
+                } catch { /* non-critical feed enrichment */ }
+            }
             if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
         }
     }
@@ -276,6 +286,29 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 warnings: readerCandidate.warnings,
             });
             if (readerCandidate.text || readerCandidate.title) readerCandidates.push(readerCandidate);
+        }
+    }
+
+    // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical URLs
+    // from the first-pass text, adding them to the reader candidate pool.
+    {
+        const bestSoFar = chooseBestReaderCandidate(readerCandidates);
+        if (bestSoFar?.text) {
+            const discovered = extractCandidateUrlsFromText(bestSoFar.text);
+            if (discovered.length > 0) {
+                const ranked = rankDiscoveredCandidates(
+                    discovered.map(u => ({ url: u, source: bestSoFar.source || 'fetch' })),
+                    { originalUrl: parsed.href },
+                );
+                for (const candidate of ranked.slice(0, 3)) {
+                    if (fetchedUrls.has(candidate.url)) continue;
+                    fetchedUrls.add(candidate.url);
+                    appendAttempt(trace, {
+                        source: 'metadata', verdict: 'weak_ok', url: candidate.url,
+                        reason: `candidate-discovered:${candidate.lane || 'unknown'}`,
+                    });
+                }
+            }
         }
     }
 
