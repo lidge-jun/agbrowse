@@ -157,5 +157,5 @@ Each cycle: P (fill stub) → A (read-only audit) → B (Boss writes, worker ver
 | 1 | ✅ DONE | agbrowse `a9729c8` (R1) `74c85a3` (R3) · cli-jaw `cd4732f0` (R2) | agbrowse gate:typecheck+tests PASS; cli-jaw tsc 0 + 4903/4903 pass |
 | 2 | ✅ DONE | agbrowse `3d7b42a` (R4) | agbrowse gate:typecheck+tests PASS |
 | 3 | ✅ DONE | cli-jaw `fa5f4ebc` (R5) | cli-jaw tsc 0 + 4903/4903 pass |
-| 4 | ⬜ PENDING | — | — |
+| 4 | ✅ DONE | agbrowse `ed188ec` (R6) · cli-jaw `1e92dee4` (R7) | agbrowse gate:typecheck+tests PASS; cli-jaw tsc 0 + 4903/4903 pass |
 | 5 | ⬜ PENDING | — | — |
