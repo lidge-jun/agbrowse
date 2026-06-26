@@ -81,6 +81,22 @@ Agent rule: observe before acting. Use `status`, `tabs`, `snapshot
 --interactive`, and `web-ai status` before mutating a page. Set
 `AGBROWSE_JSON_ERRORS=1` for parseable failure envelopes.
 
+### Standalone Search
+
+```bash
+# Full pipeline: query rewrite → fetch original pages → evidence score
+agbrowse search "Next.js 15 app router migration" --json
+
+# Verify a single URL's readability and content
+agbrowse search --verify "https://nextjs.org/docs/app" --json
+
+# Pipe your CLI's built-in search results for deep verification
+echo '[{"url":"...","title":"..."}]' | agbrowse search "query" --stdin-results --json
+
+# Escalate to web-ai when evidence is insufficient
+agbrowse search "서울시 2026 청년 지원금" --deep --vendor grok --json
+```
+
 ## What It Is Good For
 
 - **Browser automation for agents**: navigate, snapshot, click refs, type,
@@ -93,8 +109,11 @@ Agent rule: observe before acting. Use `status`, `tabs`, `snapshot
   from the same saved conversation.
 - **Evidence-heavy research**: require source audits, save answer artifacts, and
   preserve traces without relying on hidden browser state.
-- **Standalone skill distribution**: install bundled `browser`, `web-ai`, and
-  `vision-click` skills into cli-jaw or Codex skill roots.
+- **Standalone deep search**: `agbrowse search` — any CLI agent can pipe its
+  web search results for original-page verification and evidence scoring, or
+  escalate to web-ai for deep synthesis.
+- **Standalone skill distribution**: install bundled `browser`, `web-ai`, `search`,
+  and `vision-click` skills into cli-jaw or Codex skill roots.
 
 ## Architecture Snapshot
 
