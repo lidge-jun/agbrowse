@@ -45,6 +45,7 @@ describe('web-ai MCP server', () => {
         expect(submitPrompt.inputSchema.properties.filePath.type).toBe('string');
         expect(submitPrompt.inputSchema.properties.reasoningEffort.type).toBe('string');
         expect(submitPrompt.inputSchema.properties.maxUploadFileSize.type).toBe('number');
+        expect(submitPrompt.inputSchema.properties.attachmentUploadTimeoutMs.type).toBe('number');
         expect(submitPrompt.description).toContain('generated image output');
         expect(submitPrompt.description).toContain('CLI-only/deferred');
         const waitResponse = listed.result.tools.find(tool => tool.name === 'web_ai_wait_response');
