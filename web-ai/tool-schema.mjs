@@ -62,6 +62,7 @@ export const WEB_AI_TOOLS = {
             inlineOnly: { type: 'boolean', default: true },
             timeout: { type: 'number' },
             maxUploadFileSize: { type: 'number', minimum: 1 },
+            attachmentUploadTimeoutMs: { type: 'number', minimum: 1 },
             policy: policySchema,
         }, ['prompt']),
     },

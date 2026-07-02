@@ -26,6 +26,7 @@ import { captureCopiedResponseText, GEMINI_COPY_SELECTORS, preferCopiedText } fr
 import { withAnswerArtifact } from './answer-artifact.mjs';
 import { selectGeminiModel, geminiModelCapabilityProbe } from './gemini-model.mjs';
 import { preflightAttachment } from './chatgpt-attachments.mjs';
+import { resolveAttachmentUploadTimeoutMs } from './chatgpt-upload-surface.mjs';
 import { WebAiError } from './errors.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
@@ -216,6 +217,7 @@ export async function geminiSendWebAi(deps, input = {}) {
     if (uploadPath) {
         const uploaded = await attachGeminiLocalFileLive(page, fileInfoFromPath(uploadPath), {
             maxUploadBytes: input.maxUploadFileSize,
+            attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
         });
         if (!uploaded.ok) throw new WebAiError({
             errorCode: 'provider.attachment-evidence-missing',
@@ -305,7 +307,7 @@ function fileInfoFromPath(filePath) {
 /**
  * @param {any} page
  * @param {any} file
- * @param {{ maxUploadBytes?: number|string|null }} [options]
+ * @param {{ maxUploadBytes?: number|string|null, attachmentUploadTimeoutMs?: number|string|null }} [options]
  */
 async function attachGeminiLocalFileLive(page, file, options = {}) {
     /** @type {any[]} */
@@ -318,6 +320,7 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
         return { ok: false, error: preflight.rejectedReason || 'preflight rejected', usedFallbacks };
     }
     warnings.push(...preflight.softWarnings);
+    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
     const uploadButton = await findFirstSelector(page, GEMINI_UPLOAD_SELECTORS, 5_000);
     if (!uploadButton) return { ok: false, error: 'gemini upload file menu button not visible', usedFallbacks };
     try {
@@ -328,7 +331,7 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
         const chooserPromise = page.waitForEvent('filechooser', { timeout: 15_000 });
         await uploadItem.click({ timeout: 5_000, force: true });
         const chooser = await chooserPromise;
-        await chooser.setFiles(file.path);
+        await chooser.setFiles(file.path, { timeout: uploadTimeoutMs });
     } catch (e) {
         usedFallbacks.push(`gemini-filechooser-failed:${(/** @type {any} */ (e)).message}`);
         return { ok: false, error: `gemini file chooser upload failed: ${(/** @type {any} */ (e)).message}`, usedFallbacks };

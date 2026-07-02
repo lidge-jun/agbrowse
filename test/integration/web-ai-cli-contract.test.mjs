@@ -28,6 +28,7 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain("Keeps Deep Research's default source state");
         expect(result.stdout).toContain('Apps/Sites/connectors are not configured');
         expect(result.stdout).toContain('--max-upload-file-size <bytes>');
+        expect(result.stdout).toContain('--attachment-upload-timeout-ms <ms>');
         expect(result.stdout).toContain('--max-context-file-size <bytes>');
         expect(result.stdout).toContain('out.png, out-2.png, out-3.png');
         expect(result.stdout).toContain('query --session <id> sends a new prompt');
