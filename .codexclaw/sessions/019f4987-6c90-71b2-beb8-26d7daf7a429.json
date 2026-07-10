@@ -1,11 +1,11 @@
 {
-  "phase": "B",
+  "phase": "IDLE",
   "sessionId": "019f4987-6c90-71b2-beb8-26d7daf7a429",
   "slug": "agbrowse-gpt-5-6-02-09-tier-3-chatgpt-pro-5400-g",
-  "updatedAt": "2026-07-10T13:02:09.025Z",
+  "updatedAt": "2026-07-10T14:12:21.093Z",
   "flags": {
     "interview": false,
-    "auditPassed": true,
+    "auditPassed": false,
     "checkPassed": false
   },
   "supersededBy": null,
@@ -28,8 +28,8 @@
     "019f4ba7-2a80-7700-994e-412efe241187",
     "019f4c1f-0432-7893-b4dd-a88538f6503e"
   ],
-  "lastInjectedPhase": "B",
-  "orchestrationActive": true,
+  "lastInjectedPhase": null,
+  "orchestrationActive": false,
   "interview": null,
   "stopBlockPhase": null,
   "stopBlockCount": 0
