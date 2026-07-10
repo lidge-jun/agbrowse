@@ -14,6 +14,12 @@ import { WebAiError } from './errors.mjs';
  * @property {string|null} requestedModel
  * @property {string|null} resolvedLabel
  * @property {ModelChoice|null} normalizedModel
+ * @property {EffortChoice|null} requestedEffort
+ * @property {EffortChoice|null} resolvedEffort
+ * @property {'not-requested'|'enforced'|'unsupported-by-ui'|'unverified'} effortStatus
+ * @property {string|null} resolvedFamily
+ * @property {'reasoning-level-with-family'|'simplified-intelligence'|'legacy'|'unknown'} uiVariant
+ * @property {string|null} selectorSource
  * @property {'select'} strategy
  * @property {ModelSelectionEvidenceStatus} status
  * @property {boolean} verified
@@ -35,6 +41,9 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
 ];
 
 const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-gpt-"]';
+const CHATGPT_INTELLIGENCE_PICKER_SELECTOR = '[data-testid="composer-intelligence-picker-content"]';
+const CHATGPT_REASONING_LEVEL_HEADER_PATTERN = /\b(?:Reasoning level|Intelligence)\b|추론 수준|지능/i;
+const CHATGPT_MODEL_FAMILY_PATTERN = /^GPT[-\s]?\d+(?:\.\d+)+(?:\s+[\p{L}\p{N}._-]+)*$/iu;
 const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)/i;
 const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Standard Pro', 'Extended Pro'];
 const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
@@ -93,9 +102,9 @@ const CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS = {
         },
     },
     pro: {
-        defaultLabels: ['Pro Extended', 'Pro 확장', '프로 확장'],
+        defaultLabels: ['Pro', 'Pro Extended', 'Pro 확장', '프로 확장'],
         efforts: {
-            standard: ['Pro Extended', 'Pro 확장', '프로 확장'],
+            standard: ['Pro Standard', 'Pro Extended', 'Pro 확장', '프로 확장'],
             extended: ['Pro Extended', 'Pro 확장', '프로 확장'],
         },
     },
@@ -137,6 +146,11 @@ export function normalizeChatGptModelChoice(model) {
     const key = String(model || '').trim().toLowerCase();
     if (!key) return null;
     return MODEL_ALIASES[key] || null;
+}
+
+/** @param {unknown} model */
+function isVersionedChatGptAlias(model) {
+    return /^gpt[-\s]?\d+(?:[.-]\d+)+(?:[-\s](?:thinking|pro))?$/i.test(String(model || '').trim());
 }
 
 /**
@@ -221,25 +235,37 @@ export async function selectChatGptModel(page, model, options = {}) {
     const usedFallbacks = [];
     /** @type {string[]} */
     const warnings = [];
+    if (isVersionedChatGptAlias(model)) {
+        warnings.push(`legacy versioned model alias ${model} does not pin the ChatGPT model family; prefer ${requested}`);
+    }
     try {
         await openModelMenu(page, usedFallbacks);
     } catch (err) {
         if (!isSelectionUnavailable(err)) throw err;
-        const warning = buildModelSelectionWarning(requested, requestedEffort, err);
+        const pillEvidence = await readCheckedModelEvidence(page, requested || null);
+        if (!requested || pillEvidence?.choice !== requested) throw err;
+        const effortStatus = requestedEffort ? 'unverified' : 'not-requested';
+        if (requestedEffort) warnings.push(`reasoning effort ${requestedEffort} was not enforced: model picker unavailable`);
         return {
-            requested: requested || null,
-            selected: null,
+            requested,
+            selected: requested,
             alreadySelected: true,
             effort: null,
             requestedEffort: requestedEffort || null,
-            usedFallbacks: [...usedFallbacks, 'model-selector-unavailable-current-model'],
-            warnings: [warning],
+            usedFallbacks: [...usedFallbacks, 'model-selector-unavailable-verified-pill'],
+            warnings,
             modelSelection: createModelSelectionEvidence({
-                requestedModel: requested || String(model || '') || null,
-                resolvedLabel: null,
-                normalizedModel: null,
-                status: 'unavailable',
-                verified: false,
+                requestedModel: requested,
+                resolvedLabel: pillEvidence.label,
+                normalizedModel: requested,
+                requestedEffort: requestedEffort || null,
+                resolvedEffort: null,
+                effortStatus,
+                resolvedFamily: null,
+                uiVariant: 'unknown',
+                selectorSource: pillEvidence.selectorSource,
+                status: 'already-selected',
+                verified: true,
             }),
         };
     }
@@ -251,6 +277,7 @@ export async function selectChatGptModel(page, model, options = {}) {
         await closeModelMenu(page);
         throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: 'ChatGPT model must be selected before setting reasoning effort', evidence: { effort: requestedEffort } });
     }
+    let pickerContext = await readModelPickerContext(page);
     if (requested && currentModel !== requested) {
         // Bounded retry: ChatGPT occasionally drops the first option click (menu
         // re-render race), leaving the model unchanged. Re-click and re-verify up
@@ -265,12 +292,21 @@ export async function selectChatGptModel(page, model, options = {}) {
             await openModelMenu(page, usedFallbacks);
             currentEvidence = await readCheckedModelEvidence(page, requested);
             currentModel = currentEvidence?.choice || null;
+            pickerContext = await readModelPickerContext(page);
             modelChanged = true;
         }
         // Explicit model requested but unverified after retries — surface it.
         // Effort selection (below) still fails closed on mismatch.
-        if (currentModel !== requested && !warnings.includes('model-selection-unverified')) {
-            warnings.push('model-selection-unverified');
+        if (currentModel !== requested) {
+            await closeModelMenu(page);
+            throw new WebAiError({
+                errorCode: 'provider.model-mismatch',
+                stage: 'provider-select-mode',
+                vendor: 'chatgpt',
+                retryHint: 'model-fallback',
+                message: `ChatGPT model verification failed: expected ${requested}, got ${currentModel || 'none'}`,
+                evidence: { requested, got: currentModel || null },
+            });
         }
     }
     /** @type {{ requested: string, selected: string|null, changed: boolean } | null} */
@@ -289,7 +325,10 @@ export async function selectChatGptModel(page, model, options = {}) {
             } catch (err) {
                 if (!isSelectionUnavailable(err)) throw err;
                 usedFallbacks.push('reasoning-effort-unavailable-current-effort');
-                warnings.push(`reasoning effort ${requestedEffort} was not enforced: ${errorMessage(err)}`);
+                const compatibilityNote = targetModel === 'pro' && pickerContext.uiVariant === 'reasoning-level-with-family'
+                    ? 'single Pro UI exposes no separate Pro effort control'
+                    : errorMessage(err);
+                warnings.push(`reasoning effort ${requestedEffort} was not enforced: ${compatibilityNote}`);
                 await closeModelMenu(page);
             }
         }
@@ -298,10 +337,23 @@ export async function selectChatGptModel(page, model, options = {}) {
     const after = afterEvidence?.choice || null;
     await closeModelMenu(page);
     if (after !== targetModel) {
-        usedFallbacks.push('model-verification-unavailable-current-model');
-        warnings.push(`model ${targetModel} was not verified; current detected model is ${after || 'unknown'}`);
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor: 'chatgpt',
+            retryHint: 'model-fallback',
+            message: `ChatGPT model verification failed: expected ${targetModel}, got ${after || 'none'}`,
+            evidence: { requested: targetModel, got: after || null },
+        });
     }
     const verified = after === targetModel;
+    const effortStatus = !requestedEffort
+        ? 'not-requested'
+        : selectedEffort?.selected
+            ? 'enforced'
+            : targetModel === 'pro' && pickerContext.uiVariant === 'reasoning-level-with-family'
+                ? 'unsupported-by-ui'
+                : 'unverified';
     return {
         requested: requested || targetModel,
         selected: after,
@@ -314,6 +366,12 @@ export async function selectChatGptModel(page, model, options = {}) {
             requestedModel: requested || targetModel || null,
             resolvedLabel: afterEvidence?.label || after || null,
             normalizedModel: after,
+            requestedEffort: requestedEffort || null,
+            resolvedEffort: /** @type {EffortChoice | null} */ (selectedEffort?.selected || null),
+            effortStatus,
+            resolvedFamily: pickerContext.resolvedFamily,
+            uiVariant: pickerContext.uiVariant,
+            selectorSource: afterEvidence?.selectorSource || pickerContext.selectorSource,
             status: verified ? (modelChanged ? 'switched' : 'already-selected') : (modelChanged ? 'switched-best-effort' : 'unavailable'),
             verified,
         }),
@@ -325,6 +383,12 @@ export async function selectChatGptModel(page, model, options = {}) {
  *   requestedModel: string|null,
  *   resolvedLabel: string|null,
  *   normalizedModel: ModelChoice|null,
+ *   requestedEffort: EffortChoice|null,
+ *   resolvedEffort: EffortChoice|null,
+ *   effortStatus: 'not-requested'|'enforced'|'unsupported-by-ui'|'unverified',
+ *   resolvedFamily: string|null,
+ *   uiVariant: 'reasoning-level-with-family'|'simplified-intelligence'|'legacy'|'unknown',
+ *   selectorSource: string|null,
  *   status: ModelSelectionEvidenceStatus,
  *   verified: boolean,
  * }} input
@@ -335,6 +399,12 @@ function createModelSelectionEvidence(input) {
         requestedModel: input.requestedModel,
         resolvedLabel: input.resolvedLabel,
         normalizedModel: input.normalizedModel,
+        requestedEffort: input.requestedEffort,
+        resolvedEffort: input.resolvedEffort,
+        effortStatus: input.effortStatus,
+        resolvedFamily: input.resolvedFamily,
+        uiVariant: input.uiVariant,
+        selectorSource: input.selectorSource,
         strategy: 'select',
         status: input.status,
         verified: input.verified,
@@ -352,22 +422,6 @@ function isSelectionUnavailable(err) {
     return error instanceof WebAiError
         && error.errorCode === 'provider.model-mismatch'
         && error.stage === 'provider-select-mode';
-}
-
-/**
- * @param {ModelChoice | null} requested
- * @param {EffortChoice | null} requestedEffort
- * @param {unknown} err
- * @returns {string}
- */
-function buildModelSelectionWarning(requested, requestedEffort, err) {
-    const modelText = requested
-        ? `requested ${requested} was not enforced`
-        : 'model selector unavailable';
-    const effortText = requestedEffort
-        ? `; requested effort ${requestedEffort} was not enforced`
-        : '';
-    return `${modelText}${effortText}, continuing with current ChatGPT model: ${errorMessage(err)}`;
 }
 
 /**
@@ -482,6 +536,8 @@ async function findModelTextButton(page) {
  */
 async function findModelOption(page, choice) {
     const option = CHATGPT_MODEL_OPTIONS[choice];
+    const currentReasoningOption = await findCurrentReasoningOption(page, choice);
+    if (currentReasoningOption) return currentReasoningOption;
     await openSimplifiedIntelligenceSubmenu(page).catch(() => undefined);
     for (const testId of option.testIds) {
         const loc = page.locator(`[role="menuitemradio"][data-testid="${testId}"], [data-testid="${testId}"]`).first();
@@ -502,6 +558,26 @@ async function findModelOption(page, choice) {
     const simplified = await findOptionByExactLabels(page, simplifiedDefaultLabels(choice));
     if (simplified && await isSimplifiedIntelligenceMenuOpen(page, choice, null)) return simplified;
     if (simplified && await isModelOptionCandidate(simplified, choice)) return simplified;
+    return null;
+}
+
+/**
+ * Scope current reasoning-level rows to the composer picker. The page can also
+ * contain unrelated "Pro" controls (for example the account button), so broad
+ * text locators are intentionally avoided on this UI variant.
+ * @param {Page} page
+ * @param {ModelChoice} choice
+ * @returns {Promise<Locator|null>}
+ */
+async function findCurrentReasoningOption(page, choice) {
+    const rows = await page.locator(`${CHATGPT_INTELLIGENCE_PICKER_SELECTOR} [role="menuitemradio"]`)
+        .all()
+        .catch(() => /** @type {Locator[]} */ ([]));
+    for (const row of rows) {
+        if (!(await row.isVisible().catch(() => false))) continue;
+        const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (modelChoiceFromText(text) === choice) return row;
+    }
     return null;
 }
 
@@ -834,13 +910,22 @@ async function readCheckedModel(page, expectedModel = null) {
  * @returns {Promise<{ choice: ModelChoice, label: string } | null>}
  */
 async function readCheckedModelEvidence(page, expectedModel = null) {
+    const currentRows = await page.locator([
+        `${CHATGPT_INTELLIGENCE_PICKER_SELECTOR} [role="menuitemradio"][aria-checked="true"]`,
+        `${CHATGPT_INTELLIGENCE_PICKER_SELECTOR} [role="menuitemradio"][data-state="checked"]`,
+    ].join(', ')).all().catch(() => /** @type {Locator[]} */ ([]));
+    for (const row of currentRows) {
+        const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        const choice = modelChoiceFromText(text);
+        if (choice) return { choice, label: text || String(choice), selectorSource: 'composer-intelligence-picker' };
+    }
     for (const [choice, option] of Object.entries(CHATGPT_MODEL_OPTIONS)) {
         for (const testId of option.testIds) {
             const row = page.locator(`[role="menuitemradio"][data-testid="${testId}"][aria-checked="true"], [data-testid="${testId}"][aria-checked="true"]`).first();
             const checked = await row.isVisible().catch(() => false);
             if (checked) {
                 const label = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
-                return { choice: /** @type {ModelChoice} */ (choice), label: label || String(choice) };
+                return { choice: /** @type {ModelChoice} */ (choice), label: label || String(choice), selectorSource: 'legacy-model-testid' };
             }
         }
     }
@@ -849,11 +934,51 @@ async function readCheckedModelEvidence(page, expectedModel = null) {
         const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
         if (isStandaloneEffortLabel(text)) continue;
         const choice = modelChoiceFromText(text);
-        if (choice) return { choice, label: text || String(choice) };
+        if (choice) return { choice, label: text || String(choice), selectorSource: 'checked-menuitemradio' };
     }
     const active = await readActiveModelPill(page, { allowStandaloneHeavy: expectedModel === 'pro' });
     const choice = modelChoiceFromText(active);
-    return choice ? { choice, label: active || String(choice) } : null;
+    return choice ? { choice, label: active || String(choice), selectorSource: 'composer-model-pill' } : null;
+}
+
+/**
+ * @param {Page} page
+ * @returns {Promise<{
+ *   resolvedFamily: string|null,
+ *   uiVariant: 'reasoning-level-with-family'|'simplified-intelligence'|'legacy'|'unknown',
+ *   selectorSource: string|null,
+ * }>}
+ */
+async function readModelPickerContext(page) {
+    const picker = page.locator(CHATGPT_INTELLIGENCE_PICKER_SELECTOR).first();
+    if (await picker.isVisible().catch(() => false)) {
+        const text = (await picker.innerText({ timeout: 500 }).catch(() => '')).trim();
+        const familyRows = await page.locator(`${CHATGPT_INTELLIGENCE_PICKER_SELECTOR} [role="menuitem"][aria-haspopup="menu"]`)
+            .all()
+            .catch(() => /** @type {Locator[]} */ ([]));
+        let resolvedFamily = null;
+        for (const row of familyRows) {
+            const label = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+            if (CHATGPT_MODEL_FAMILY_PATTERN.test(label)) {
+                resolvedFamily = label;
+                break;
+            }
+        }
+        return {
+            resolvedFamily,
+            uiVariant: /\bReasoning level\b|추론 수준/i.test(text)
+                ? 'reasoning-level-with-family'
+                : 'simplified-intelligence',
+            selectorSource: 'composer-intelligence-picker',
+        };
+    }
+    if (await isSimplifiedIntelligenceMenuOpen(page, null, null)) {
+        return { resolvedFamily: null, uiVariant: 'simplified-intelligence', selectorSource: 'role-menu' };
+    }
+    if (await isModelMenuOpenLegacy(page)) {
+        return { resolvedFamily: null, uiVariant: 'legacy', selectorSource: 'legacy-model-testid' };
+    }
+    return { resolvedFamily: null, uiVariant: 'unknown', selectorSource: null };
 }
 
 /**
@@ -926,7 +1051,27 @@ async function readActiveEffortPill(page) {
  * @returns {Promise<boolean>}
  */
 async function isModelMenuOpen(page) {
-    const legacyOpen = await page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR)
+    const picker = page.locator(CHATGPT_INTELLIGENCE_PICKER_SELECTOR).first();
+    if (await picker.isVisible().catch(() => false)) {
+        const text = (await picker.innerText({ timeout: 500 }).catch(() => '')).trim();
+        const rowsVisible = await page.locator(`${CHATGPT_INTELLIGENCE_PICKER_SELECTOR} [role="menuitemradio"]`)
+            .first()
+            .isVisible()
+            .catch(() => false);
+        if (rowsVisible && CHATGPT_REASONING_LEVEL_HEADER_PATTERN.test(text)) return true;
+    }
+    const legacyOpen = await isModelMenuOpenLegacy(page);
+    if (legacyOpen || await isSimplifiedIntelligenceMenuOpen(page, null, null)) return true;
+    return page.locator('[role="menuitem"], [role="button"], button')
+        .filter({ hasText: /^GPT[-\s]?5\.5$/i })
+        .first()
+        .isVisible()
+        .catch(() => false);
+}
+
+/** @param {Page} page */
+async function isModelMenuOpenLegacy(page) {
+    return page.locator(CHATGPT_MODEL_MENU_ITEM_SELECTOR)
         .filter({ hasText: CHATGPT_MODEL_TEXT_BUTTON_PATTERN })
         .evaluateAll((items) => items.some(item => {
             const text = (/** @type {HTMLElement} */ (item).innerText || item.textContent || '').trim();
@@ -935,12 +1080,6 @@ async function isModelMenuOpen(page) {
             if (testId.includes('effort') && /^(Light|Standard|Extended|Heavy|Standard Pro|Extended Pro)$/i.test(text)) return false;
             return /^(ChatGPT|GPT[-\s]?\d|((Light|Standard|Extended|Heavy)\s+)?(Instant|Fast|Thinking|Pro|Heavy)\b|Medium\b|High\b|Extra High\b|Pro Standard\b|Pro Extended\b|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)/i.test(text);
         }))
-        .catch(() => false);
-    if (legacyOpen || await isSimplifiedIntelligenceMenuOpen(page, null, null)) return true;
-    return page.locator('[role="menuitem"], [role="button"], button')
-        .filter({ hasText: /^GPT[-\s]?5\.5$/i })
-        .first()
-        .isVisible()
         .catch(() => false);
 }
 
@@ -1008,7 +1147,7 @@ async function isSimplifiedIntelligenceMenuOpen(page, model, effort) {
     if (requiredLabels.length === 0) return false;
     return page.locator('[role="menu"]').evaluateAll((menus, labels) => menus.some(menu => {
         const text = /** @type {HTMLElement} */ (menu).innerText || menu.textContent || '';
-        if (!/\bIntelligence\b|지능/i.test(text)) return false;
+        if (!/\b(?:Reasoning level|Intelligence)\b|추론 수준|지능/i.test(text)) return false;
         return labels.some(label => menuTextHasExactLine(text, label));
     }), requiredLabels).catch(() => false);
 }
@@ -1137,6 +1276,7 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
         return { state: 'fail', evidence: { requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
     }
     const option = await findModelOption(page, requested).catch(() => null);
+    const pickerContext = await readModelPickerContext(page);
     /** @type {Locator | null} */
     let effortOption = null;
     if (option && requestedEffort) {
@@ -1154,7 +1294,27 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     } catch {
         menuClosed = false;
     }
-    const selectable = Boolean(option) && (!requestedEffort || Boolean(effortOption));
-    const state = selectable ? (menuClosed ? 'ok' : 'warn') : 'fail';
-    return { state, evidence: { requested, effort: requestedEffort || null, menuClosed, usedFallbacks }, next: state === 'ok' ? 'send' : 'model-fallback' };
+    const compatibilityNoop = Boolean(option)
+        && requested === 'pro'
+        && Boolean(requestedEffort)
+        && !effortOption
+        && pickerContext.uiVariant === 'reasoning-level-with-family';
+    const selectable = Boolean(option) && (!requestedEffort || Boolean(effortOption) || compatibilityNoop);
+    const state = selectable
+        ? compatibilityNoop || !menuClosed ? 'warn' : 'ok'
+        : 'fail';
+    return {
+        state,
+        evidence: {
+            requested,
+            effort: requestedEffort || null,
+            effortStatus: compatibilityNoop ? 'unsupported-by-ui' : requestedEffort ? 'enforced' : 'not-requested',
+            resolvedFamily: pickerContext.resolvedFamily,
+            uiVariant: pickerContext.uiVariant,
+            selectorSource: pickerContext.selectorSource,
+            menuClosed,
+            usedFallbacks,
+        },
+        next: state === 'fail' ? 'model-fallback' : 'send',
+    };
 }

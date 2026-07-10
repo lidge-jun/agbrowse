@@ -656,12 +656,29 @@ agbrowse web-ai context-dry-run \
 
 ChatGPT:
 
-- `instant`, `fast`, `gpt-5.3`
-- `thinking`, `think`, `gpt-5.5-thinking`
-- `pro`, `gpt-5.5-pro`
+- `instant`, `fast`
+- `thinking`, `think`
+- `pro` (preferred stable alias)
+- Versioned aliases such as `gpt-5.3`, `gpt-5.5-thinking`, and `gpt-5.5-pro`
+  are legacy-compatible and do not pin the visible model family
 - `--effort` / `--reasoning-effort` for ChatGPT:
-  - Pro: `standard`, `extended`
+  - Pro: `standard`, `extended` for legacy compatibility; omit effort on a single-Pro UI
   - Thinking: `light`, `standard`, `extended`, `heavy`
+
+2026-07-10 ChatGPT Reasoning level UI note:
+
+- The composer picker may use `Reasoning level` / `추론 수준` and expose
+  `Instant`/`즉시`, `Medium`/`중간`, `High`/`높음`, `Extra High`/`매우 높음`,
+  and one `Pro` row.
+- The same picker can show a separate model-family submenu label such as
+  `GPT-5.6 Sol`. `--model pro` selects the reasoning level only; it does not
+  pin or change that family.
+- Prefer `--model pro` without `--effort`. If a legacy Pro effort is requested
+  while the UI exposes only one Pro row, agbrowse continues with Pro, emits a
+  warning, and records `effortStatus: unsupported-by-ui` plus the observed
+  `resolvedFamily`.
+- Explicit models fail before prompt submission when neither a checked picker
+  row nor the scoped composer pill can verify the requested level.
 
 2026-05-03 ChatGPT UI note:
 

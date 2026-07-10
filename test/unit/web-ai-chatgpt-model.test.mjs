@@ -5,6 +5,20 @@ import { join } from 'node:path';
 const modelSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt-model.mjs'), 'utf8');
 
 describe('web-ai ChatGPT model selector policy', () => {
+    it('keeps Korean and English fixtures for the current reasoning-level picker', () => {
+        const fixtureDir = join(process.cwd(), 'test', 'fixtures', 'chatgpt-model');
+        const ko = readFileSync(join(fixtureDir, 'reasoning-level-ko.html'), 'utf8');
+        const en = readFileSync(join(fixtureDir, 'reasoning-level-en.html'), 'utf8');
+
+        for (const fixture of [ko, en]) {
+            expect(fixture).toContain('composer-intelligence-picker-content');
+            expect(fixture).toContain('role="menuitemradio"');
+            expect(fixture).toContain('GPT-5.6 Sol');
+        }
+        expect(ko).toContain('추론 수준');
+        expect(en).toContain('Reasoning level');
+    });
+
     it('supports the observed Heavy/Pro effort UI', () => {
         expect(modelSrc).toContain('model-switcher-gpt-5-5-pro-thinking-effort');
         expect(modelSrc).toContain('model-switcher-gpt-5-5-thinking-thinking-effort');
@@ -105,6 +119,91 @@ describe('web-ai ChatGPT model selector policy', () => {
                 effort,
             });
         }
+    });
+
+    it.each(['ko', 'en'])('recognizes the current single-Pro reasoning picker (%s)', async language => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            initialModelMenuOpen: false,
+            roleButtonPill: true,
+            currentReasoningMenu: true,
+            currentReasoningLanguage: language,
+        });
+
+        await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+            selected: 'pro',
+            warnings: [],
+            modelSelection: {
+                requestedModel: 'pro',
+                resolvedLabel: 'Pro',
+                normalizedModel: 'pro',
+                requestedEffort: null,
+                resolvedEffort: null,
+                effortStatus: 'not-requested',
+                resolvedFamily: 'GPT-5.6 Sol',
+                uiVariant: 'reasoning-level-with-family',
+                selectorSource: 'composer-intelligence-picker',
+                verified: true,
+            },
+        });
+    });
+
+    it('keeps legacy Pro effort as a warning-only no-op on the single-Pro UI', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'pro',
+            initialModelMenuOpen: false,
+            roleButtonPill: true,
+            currentReasoningMenu: true,
+        });
+
+        await expect(selectChatGptModel(page, 'pro', { effort: 'extended' })).resolves.toMatchObject({
+            selected: 'pro',
+            effort: null,
+            requestedEffort: 'extended',
+            warnings: [expect.stringContaining('single Pro UI exposes no separate Pro effort control')],
+            modelSelection: {
+                requestedEffort: 'extended',
+                resolvedEffort: null,
+                effortStatus: 'unsupported-by-ui',
+                resolvedFamily: 'GPT-5.6 Sol',
+                verified: true,
+            },
+        });
+    });
+
+    it('returns ok for current Pro and warn for legacy Pro effort capability probes', async () => {
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const plainPage = createFakeModelPage({ model: 'pro', currentReasoningMenu: true });
+        const effortPage = createFakeModelPage({ model: 'pro', currentReasoningMenu: true });
+
+        await expect(chatGptModelCapabilityProbe(plainPage, 'pro')).resolves.toMatchObject({
+            state: 'ok',
+            evidence: {
+                effortStatus: 'not-requested',
+                resolvedFamily: 'GPT-5.6 Sol',
+                uiVariant: 'reasoning-level-with-family',
+            },
+        });
+        await expect(chatGptModelCapabilityProbe(effortPage, 'pro', { effort: 'extended' })).resolves.toMatchObject({
+            state: 'warn',
+            evidence: {
+                effortStatus: 'unsupported-by-ui',
+                resolvedFamily: 'GPT-5.6 Sol',
+            },
+            next: 'send',
+        });
+    });
+
+    it('warns that versioned aliases do not pin the ChatGPT model family', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ model: 'pro', currentReasoningMenu: true });
+
+        await expect(selectChatGptModel(page, 'gpt-5.5-pro')).resolves.toMatchObject({
+            selected: 'pro',
+            warnings: [expect.stringContaining('does not pin the ChatGPT model family')],
+        });
     });
 
     it('selects every supported reasoning effort when ChatGPT puts the model name before the effort label', async () => {
@@ -640,7 +739,7 @@ describe('web-ai ChatGPT model selector policy', () => {
         });
     });
 
-    it('falls back to the current ChatGPT model when the model picker disappears and no effort is requested', async () => {
+    it('fails closed when an explicit ChatGPT model cannot be verified', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const clock = useAdvancingClock();
         try {
@@ -650,21 +749,16 @@ describe('web-ai ChatGPT model selector policy', () => {
                 advanceClock: clock.advance,
             });
 
-            const result = await selectChatGptModel(page, 'thinking');
-
-        expect(result).toMatchObject({
-            requested: 'thinking',
-            selected: null,
-            alreadySelected: true,
-            warnings: [expect.stringContaining('requested thinking was not enforced')],
-        });
-        expect(result.usedFallbacks).toContain('model-selector-unavailable-current-model');
+            await expect(selectChatGptModel(page, 'thinking')).rejects.toMatchObject({
+                errorCode: 'provider.model-mismatch',
+                stage: 'provider-select-mode',
+            });
         } finally {
             clock.restore();
         }
     });
 
-    it('keeps sending when the model picker disappears with reasoning effort and reports the unenforced effort', async () => {
+    it('fails closed when an explicit model and effort cannot be verified', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const clock = useAdvancingClock();
         try {
@@ -674,16 +768,10 @@ describe('web-ai ChatGPT model selector policy', () => {
                 advanceClock: clock.advance,
             });
 
-            const result = await selectChatGptModel(page, 'thinking', { effort: 'standard' });
-
-            expect(result).toMatchObject({
-                requested: 'thinking',
-                selected: null,
-                effort: null,
-                requestedEffort: 'standard',
-                warnings: [expect.stringContaining('requested effort standard was not enforced')],
+            await expect(selectChatGptModel(page, 'thinking', { effort: 'standard' })).rejects.toMatchObject({
+                errorCode: 'provider.model-mismatch',
+                stage: 'provider-select-mode',
             });
-            expect(result.usedFallbacks).toContain('model-selector-unavailable-current-model');
         } finally {
             clock.restore();
         }
@@ -790,6 +878,9 @@ function createFakeModelPage({
     modelPickerUnavailable = false,
     simplifiedIntelligenceMenu = false,
     simplifiedProExtendedOnly = false,
+    currentReasoningMenu = false,
+    currentReasoningLanguage = 'ko',
+    currentFamily = 'GPT-5.6 Sol',
     advanceClock = null,
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
@@ -855,7 +946,46 @@ function createFakeModelPage({
             onClick: () => setSimplifiedSelection('pro', 'extended'),
         }),
     ];
-    const modelRows = simplifiedIntelligenceMenu ? simplifiedRows : legacyModelRows;
+    const currentLabels = currentReasoningLanguage === 'en'
+        ? { header: 'Reasoning level', instant: 'Instant\n5.5', standard: 'Medium', extended: 'High', heavy: 'Extra High', pro: 'Pro' }
+        : { header: '추론 수준', instant: '즉시\n5.5', standard: '중간', extended: '높음', heavy: '매우 높음', pro: 'Pro' };
+    const currentReasoningRows = [
+        createElement({
+            text: currentLabels.instant,
+            get checked() { return state.currentModel === 'instant'; },
+            onClick: () => setCurrentReasoningSelection('instant', null),
+        }),
+        createElement({
+            text: currentLabels.standard,
+            get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'standard'; },
+            onClick: () => setCurrentReasoningSelection('thinking', 'standard'),
+        }),
+        createElement({
+            text: currentLabels.extended,
+            get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'extended'; },
+            onClick: () => setCurrentReasoningSelection('thinking', 'extended'),
+        }),
+        createElement({
+            text: currentLabels.heavy,
+            get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'heavy'; },
+            onClick: () => setCurrentReasoningSelection('thinking', 'heavy'),
+        }),
+        createElement({
+            text: currentLabels.pro,
+            get checked() { return state.currentModel === 'pro'; },
+            onClick: () => setCurrentReasoningSelection('pro', null),
+        }),
+    ];
+    const familyTrigger = createElement({ text: currentFamily });
+    const currentPicker = createElement({
+        text: () => `${currentLabels.header}\n${currentReasoningRows.map(row => row.text).join('\n')}\n${currentFamily}`,
+        testId: 'composer-intelligence-picker-content',
+    });
+    const modelRows = currentReasoningMenu
+        ? currentReasoningRows
+        : simplifiedIntelligenceMenu
+            ? simplifiedRows
+            : legacyModelRows;
     const exactTrigger = createElement({
         text: exactEffortTriggerText,
         testId: `model-switcher-gpt-5-5-${exactEffortTriggerModel}-thinking-effort`,
@@ -879,7 +1009,9 @@ function createFakeModelPage({
     const modelPill = createElement({
         text: () => state.selectedEffort
             ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
-            : state.currentModel,
+            : currentReasoningMenu
+                ? currentReasoningPillLabel()
+                : state.currentModel,
         onClick: () => { state.modelMenuOpen = true; },
     });
     const splitModelPill = createElement({
@@ -938,6 +1070,20 @@ function createFakeModelPage({
         state.modelMenuOpen = false;
     }
 
+    function setCurrentReasoningSelection(nextModel, nextEffort) {
+        state.currentModel = nextModel;
+        state.selectedEffort = nextEffort;
+        state.modelMenuOpen = false;
+    }
+
+    function currentReasoningPillLabel() {
+        if (state.currentModel === 'instant') return currentReasoningLanguage === 'en' ? 'Instant' : '즉시';
+        if (state.currentModel === 'pro') return 'Pro';
+        if (state.selectedEffort === 'extended') return currentLabels.extended;
+        if (state.selectedEffort === 'heavy') return currentLabels.heavy;
+        return currentLabels.standard;
+    }
+
     function currentEffortTexts() {
         if (state.effortMenuSource === 'generic' && genericEffortTexts) return genericEffortTexts;
         return effortTexts;
@@ -962,10 +1108,23 @@ function createFakeModelPage({
 
     function selectElements(selector) {
         if (modelPickerUnavailable) return [];
+        if (selector === '[data-testid="composer-intelligence-picker-content"]') {
+            return currentReasoningMenu && state.modelMenuOpen ? [currentPicker] : [];
+        }
+        if (selector.includes('[data-testid="composer-intelligence-picker-content"]') && selector.includes('[role="menuitemradio"]')) {
+            if (!currentReasoningMenu || !state.modelMenuOpen) return [];
+            return selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')
+                ? currentReasoningRows.filter(row => row.checked)
+                : currentReasoningRows;
+        }
+        if (selector === '[data-testid="composer-intelligence-picker-content"] [role="menuitem"][aria-haspopup="menu"]') {
+            return currentReasoningMenu && state.modelMenuOpen ? [familyTrigger] : [];
+        }
         if (selector === 'button, [role="button"], [role="menuitem"]') return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'text' ? [...composerPills(), genericTrigger] : composerPills();
         if (selector.includes('__composer-pill')) return roleButtonPill ? composerPills() : [];
         if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));
         if (selector === '[role="menu"]') {
+            if (currentReasoningMenu && state.modelMenuOpen) return [currentPicker];
             if (simplifiedIntelligenceMenu && state.modelMenuOpen) return [createElement({ text: `Intelligence\n${simplifiedRows.map(row => row.text).join('\n')}\nGPT-5.5` })];
             return state.effortMenuOpen ? [createElement({ text: Object.values(currentEffortTexts()).join('\n') })] : [];
         }
@@ -1041,9 +1200,9 @@ describe('selectChatGptModel hardening (32.2 source contract)', () => {
         expect(src).toContain('MODEL_PILL_SETTLE_MS = 8_000');
     });
 
-    it('bounds model-option selection with retries and surfaces an unverified warning', () => {
+    it('bounds model-option selection with retries and fails closed when verification stays mismatched', () => {
         expect(src).toContain('MODEL_SELECT_MAX_ATTEMPTS = 3');
         expect(src).toMatch(/while \(currentModel !== requested && attempt < MODEL_SELECT_MAX_ATTEMPTS\)/);
-        expect(src).toContain("warnings.push('model-selection-unverified')");
+        expect(src).toContain('ChatGPT model verification failed');
     });
 });

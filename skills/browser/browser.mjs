@@ -3356,7 +3356,7 @@ try {
                                        Gemini:  flash-lite/flash/pro + tool deepthink
                                        Grok:    heavy/expert/thinking/fast/auto
         --effort <alias>               ChatGPT only; requires --model
-                                       Pro: standard/extended
+                                       Pro: standard/extended (legacy; single Pro warns/no-ops)
                                        Thinking: light/standard/extended/heavy
         --reasoning-effort <alias>     Alias for --effort
         --url <conversation-or-provider-url>

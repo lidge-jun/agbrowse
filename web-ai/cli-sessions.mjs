@@ -282,6 +282,12 @@ function formatBrowserEvidenceLines(session) {
         const strategy = evidence.strategy ?? '(default)';
         const verified = evidence.verified ? 'yes' : 'no';
         lines.push(`model requested=${requested}; resolved=${resolved}; status=${evidence.status || 'unknown'}; strategy=${strategy}; verified=${verified}`);
+        if (evidence.requestedEffort || evidence.resolvedEffort || evidence.effortStatus) {
+            lines.push(`effort requested=${evidence.requestedEffort ?? '(none)'}; resolved=${evidence.resolvedEffort ?? '(none)'}; status=${evidence.effortStatus || 'unknown'}`);
+        }
+        if (evidence.resolvedFamily || evidence.uiVariant || evidence.selectorSource) {
+            lines.push(`picker family=${evidence.resolvedFamily ?? '(unavailable)'}; ui=${evidence.uiVariant || 'unknown'}; selector=${evidence.selectorSource || '(unknown)'}`);
+        }
     }
     for (const warning of session?.warnings || []) {
         if (!warning || typeof warning !== 'object' || !warning.code) continue;

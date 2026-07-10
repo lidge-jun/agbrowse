@@ -117,8 +117,9 @@ Provider:
                       ONLY touched when this flag is provided; otherwise the
                       currently-checked effort in the browser is left as-is.
                       Requires a model because legacy Pro/Thinking menus and the
-                      simplified Intelligence menu map efforts differently.
-                        Pro: standard, extended
+                      current reasoning-level picker map efforts differently.
+                        Pro: standard, extended (legacy compatibility; a
+                             single-Pro UI warns and continues without effort)
                         Thinking: light, standard, extended, heavy
   --reasoning-effort <alias>
                       Alias for --effort
@@ -357,7 +358,7 @@ Required:
 Recommended model:
   --model thinking      Use ChatGPT thinking mode for code work.
   --effort <alias>      thinking: light|standard|extended|heavy
-                        pro: standard|extended
+                        pro: standard|extended (legacy compatibility)
 
 Artifact options:
   --output-zip <path>   Save one generated zip to this path.

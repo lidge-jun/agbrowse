@@ -148,6 +148,12 @@ describe('web-ai sessions list / show / prune via runSessionsCommand', () => {
                     requestedModel: 'pro',
                     resolvedLabel: 'GPT-5.5 Pro',
                     normalizedModel: 'pro',
+                    requestedEffort: 'extended',
+                    resolvedEffort: null,
+                    effortStatus: 'unsupported-by-ui',
+                    resolvedFamily: 'GPT-5.6 Sol',
+                    uiVariant: 'reasoning-level-with-family',
+                    selectorSource: 'composer-intelligence-picker',
                     strategy: 'select',
                     status: 'switched',
                     verified: true,
@@ -169,8 +175,40 @@ describe('web-ai sessions list / show / prune via runSessionsCommand', () => {
             const output = logs.join('\n');
             expect(output).toContain('Browser evidence:');
             expect(output).toContain('model requested=pro; resolved=GPT-5.5 Pro; status=switched; strategy=select; verified=yes');
+            expect(output).toContain('effort requested=extended; resolved=(none); status=unsupported-by-ui');
+            expect(output).toContain('picker family=GPT-5.6 Sol; ui=reasoning-level-with-family; selector=composer-intelligence-picker');
             expect(output).toContain('warning browser-pro-fast-large-run: Large browser Pro run completed quickly.');
             expect(output).not.toContain('legacy warning string');
+        } finally {
+            console.log = originalLog;
+        }
+    });
+
+    it('human show remains compatible with legacy model selection evidence', async () => {
+        const logs = [];
+        const originalLog = console.log;
+        console.log = (line = '') => logs.push(String(line));
+        try {
+            const { runWebAiCli } = await import('../../web-ai/cli.mjs');
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { patchSession } = await import('../../web-ai/session-store.mjs');
+            const s = createSession({ vendor: 'chatgpt', prompt: 'legacy', attachmentPolicy: 'inline-only' });
+            patchSession(s.sessionId, {
+                modelSelection: {
+                    requestedModel: 'pro',
+                    resolvedLabel: 'Pro Extended',
+                    strategy: 'select',
+                    status: 'already-selected',
+                    verified: true,
+                },
+            });
+
+            await runWebAiCli(['sessions', 'show', s.sessionId]);
+
+            const output = logs.join('\n');
+            expect(output).toContain('model requested=pro; resolved=Pro Extended');
+            expect(output).not.toContain('effort requested=');
+            expect(output).not.toContain('picker family=');
         } finally {
             console.log = originalLog;
         }

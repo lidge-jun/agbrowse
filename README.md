@@ -669,16 +669,19 @@ agbrowse web-ai query \
 
 Model aliases:
 
-- `instant`, `fast`, `gpt-5.3`
-- `thinking`, `think`, `gpt-5.5-thinking`
-- `pro`, `gpt-5.5-pro`
+- `instant`, `fast`
+- `thinking`, `think`
+- `pro` (preferred stable alias)
+- Versioned aliases such as `gpt-5.3`, `gpt-5.5-thinking`, and `gpt-5.5-pro`
+  remain compatible but do not pin the visible model family
 
-Current headed ChatGPT UI may expose a simplified `Intelligence` picker instead
-of the older model row plus separate effort submenu. The runtime maps
-`thinking --effort light|standard|extended|heavy` to `Instant|Medium|High|Extra
-High`, and maps Pro requests through `Pro Extended` when that is the visible Pro
-entry. Legacy `model-switcher-*` rows and composer-pill fallbacks remain
-supported.
+Current headed ChatGPT UI may expose `Reasoning level` / `추론 수준` with a
+single `Pro` row and a separate visible model-family label such as
+`GPT-5.6 Sol`. Use `--model pro` without `--effort` by default. Legacy
+`--model pro --effort standard|extended` calls still select Pro; when no
+separate Pro effort control exists they return a warning and record
+`effortStatus: unsupported-by-ui`. Older `Intelligence` and
+`model-switcher-*` layouts remain supported.
 
 ### ChatGPT Code Mode
 
