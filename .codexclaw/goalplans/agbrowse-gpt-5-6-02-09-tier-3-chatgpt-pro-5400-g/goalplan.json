@@ -1,0 +1,244 @@
+{
+  "objective": "agbrowse GPT-5.6 패치 실행: 02~09 문서 정합화(tier 3분리 chatgpt-pro=5400/grok-heavy=3600/deep-research=3600, work send 서브커맨드+MCP web_ai_work_send) 후 전부 소스 적용 + 게이트 통과. WP0 플랜 정합화 → WP1 Work 라이브 재프로브 → WP2+ fixture→02→03→04→05→06→08→09 체인. npm publish/main 머지는 OUT.",
+  "slug": "agbrowse-gpt-5-6-02-09-tier-3-chatgpt-pro-5400-g",
+  "createdAt": "2026-07-10T05:32:42.632Z",
+  "updatedAt": "2026-07-10T11:58:54Z",
+  "activeWorkPhaseId": "wp7",
+  "workPhases": [
+    {
+      "id": "wp0",
+      "title": "WP0 — 플랜 정합화 (인터뷰 결정을 02~09 문서에 반영)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp0-t1",
+          "title": "05/00/07/08/09: tier 3분리(chatgpt-pro=5400/grok-heavy/deep-research) 파급 ~40지점 갱신",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t2",
+          "title": "02/04: work send 서브커맨드 재정의 (Chat reject 유지 + work 진입점, DEFERRED 로드맵 활성화)",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t3",
+          "title": "02↔04 discriminator/guard 소유권 역참조 해소 + fixture-first 실행 순서 재설계",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t4",
+          "title": "00:6-7 정정, 07 순서번호 중복 정정, checkjs touched-scope/npm ci 프로토콜 명기",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t5",
+          "title": "정합화 리뷰어 감사 (A게이트)",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp1",
+      "title": "WP1 — Work 표면 라이브 재프로브 (Power 매핑/전이/제출/poll DOM)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "인앱 브라우저로 chatgpt.com Work: Power 1~6 라벨 매핑 실측",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "01 §5.1 기본 5항목 + 04 §7.2 역설계 10항목 중 Model/Effort/Speed 전이와 surface 왕복 실측",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t3",
+          "title": "Work 제출→running→complete DOM과 완료 task URL 재접속 실측; approval/failure/running reattach는 activation gap으로 분리",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t4",
+          "title": "01에 증거 추가 + 04 문서 실측 반영",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t5",
+          "title": "공식 OpenAI 출시/도움말 중심 Work 웹 능력 조사 + Tier 3 반증 wave",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t6",
+          "title": "로그인된 /plugins 및 /skills DOM·설치/연결 상태·Work workflow hint read-only 조사",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c6",
+        "c7",
+        "c8"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "WP2 — fixture + 02 코어 계약 적용",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "07 fixture 파트 선행 생성 + 02 diff 적용 + 자기 테스트 green",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp3",
+      "title": "WP3 — 03 Chat 피커 셀렉터 적용",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "03 diff 적용 + unit green + 라이브 스모크(instant/thinking/pro)",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c3"
+      ]
+    },
+    {
+      "id": "wp4",
+      "title": "WP4 — 04 Work 감지/가드 + work send CLI+MCP 구현",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp4-t1",
+          "title": "가드+감지 적용, work send 2단 파서, web_ai_work_send, 라이브 스모크(Work 제출 1회)",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c2"
+      ]
+    },
+    {
+      "id": "wp5",
+      "title": "WP5 — 05 타임아웃 tier 3분리+상속 적용",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp5-t1",
+          "title": "session/watcher/cli-sessions/DR/MCP 적용 + timeout 테스트 green",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c1"
+      ]
+    },
+    {
+      "id": "wp6",
+      "title": "WP6 — 06 capability/진단 적용",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp6-t1",
+          "title": "probe/presets/registry/doctor/tab-inspect/evidence 적용 + 테스트 green",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp7",
+      "title": "WP7 — 08 문서 + 09 SoT/게이트 적용 + 최종 검증",
+      "status": "in_progress",
+      "tasks": [
+        {
+          "id": "wp7-t1",
+          "title": "08 문서 15표면 EN/KO + browser.mjs help 적용",
+          "status": "pending"
+        },
+        {
+          "id": "wp7-t2",
+          "title": "09 SoT/semantic gate(3-tier 토큰) 적용",
+          "status": "pending"
+        },
+        {
+          "id": "wp7-t3",
+          "title": "npm run test:unit 전체 green + doc-drift + loop validate + 커밋 정리",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c4",
+        "c5"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1",
+      "scenario": "tier 3분리+5400이 코드/테스트/문서에 일관 반영",
+      "expectedEvidence": "web-ai-timeout-default.test.mjs green + session.mjs diff",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c2",
+      "scenario": "work send CLI+MCP가 재프로브 실측 근거로 구현되고 라이브 스모크 통과",
+      "expectedEvidence": "실제 Work 제출→응답 1회 증거 + 테스트 green",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c3",
+      "scenario": "Chat 피커 5.6 계약 적용 + unit green + 라이브 스모크",
+      "expectedEvidence": "instant/thinking/pro 선택 스모크 로그 + 스위트 green",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c4",
+      "scenario": "06/07/08/09 적용 — fixture/문서/semantic gate 정상",
+      "expectedEvidence": "gate 스크립트 출력 + 문서 diff",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c5",
+      "scenario": "전체 unit green + goalplan 충족 + loop validate 통과",
+      "expectedEvidence": "npm run test:unit 출력 + cxc loop validate OK",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c6",
+      "scenario": "WP1 live UI adapter, running→complete, task identity and completed-result re-entry contracts captured",
+      "expectedEvidence": "Power 1..6 + exact nonce/Stop + completed /c URL close/reopen ledger",
+      "capturedEvidence": ".codexclaw/evidence/260710_wp1_live_work_probe.md",
+      "status": "met"
+    },
+    {
+      "id": "c7",
+      "scenario": "Unobserved approval/failure/running reattach/project/attachment states are not overclaimed",
+      "expectedEvidence": "04 v1 unknown typed fail-closed + running target-loss guard + schema exclusions",
+      "capturedEvidence": "devlog/_plan/260710_gpt56_update/04_work_surface_support.md sections 5-7",
+      "status": "met"
+    },
+    {
+      "id": "c8",
+      "scenario": "Plugins/Skills directory is mapped without changing installation or connection state",
+      "expectedEvidence": "directory/detail/installed/uninstalled/skill-create read-only DOM ledger",
+      "capturedEvidence": ".codexclaw/evidence/260710_plugins_directory_probe.md",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

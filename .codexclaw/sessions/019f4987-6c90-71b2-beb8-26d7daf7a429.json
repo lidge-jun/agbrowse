@@ -1,0 +1,36 @@
+{
+  "phase": "B",
+  "sessionId": "019f4987-6c90-71b2-beb8-26d7daf7a429",
+  "slug": "agbrowse-gpt-5-6-02-09-tier-3-chatgpt-pro-5400-g",
+  "updatedAt": "2026-07-10T13:02:09.025Z",
+  "flags": {
+    "interview": false,
+    "auditPassed": true,
+    "checkPassed": false
+  },
+  "supersededBy": null,
+  "injectedTurns": [
+    "019f498f-0443-7ad1-a180-2ec52b37fba6",
+    "0d8b56b7-a0c2-4a75-bce8-1352a93322ea",
+    "019f49db-8ab9-7f60-aa15-a585c9a89a94",
+    "019f49ed-bc63-77c0-a1dd-e2ba08c3292d",
+    "019f4a21-ffa4-7f52-9c93-bcb95aef1d4d",
+    "019f4a4b-2b1e-72f3-acc1-1908639a5ffa",
+    "019f4a67-72a2-76e3-9927-07103a6e653b",
+    "019f4a67-8d2f-7f92-9e91-ee8aeb04eda1",
+    "019f4a74-bc8d-7070-9f80-9edb765866e0",
+    "019f4a79-90e8-77a1-aecd-30320f86b522",
+    "019f4a81-a2fe-7673-877c-7083b436db80",
+    "019f4af9-2a3b-7fe2-b357-28aee0289a22",
+    "019f4b1a-1c06-7303-87cb-8392673bd215",
+    "019f4b27-7de3-7163-8fda-a16c960075ce",
+    "019f4b48-e351-77f0-8a07-8f7622139996",
+    "019f4ba7-2a80-7700-994e-412efe241187",
+    "019f4c1f-0432-7893-b4dd-a88538f6503e"
+  ],
+  "lastInjectedPhase": "B",
+  "orchestrationActive": true,
+  "interview": null,
+  "stopBlockPhase": null,
+  "stopBlockCount": 0
+}

@@ -1,0 +1,148 @@
+{
+  "objective": "agbrowse GitHub Pages 랜딩(docs/index.html)을 C5 Neo-Brutalist Terminal 방향으로 전면 리디자인 + 풀스크린 전환 시그니처 모션. WP1 설계잠금 → WP2 구조/스타일 구현 → WP3 모션 레이어 → WP4 검증/폴리시. 수용기준: 3뷰포트 렌더검증, 스크롤모션 증명, reduced-motion 완전지원, 링크보존, 글래스/그라디언트/이모지 0, 리뷰어 게이트 통과.",
+  "slug": "agbrowse-github-pages-docs-index-html-c5-neo-bru",
+  "createdAt": "2026-07-10T11:34:44.454Z",
+  "updatedAt": "2026-07-10T12:20:48.284770+00:00Z",
+  "activeWorkPhaseId": "wp4",
+  "workPhases": [
+    {
+      "id": "wp1",
+      "title": "Design lock: C5 mockup -> full-page diff-level design doc + motion map",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "Write 000_plan.md design doc (section map, tokens, motion map, file change map)",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "A-gate: dispatch 4.6-opus reviewer, fold back blockers",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "cr-design"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "Structure/style implementation: rewrite docs/index.html (all sections, responsive)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "Implement full HTML/CSS per design doc",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "Render-ground at 1440/768/390 and fix observed issues",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "cr-render",
+        "cr-links",
+        "cr-antislop"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "Motion layer: fullscreen section transition signature + supporting reveals + a11y fallbacks",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "Implement sticky fullscreen scrub transition + staggered reveals",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "prefers-reduced-motion + @supports fallbacks",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "cr-motion",
+        "cr-reduced"
+      ]
+    },
+    {
+      "id": "wp4",
+      "title": "Verification/polish: viewport render QA, a11y/SEO, final adversarial review, fold-back",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp4-t1",
+          "title": "Full verify matrix screenshots into verify/ dir",
+          "status": "done"
+        },
+        {
+          "id": "wp4-t2",
+          "title": "C-gate: 4.6-opus adversarial reviewer + fold back",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "cr-review"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "cr-design",
+      "scenario": "Diff-level design doc exists covering section map, tokens, motion map, and passes A-gate reviewer audit",
+      "expectedEvidence": "devlog design doc path + reviewer verdict tail",
+      "capturedEvidence": "devlog/context/redesign-candidates/000_design_lock.md (diff-level design lock incl. A-gate fold-back amendments: accent guardrail, a11y skeleton, html.js marker, 100svh scrub, README-canonical commands). Reviewer 019f4bd1 (opus-4.6 medium) VERDICT: GO-WITH-FIXES (blockers=3), all folded back; main-agent judgment near-pass.",
+      "status": "met"
+    },
+    {
+      "id": "cr-render",
+      "scenario": "Headless screenshots at 1440/768/390 show no overlap, clipping, or broken layout after being actually observed",
+      "expectedEvidence": "screenshot paths in devlog/context/redesign-candidates/verify/ + observation notes",
+      "capturedEvidence": "verify/wp2/desktop_1440.png (92KB), tablet_768.png (82KB), viewport_390x844.png (59KB) — all observed, no overlap/clipping after mobile font fix.",
+      "status": "met"
+    },
+    {
+      "id": "cr-links",
+      "scenario": "All nav anchors resolve to sections; GitHub/npm/docs-dev EN+KO external links preserved",
+      "expectedEvidence": "grep of hrefs + anchor id match list",
+      "capturedEvidence": "rg output: IDs workflow/web-ai/code-artifacts/verification present. Hrefs: npmjs.com/package/agbrowse, github.com/lidge-jun/agbrowse, dev/index.html, dev/ko/index.html all preserved (2x each: nav+docs-band).",
+      "status": "met"
+    },
+    {
+      "id": "cr-antislop",
+      "scenario": "Zero glassmorphism/blur/gradient/transparency panels, zero emoji icons, zero purple",
+      "expectedEvidence": "rg output showing 0 matches for backdrop-filter|blur|gradient + visual check",
+      "capturedEvidence": "rg: 0 matches for backdrop-filter, blur(, gradient, purple/#800080/violet. 0 emoji (rg -P Unicode range). Visual check: all panels opaque, no rounded corners, no green-on-black.",
+      "status": "met"
+    },
+    {
+      "id": "cr-motion",
+      "scenario": "Fullscreen section transition works scroll-driven, proven by screenshots at 2+ scroll offsets showing different panel states",
+      "expectedEvidence": "scroll-offset screenshot pair paths + observation",
+      "capturedEvidence": "verify/wp2/scroll_1440x900_y1200.png (43KB, ChatGPT→Gemini mid-transition), scroll_1440x900_y2400.png (42KB, Grok panel with dot 3 active). Two distinct scroll states prove scrub works.",
+      "status": "met"
+    },
+    {
+      "id": "cr-reduced",
+      "scenario": "Under prefers-reduced-motion emulation all content fully visible and page complete without motion",
+      "expectedEvidence": "reduced-motion screenshot path + observation",
+      "capturedEvidence": "verify/wp2/scroll_1440x900_y1000.png (39KB, reduced-motion ChatGPT stacked), scroll_1440x900_y2000.png (47KB, reduced-motion Gemini+Grok stacked). Panels stack vertically, dots hidden, all content visible.",
+      "status": "met"
+    },
+    {
+      "id": "cr-review",
+      "scenario": "Final adversarial reviewer (4.6-opus medium) returns PASS or GO-WITH-FIXES with all blockers folded back",
+      "expectedEvidence": "reviewer verdict tail + fold-back summary",
+      "capturedEvidence": "C-gate reviewer Harvey (opus-4.6 medium) VERDICT: GO-WITH-FIXES (blockers=0). 9 areas checked: Design fidelity PASS, Anti-slop PASS, Accessibility ISSUE→fixed (focus-visible added, section tag fixed), Links PASS, SEO PASS, Motion PASS, Content PASS, Mobile PASS, Performance PASS. 6 findings (1 Med, 5 Low) all folded back into docs/index.html.",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

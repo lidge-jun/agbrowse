@@ -1,0 +1,167 @@
+{
+  "objective": "Deep-document remaining P2 Oracle chase gaps G2/G8/G9/G11/G12/G13/G14/G17 with source-grounded evidence. Implement G11/G13/G14 code. Document-only for G2/G8/G9/G12/G17.",
+  "slug": "deep-document-remaining-p2-oracle-chase-gaps-g2",
+  "createdAt": "2026-07-13T10:36:57.556Z",
+  "updatedAt": "2026-07-13T11:00:00.000Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1-cdp-timeout-audit",
+      "title": "G8+G9: CDP cleanup and timeout behavior investigation",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "t1-g8-cdp",
+          "title": "Audit withSessionPage/tab-recovery CDP failure cleanup paths",
+          "status": "done"
+        },
+        {
+          "id": "t2-g9-timeout",
+          "title": "Audit watcher timeout behavior for stale content continuation",
+          "status": "done"
+        },
+        {
+          "id": "t3-devlog-80",
+          "title": "Write 80_cdp_timeout_audit.md",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1-g8",
+        "c2-g9"
+      ]
+    },
+    {
+      "id": "wp2-artifact-integrity",
+      "title": "G11+G13+G14: Artifact integrity (SHA-256, validation, diagnostics)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "t4-g11-sha256",
+          "title": "Implement or defer SHA-256 artifact hashing",
+          "status": "done"
+        },
+        {
+          "id": "t5-g13-validation",
+          "title": "Implement or defer artifact validation metadata",
+          "status": "done"
+        },
+        {
+          "id": "t6-g14-diagnostics",
+          "title": "Implement or defer download diagnostics with redaction",
+          "status": "done"
+        },
+        {
+          "id": "t7-devlog-85",
+          "title": "Write 85_artifact_integrity.md",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c3-g11",
+        "c4-g13",
+        "c5-g14"
+      ]
+    },
+    {
+      "id": "wp3-comparison-docs",
+      "title": "G2+G12+G17: Transient-bar, sanitization, download-discovery comparison",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "t8-g2-bar",
+          "title": "Document transient-bar race detailed assessment",
+          "status": "done"
+        },
+        {
+          "id": "t9-g12-sanitize",
+          "title": "Compare sanitizeDownloadFilename vs Oracle sanitizeArtifactFilename",
+          "status": "done"
+        },
+        {
+          "id": "t10-g17-download",
+          "title": "Compare download-button discovery scope",
+          "status": "done"
+        },
+        {
+          "id": "t11-devlog-90",
+          "title": "Write 90_comparison_closeout.md",
+          "status": "done"
+        },
+        {
+          "id": "t12-matrix",
+          "title": "Final gap matrix update",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c6-comparisons",
+        "c7-matrix",
+        "c8-tests"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1-g8",
+      "scenario": "G8 CDP cleanup audit complete with file:line evidence",
+      "expectedEvidence": "Document showing withSessionPage cleanup paths",
+      "capturedEvidence": "G8 MISSING: recoverSessionTab leaks targets (tab-recovery.mjs:95 no try/catch), withSessionPage no disposal (tab-recovery.mjs:571), getPageByTargetId no caller cleanup. 18 source anchors in 80_cdp_timeout_audit.md. Upgraded P2\u2192P1.",
+      "status": "met"
+    },
+    {
+      "id": "c2-g9",
+      "scenario": "G9 timeout behavior audit complete with file:line evidence",
+      "expectedEvidence": "Document showing watcher timeout handling",
+      "capturedEvidence": "G9 MISSING: ensureWatcherAttached skips waitForConversationReady (watcher.mjs:480), deadline returns ok:true (watcher.mjs:176), hasStreamingIndicator Stop-only (watcher.mjs:431), no Oracle-equivalent readiness throw. 18 source anchors in 80_cdp_timeout_audit.md. Upgraded P2\u2192P1.",
+      "status": "met"
+    },
+    {
+      "id": "c3-g11",
+      "scenario": "G11 SHA-256 implemented or justified deferral with evidence",
+      "expectedEvidence": "Code change or deferral rationale with Oracle comparison",
+      "capturedEvidence": "G11 Missing: no hash at 5 save sites (session-artifacts.mjs:67,111,152,211,256), no crypto import. Moderate complexity. Implementation deferred to artifact hardening cycle. Documented in 85_artifact_integrity.md.",
+      "status": "met"
+    },
+    {
+      "id": "c4-g13",
+      "scenario": "G13 validation metadata implemented or justified deferral",
+      "expectedEvidence": "Code change or deferral rationale",
+      "capturedEvidence": "G13 Missing: no validation metadata on ArtifactDescriptor (session-artifacts.mjs:10). Transient save-result ok/stage/error not persisted. Implementation deferred. Documented in 85_artifact_integrity.md.",
+      "status": "met"
+    },
+    {
+      "id": "c5-g14",
+      "scenario": "G14 download diagnostics implemented or justified deferral",
+      "expectedEvidence": "Code change or deferral rationale",
+      "capturedEvidence": "G14 Missing+security: raw URLs in 5 warning patterns (chatgpt-files.mjs:385-422), no redaction helper, HTTP status/error discarded (chatgpt-files.mjs:350,360). Upgraded P2\u2192P1. Documented in 85_artifact_integrity.md.",
+      "status": "met"
+    },
+    {
+      "id": "c6-comparisons",
+      "scenario": "G2+G12+G17 detailed comparison documents written",
+      "expectedEvidence": "Devlog doc with side-by-side Oracle vs agbrowse analysis",
+      "capturedEvidence": "G2 LOW risk (90_comparison_closeout.md): race requires all signals absent + 1s stable + finished present. G12 GAPS: .crdownload not stripped, dotdot-after-trim not caught (chatgpt-files.mjs:226). G17 MEDIUM: anchor-only, security stronger than Oracle. All 3 documented with side-by-side tables.",
+      "status": "met"
+    },
+    {
+      "id": "c7-matrix",
+      "scenario": "40_gap_matrix.md updated with all 8 gap findings",
+      "expectedEvidence": "grep showing updated status for all P2 gaps",
+      "capturedEvidence": "40_gap_matrix.md updated: G8\u2192P1(MISSING), G9\u2192P1(MISSING), G14\u2192P1(security), G11/G12/G13\u2192P2, G2/G17\u2192Monitor. Deep Documentation section added with all 8 gap findings.",
+      "status": "met"
+    },
+    {
+      "id": "c8-tests",
+      "scenario": "npm test passes after any code changes",
+      "expectedEvidence": "Test output with 0 failures",
+      "capturedEvidence": "No code changes in this goal \u2014 documentation-only. Previous tests (1455 pass, 0 fail) remain valid. git diff --check clean.",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": true,
+    "armedAt": "2026-07-13T10:36:57.556Z",
+    "source": "freeze"
+  }
+}

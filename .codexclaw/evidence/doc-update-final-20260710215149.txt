@@ -1,0 +1,62 @@
+=== EVIDENCE: doc-update verification (corrected) 2026-07-10T21:51:50+09:00 ===
+
+--- File inventory ---
+OK      8987 bytes         9 lines  docs/dev/reference/cli.html
+OK      3537 bytes         1 lines  docs/dev/reference/config.html
+OK      4850 bytes         4 lines  docs/dev/reference/release-gates.html
+OK      6285 bytes         1 lines  docs/dev/changelog.html
+OK      9440 bytes         9 lines  docs/dev/ko/reference/cli.html
+OK      3640 bytes         1 lines  docs/dev/ko/reference/config.html
+OK      4868 bytes         4 lines  docs/dev/ko/reference/release-gates.html
+OK      6310 bytes         1 lines  docs/dev/ko/changelog.html
+
+--- Shell structure ---
+All 8 files start with <!doctype html> and end with </body></html> (verified via od)
+All 8 files reference _shell.css and _search.js (verified via rg)
+
+--- CLI: 38/38 command tokens present in both EN and KO ---
+Verified: skills list/get/install, all 12 Act commands, 11 Navigate commands,
+4 Wait commands, 3 Diagnostics, fetch, search, 4 research subcommands,
+5 runway subcommands, 18+ web-ai subcommands including observe-bundle,
+observe-actions, upload, project-sources, context-dry-run, context-render,
+work send, --research deep, --output-image, --follow-up
+
+--- Config: 12/12 env vars present in both EN and KO ---
+BROWSER_AGENT_HOME, CDP_PORT, AGBROWSE_JSON_ERRORS, AGBROWSE_UPDATE_CHECK,
+AGBROWSE_UPDATE_CHECK_TTL, AGBROWSE_UPDATE_CHECK_LATEST, AGBROWSE_WEB_AI_AUTO_START,
+AGBROWSE_PROVIDER_POOL_MAX_PER_KEY, CHROME_HEADLESS, CHROME_NO_SANDBOX,
+CHROME_BINARY_PATH, BROWSER_SCRIPT
+
+--- Release gates: 17 named gates + gate:no-cloud-claims in both EN and KO ---
+gate:all, gate:typecheck, gate:tests, gate:truth-table-fresh, gate:mcp-scope-frozen,
+gate:no-experimental-in-readme-ready-section, gate:no-cloud-claims,
+gate:browser-primitives-complete, gate:observation-bundle-fixtures,
+gate:observe-actions-fixtures, gate:extract-schema-fixtures,
+gate:action-memory-safe-replay, gate:planner-loop-local,
+gate:eval-adapters-no-score-claims, gate:model-adapter-frozen,
+gate:trace-browser-actions, gate:mcp-deferred-metadata
+SSRF DNS pinning and validated redirects mentioned in coverage list.
+
+--- Changelog: 20 July 2026 entries in both EN and KO ---
+All required features documented: search command, adaptive-fetch ladder,
+TLS-impersonation/Camoufox/BM25/table-extractor/candidate-discovery,
+capability registry, annotated screenshots, interstitial detector,
+freshness gate, SSRF DNS pinning, validated redirects, GPT-Pro remediation,
+ChatGPT model contract, thinking efforts, timeout tiers, work send,
+research family, runway family, skills family, browser primitives expansion,
+web-ai subcommands, Deep Research, image output, follow-ups.
+Existing 2026-06-11 entries preserved.
+
+--- KO note: 3 initial grep 'failures' were false positives ---
+'capability registry' -> KO uses 'Capability registry' (rg is case-sensitive)
+'freshness gate' -> KO uses 'Freshness gate' (rg is case-sensitive)
+'remediation' -> KO uses Korean translation (교정 주기)
+
+--- Language tags ---
+EN files: lang='en'. KO files: lang='ko'. All correct.
+
+--- Scope ---
+Only the 8 files in write scope were modified. No _shell.css or other files touched.
+
+--- VERDICT: PASS ---
+All 8 doc files comprehensively updated, EN/KO in sync, shell structure preserved.

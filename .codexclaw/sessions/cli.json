@@ -1,0 +1,18 @@
+{
+  "phase": "IDLE",
+  "sessionId": "cli",
+  "slug": "",
+  "updatedAt": "2026-07-06T02:38:54.975Z",
+  "flags": {
+    "interview": false,
+    "auditPassed": false,
+    "checkPassed": false
+  },
+  "supersededBy": null,
+  "injectedTurns": [],
+  "lastInjectedPhase": null,
+  "orchestrationActive": false,
+  "interview": null,
+  "stopBlockPhase": null,
+  "stopBlockCount": 0
+}

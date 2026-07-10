@@ -1,0 +1,115 @@
+{
+  "objective": "agbrowse search 스킬을 cxc-search 수준 규율로 튜닝 + references/ 모듈화: Source-Proof Invariant, depth classifier, 3-tier ladder(네이티브 디스커버리→agbrowse 증명→--deep), Korean Intent Guard, query-rewrite/evidence-ladder/deep-research/cli-reference 4모듈. 전 주장 실코드 근거, 설치 실측, 게이트 통과. sol 서브에이전트만 사용.",
+  "slug": "agbrowse-search-cxc-search-references-source-pro",
+  "createdAt": "2026-07-10T23:18:29.381Z",
+  "updatedAt": "2026-07-10T23:18:29.382Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1",
+      "title": "허브 SKILL.md 리라이트 + query-rewrite.md (메인)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "SKILL.md: invariant/classifier/ladder/guard/stop + 라우팅 테이블",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "references/query-rewrite.md",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1",
+        "c2"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "sol 워커 병렬: evidence-ladder+cli-reference / deep-research",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "references/evidence-ladder.md + cli-reference.md (워커1)",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "references/deep-research.md (워커2)",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1",
+        "c2"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "C게이트 리뷰 + 설치 실측 + 게이트",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "fresh sol 리뷰어 감사 + 폴드백",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "skills install 실측 + vitest + counts/drift/release-gates",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c3",
+        "c4",
+        "c5"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1",
+      "scenario": "SKILL.md 허브 + references 4파일 존재, 허브 라우팅 테이블이 각 모듈 안내",
+      "status": "met",
+      "expectedEvidence": "ls skills/search/references + rg 라우팅 테이블",
+      "capturedEvidence": "ls skills/search/references: cli-reference.md, deep-research.md, evidence-ladder.md, query-rewrite.md; SKILL.md Module Map table routes all 4; total 851+ lines across 5 files"
+    },
+    {
+      "id": "c2",
+      "scenario": "콘텐츠 계약 7항 반영: invariant 최상단, depth classifier, 정직한 3-tier(SERP 폴백 명시), PROOF 규칙, KO intent guard 8, stop 규칙, 유령 기능 0",
+      "status": "met",
+      "expectedEvidence": "rg 증거 + 리뷰어 감사 통과",
+      "capturedEvidence": "hub: Source-Proof Invariant first section, Research-Depth Classifier, 3-tier ladder with no-stdin SERP prohibition (avoid entirely for proof), Proof Rules, 8-rule Intent Guard, When to Stop. A-gate (Confucius, sol) 6 fixes + C-gate (McClintock, sol) 4 fixes all folded: disconfirm purpose naming, max-queries cap caveat, worked examples replaced with ACTUAL planner output (live runs pasted), vendor allowlist note. No Exa/Tavily/provider promises, no codexclaw concepts (verified by C-gate honesty audit)"
+    },
+    {
+      "id": "c3",
+      "scenario": "skills install이 references/ 포함 복사",
+      "status": "met",
+      "expectedEvidence": "임시 타겟 설치 후 ls 출력",
+      "capturedEvidence": "skills install to mktemp target: search/SKILL.md + search/references/{4 files} copied (live output captured)"
+    },
+    {
+      "id": "c4",
+      "scenario": "회귀 없음: cli-install-skills/skill-install/cli-help green",
+      "status": "met",
+      "expectedEvidence": "vitest tail",
+      "capturedEvidence": "vitest cli-install-skills + skill-install + cli-help: 22 passed"
+    },
+    {
+      "id": "c5",
+      "scenario": "verify-counts/check-doc-drift/release-gates 통과",
+      "status": "met",
+      "expectedEvidence": "각 커맨드 exit 0 tail",
+      "capturedEvidence": "verify-counts 76 pass (fix-counts 1 row skills/search 1->5 files), check-doc-drift 164 pass, release-gates exit=0 240 PASS — rerun fresh after final foldback"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

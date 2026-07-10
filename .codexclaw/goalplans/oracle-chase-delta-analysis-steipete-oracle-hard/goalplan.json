@@ -1,0 +1,86 @@
+{
+  "objective": "Oracle Chase Delta Analysis — steipete/oracle hardening comparison for agbrowse. Analyze all Oracle commits since anchor 2fa6b5a (2026-06-23), produce 5 devlog documents (00_overview, 10_terminal_gate, 20_conversation_readiness, 30_bridge_artifact, 40_gap_matrix) in devlog/_plan/260712_oracle_chase/.",
+  "slug": "oracle-chase-delta-analysis-steipete-oracle-hard",
+  "createdAt": "2026-07-11T18:20:59.338Z",
+  "updatedAt": "2026-07-12T03:35:00.000Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1-delta-analysis-docs",
+      "title": "Oracle delta analysis — fetch commits, write 5 devlog documents, audit review",
+      "status": "done",
+      "tasks": [
+        { "id": "t1-fetch-commits", "title": "Fetch Oracle commits since 2fa6b5a via GitHub API (1146107, 83c3ca2, bda0326)", "status": "done" },
+        { "id": "t2-write-overview", "title": "Write 00_overview.md with anchor update and delta summary", "status": "done" },
+        { "id": "t3-write-terminal", "title": "Write 10_terminal_gate_hardening.md with fingerprint/proofA/sidecar analysis", "status": "done" },
+        { "id": "t4-write-readiness", "title": "Write 20_conversation_readiness.md with turn-ordering/placeholder comparison", "status": "done" },
+        { "id": "t5-write-bridge", "title": "Write 30_bridge_artifact_transfer.md with bridge relevance assessment", "status": "done" },
+        { "id": "t6-write-matrix", "title": "Write 40_gap_matrix.md with 18 gaps classified P0-Defer", "status": "done" },
+        { "id": "t7-audit-review", "title": "Sol reviewer audit: GO-WITH-FIXES (blockers=2), both folded back", "status": "done" }
+      ],
+      "criteriaIds": ["c1-docs-exist", "c2-shas-real", "c3-paths-exist", "c4-anchor-recorded"]
+    },
+    {
+      "id": "wp2-source-verification",
+      "title": "Source-level verification of P1 gaps via parallel sol explorer subagents",
+      "status": "done",
+      "tasks": [
+        { "id": "t8-explorer-g1g2", "title": "Explorer Laplace: verify G1/G2 response-observer stability logic", "status": "done" },
+        { "id": "t9-explorer-g3g4", "title": "Explorer Schrodinger: verify G3/G4 thinking-active/progress detection", "status": "done" },
+        { "id": "t10-explorer-g5g6", "title": "Explorer Archimedes: verify G5/G6 turn-ordering and placeholder rejection", "status": "done" },
+        { "id": "t11-write-verification", "title": "Write 50_source_verification.md with 23 file:line anchors", "status": "done" },
+        { "id": "t12-update-matrix", "title": "Update gap matrix with revised priorities (G1→Defer, G2→P2, G5→P0)", "status": "done" }
+      ],
+      "criteriaIds": ["c5-source-grounded", "c6-priorities-revised"]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1-docs-exist",
+      "scenario": "All 5+ devlog documents exist in devlog/_plan/260712_oracle_chase/",
+      "expectedEvidence": "ls showing 5+ .md files",
+      "capturedEvidence": "6 documents: 00_overview.md (99 lines), 10_terminal_gate_hardening.md (83), 20_conversation_readiness.md (121), 30_bridge_artifact_transfer.md (93), 40_gap_matrix.md (99), 50_source_verification.md (128). Total 623 lines.",
+      "status": "met"
+    },
+    {
+      "id": "c2-shas-real",
+      "scenario": "All cited Oracle commit SHAs are verified real via GitHub API",
+      "expectedEvidence": "GitHub API fetch_commit results for key SHAs",
+      "capturedEvidence": "3 key commits fetched via mcp__codex_apps__github___fetch_commit: 114610762975ca96136e92387c31fd875c6b03a2 (terminal gate), 83c3ca25a894dfd667c6e3d80db98f76d655a42f (conversation readiness), bda0326d43b02c5346e742692865fc21d8c5fc35 (bridge artifact). All returned valid diffs. Sol reviewer independently confirmed all SHAs match described changes.",
+      "status": "met"
+    },
+    {
+      "id": "c3-paths-exist",
+      "scenario": "All cited agbrowse file paths exist in the repo",
+      "expectedEvidence": "test -f for each cited path",
+      "capturedEvidence": "11/11 agbrowse files verified existing: chatgpt-response-observer.mjs, chatgpt-response-dom.mjs, tab-finalizer.mjs, watcher.mjs, tab-recovery.mjs, tab-inspect.mjs, session.mjs, chatgpt.mjs, chatgpt-files.mjs, code-artifact.mjs, session-artifacts.mjs. Sol reviewer independently confirmed.",
+      "status": "met"
+    },
+    {
+      "id": "c4-anchor-recorded",
+      "scenario": "00_overview.md records new Oracle head SHA and date",
+      "expectedEvidence": "Anchor table in 00_overview.md",
+      "capturedEvidence": "00_overview.md contains anchor table: Oracle head SHA 114610762975ca96136e92387c31fd875c6b03a2, date 2026-07-11, previous anchor 2fa6b5a 2026-06-23.",
+      "status": "met"
+    },
+    {
+      "id": "c5-source-grounded",
+      "scenario": "Gap classifications verified against actual agbrowse source code with file:line anchors",
+      "expectedEvidence": "50_source_verification.md with verbatim code anchors",
+      "capturedEvidence": "50_source_verification.md contains 23 file:line source anchors across 11 agbrowse files. Three parallel sol explorer subagents independently verified: G1 Covered (MutationObserver characterData + exact string compare at observer.mjs:62,133), G3 Missing (isStreaming Stop-only at chatgpt.mjs:730), G4 Missing (no sidecar selectors), G5 Missing (count-based baseline at chatgpt.mjs:434, session.mjs:512), G6 Partial (PLACEHOLDER_PATTERNS at chatgpt.mjs:70-86).",
+      "status": "met"
+    },
+    {
+      "id": "c6-priorities-revised",
+      "scenario": "Gap priorities revised based on source evidence, not assumptions",
+      "expectedEvidence": "40_gap_matrix.md updated with evidence-backed reclassifications",
+      "capturedEvidence": "40_gap_matrix.md Source Verification section records: G1 P1→Defer (Covered), G2 P1→P2 (Low risk), G5 P1→P0 (count-based baseline vulnerable), G6 P1→P2 (most patterns covered). Final distribution: P0(1), P1(2), P2(9), Defer(6).",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": true,
+    "armedAt": "2026-07-11T18:20:59.338Z",
+    "source": "freeze"
+  }
+}

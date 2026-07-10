@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vision QA — canvas targets</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #f4f5f7; font-family: -apple-system, sans-serif; }
+  #status { position: fixed; top: 8px; right: 12px; font-size: 13px; color: #333; background: #fff; border: 1px solid #ccc; padding: 4px 10px; z-index: 10; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="status" data-last-hit="none">last hit: none</div>
+<canvas id="c" width="1280" height="800"></canvas>
+<script>
+// Ground-truth targets drawn on canvas — NO DOM elements, so snapshot gives no refs.
+// Each target: id, label, cx, cy (center in CSS px), w, h.
+const TARGETS = [
+  { id: 'play',     label: 'Play',        cx: 160, cy: 140, w: 120, h: 44, color: '#2e7d32' },
+  { id: 'stop',     label: 'Stop',        cx: 340, cy: 140, w: 120, h: 44, color: '#c62828' },
+  { id: 'settings', label: 'Settings',    cx: 1100, cy: 90,  w: 44,  h: 44, color: '#455a64', gear: true },
+  { id: 'save',     label: 'Save draft',  cx: 240, cy: 420, w: 160, h: 40, color: '#1565c0' },
+  { id: 'tiny-x',   label: 'x',           cx: 1180, cy: 300, w: 18,  h: 18, color: '#6a1b9a' },
+  { id: 'zoom-in',  label: '+',           cx: 1150, cy: 640, w: 32,  h: 32, color: '#00695c' },
+  { id: 'zoom-out', label: '-',           cx: 1150, cy: 690, w: 32,  h: 32, color: '#00695c' },
+  { id: 'upload',   label: 'Upload file', cx: 640, cy: 560, w: 170, h: 46, color: '#ef6c00' },
+];
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(40, 40, 1200, 720);
+  ctx.strokeStyle = '#ddd';
+  ctx.strokeRect(40, 40, 1200, 720);
+  for (const t of TARGETS) {
+    ctx.fillStyle = t.color;
+    ctx.fillRect(t.cx - t.w / 2, t.cy - t.h / 2, t.w, t.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = t.w < 40 ? '12px sans-serif' : '15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (t.gear) {
+      ctx.font = '20px sans-serif';
+      ctx.fillText('\u2699', t.cx, t.cy + 1);
+    } else {
+      ctx.fillText(t.label, t.cx, t.cy + 1);
+    }
+  }
+}
+draw();
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  let hit = 'miss';
+  for (const t of TARGETS) {
+    if (Math.abs(x - t.cx) <= t.w / 2 && Math.abs(y - t.cy) <= t.h / 2) { hit = t.id; break; }
+  }
+  const status = document.getElementById('status');
+  status.dataset.lastHit = hit;
+  status.dataset.lastX = String(Math.round(x));
+  status.dataset.lastY = String(Math.round(y));
+  status.textContent = `last hit: ${hit} (${Math.round(x)}, ${Math.round(y)})`;
+  window.__lastHit = { hit, x, y };
+});
+window.__targets = TARGETS;
+</script>
+</body>
+</html>

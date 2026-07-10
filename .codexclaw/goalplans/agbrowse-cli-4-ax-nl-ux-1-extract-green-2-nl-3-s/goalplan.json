@@ -1,0 +1,133 @@
+{
+  "objective": "agbrowse CLI 커맨드 표면 + 번들 스킬 4종 최신화 (AX+인간 NL UX): (1) extract 배선 복구+테스트 green (2) 헬프 텍스트 NL 라우팅 (3) SKILL.md 4종 델타 반영 (4) SoT 동기화(commands.md/CAPABILITY_TRUTH_TABLE/README/str_func 카운트) + release-gates 통과. Out of scope: docs/index.html 리디자인 미커밋 변경 보존, docs/dev 콘텐츠, 커밋 생성.",
+  "slug": "agbrowse-cli-4-ax-nl-ux-1-extract-green-2-nl-3-s",
+  "createdAt": "2026-07-10T22:49:19.004Z",
+  "updatedAt": "2026-07-10T22:49:19.005Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1",
+      "title": "extract 배선 복구 + 테스트 green",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "browser.mjs에 case 'extract' 디스패치 + usage 헤더 라인",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "extract unit+integration 테스트 전부 green",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "SKILL.md 4종 + 헬프 텍스트 + SoT 병렬 갱신 (opus 워커)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "browser SKILL.md: extract 섹션 + 최신 정합",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "web-ai SKILL.md: GPT-5.6/Work/timeout tier 정합",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t3",
+          "title": "vision-click SKILL.md: Phase 40 반영",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t4",
+          "title": "search SKILL.md 정합 + extract 교차링크",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t5",
+          "title": "루트 헬프 NL 라우팅 + search/extract 노출",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t6",
+          "title": "commands.md/CAPABILITY_TRUTH_TABLE/README extract+runway 정합",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c2",
+        "c3",
+        "c4"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "게이트 검증 + 증거 기록",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "cli-help/extract vitest + release-gates fresh 실행",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "rg/헬프 실측 증거 수집 + 카운트 동기화",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c5"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1",
+      "scenario": "npx vitest run test/unit/browser-extract-mapping.test.mjs test/integration/extract-cli.test.mjs 전부 통과",
+      "expectedEvidence": "vitest 출력 tail: 0 failed",
+      "capturedEvidence": "npx vitest run browser-extract-mapping + extract-cli: 24 passed (2 files), 08:57 KST; cli-install-skills+cli-help: 14 passed after search skill registration; post C-gate foldback: extract 25/25 (added invalid --source rejection test, extract.mjs exit-1 validation)",
+      "status": "met"
+    },
+    {
+      "id": "c2",
+      "scenario": "SKILL.md 4종에 델타 반영 (vision-click: two-pass/coord-chain, browser: extract 섹션, web-ai: GPT-5.6 정합, search: 교차링크)",
+      "expectedEvidence": "rg 매치 라인 + git diff --stat",
+      "capturedEvidence": "WorkerA browser SKILL.md +87/-9 (extract section L228-293, routing L128-153, rg extract=20 matches); WorkerB vision-click SKILL.md 14 accuracy fixes w/ file:line proof, phase40 phantom excluded; WorkerC web-ai NOOP verified vs chatgpt-model/session/gemini/grok-model.mjs, search SKILL.md extract cross-link L189-220; git diff --stat: 4 SKILL.md files modified",
+      "status": "met"
+    },
+    {
+      "id": "c3",
+      "scenario": "루트 헬프 출력에 search/extract + NL 라우팅 힌트 노출",
+      "expectedEvidence": "node bin/agbrowse.mjs --help 실측 출력 발췌",
+      "capturedEvidence": "node bin/agbrowse.mjs live output: L16-17 search/extract in Quick start, L25-28 Pick the right command NL routing block, L110-115 Extract help section; cli-help.test.mjs green",
+      "status": "met"
+    },
+    {
+      "id": "c4",
+      "scenario": "commands.md/CAPABILITY_TRUTH_TABLE.md/README.md에 extract 표기 + runway 표 실표면 정합",
+      "expectedEvidence": "rg extract 매치 + runway 표 vs CLI 비교 근거",
+      "capturedEvidence": "WorkerD: commands.md +25 (extract row L26, Extract Command section L85-104, runway prose note under intact 5-row table), CAPABILITY_TRUTH_TABLE extract CLI row L62 experimental, README +18 Structured Extraction L122-139; check-doc-drift.sh 164 assertions pass",
+      "status": "met"
+    },
+    {
+      "id": "c5",
+      "scenario": "cli-help vitest green + npm run test:release-gates 통과",
+      "expectedEvidence": "두 커맨드 fresh 출력 tail, exit 0",
+      "capturedEvidence": "npm run test:release-gates exit=0 240 PASS; verify-counts 76 PASS after fix-counts (16 rows); vitest: unit 1291/1291, integration subset 64/64 (bin-shim, web-ai-cli-contract, cli-help, cli-install-skills, extract-cli); final re-run after foldback: doc-drift 164 pass, verify-counts 76 pass (fix-counts 2 rows), release-gates exit=0 240 PASS",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

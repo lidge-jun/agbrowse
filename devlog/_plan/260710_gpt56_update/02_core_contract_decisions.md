@@ -1,7 +1,7 @@
 # 02 - GPT-5.6 코어 계약 결정
 
-상태: **DECIDED (Chat guard + dedicated Work entrypoint contract)**
-근거: `00_index.md:32-45`, `01_ui_contract_evidence.md:7-129`
+상태: **DECIDED (Chat guard + dedicated Work entrypoint contract)**  
+근거: `00_index.md:32-45`, `01_ui_contract_evidence.md:7-129`  
 소비자: 03 Chat selector, 04 Work guard, 05 timeout, 06 diagnostics,
 07 fixtures, 08 public docs, 09 drift gates
 

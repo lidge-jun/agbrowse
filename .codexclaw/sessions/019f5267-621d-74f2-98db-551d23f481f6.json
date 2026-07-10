@@ -1,0 +1,24 @@
+{
+  "phase": "C",
+  "sessionId": "019f5267-621d-74f2-98db-551d23f481f6",
+  "slug": "final-red-team-verification-fin-promotion-dev-pu",
+  "updatedAt": "2026-07-13T11:21:03.555Z",
+  "flags": {
+    "interview": false,
+    "auditPassed": true,
+    "checkPassed": false
+  },
+  "supersededBy": null,
+  "injectedTurns": [
+    "019f5267-6639-7a70-9c62-5da8ebce671c",
+    "019f5ae7-c6c4-72a3-8a4f-0de818689105",
+    "019f5b0c-1cee-7031-a2a9-d56564424b09",
+    "019f5b1e-0773-73f3-8aad-21767aca3c1e",
+    "019f5b2b-ddbe-7023-8bd3-fb921c31c86d"
+  ],
+  "lastInjectedPhase": "C",
+  "orchestrationActive": true,
+  "interview": null,
+  "stopBlockPhase": null,
+  "stopBlockCount": 0
+}

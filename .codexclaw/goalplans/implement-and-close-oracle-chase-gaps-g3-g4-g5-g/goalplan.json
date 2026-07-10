@@ -1,0 +1,56 @@
+{
+  "objective": "Implement and close Oracle chase gaps G3/G4/G5/G6 in agbrowse with devlog documentation. Patch 4 gaps, write devlog close-out docs, verify with tests.",
+  "slug": "implement-and-close-oracle-chase-gaps-g3-g4-g5-g",
+  "createdAt": "2026-07-13T09:57:34.565Z",
+  "updatedAt": "2026-07-13T10:30:00.000Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1-streaming-hardening",
+      "title": "G6+G3+G4: Placeholder, progress bar, and sidecar detection hardening",
+      "status": "done",
+      "tasks": [
+        { "id": "t1-g6-placeholder", "title": "Add ChatGPT said: Answer now to PLACEHOLDER_PATTERNS", "status": "done" },
+        { "id": "t2-g3-progressbar", "title": "Add progress/progressbar detection to isStreaming (aria-valuenow excluded after reviewer FAIL)", "status": "done" },
+        { "id": "t3-g4-sidecar", "title": "Add sidecar panel detection with includes thought-for exclusion", "status": "done" },
+        { "id": "t4-devlog-60", "title": "Write 60_streaming_hardening_closeout.md", "status": "done" }
+      ],
+      "criteriaIds": ["c1-g6", "c2-g3", "c3-g4"]
+    },
+    {
+      "id": "wp2-turn-ordering",
+      "title": "G5: Turn ordering verification in polling path",
+      "status": "done",
+      "tasks": [
+        { "id": "t5-g5-ordering", "title": "Add doesAssistantFollowUser with compareDocumentPosition + result!==false mock safety", "status": "done" },
+        { "id": "t6-devlog-70", "title": "Write 70_turn_ordering_closeout.md", "status": "done" }
+      ],
+      "criteriaIds": ["c4-g5"]
+    },
+    {
+      "id": "wp3-verification",
+      "title": "Final verification, gap matrix update, tests",
+      "status": "done",
+      "tasks": [
+        { "id": "t7-tests", "title": "Run npm test and verify all pass", "status": "done" },
+        { "id": "t8-matrix", "title": "Update 40_gap_matrix.md with implementation status", "status": "done" },
+        { "id": "t9-diffcheck", "title": "git diff --check clean", "status": "done" }
+      ],
+      "criteriaIds": ["c5-tests", "c6-devlog", "c7-matrix"]
+    }
+  ],
+  "criteria": [
+    { "id": "c1-g6", "scenario": "G6 placeholder pattern covers ChatGPT said: Answer now", "expectedEvidence": "grep showing new pattern in chatgpt.mjs", "capturedEvidence": "rg 'chatgpt said' web-ai/chatgpt.mjs → /^chatgpt said:\\s*answer now\\s*$/i. Sol reviewer Mencius PASS.", "status": "met" },
+    { "id": "c2-g3", "scenario": "G3 progress bar detection in general streaming path", "expectedEvidence": "grep showing progressbar/progress selector in chatgpt.mjs", "capturedEvidence": "rg progressbar web-ai/chatgpt.mjs → [role=progressbar] in isStreaming(). [aria-valuenow] removed after sol reviewer Pascal FAIL (slider false positive).", "status": "met" },
+    { "id": "c3-g4", "scenario": "G4 sidecar panel detection with past-tense exclusion", "expectedEvidence": "grep showing sidecar/sidebar/aside detection in chatgpt.mjs", "capturedEvidence": "rg sidecar web-ai/chatgpt.mjs → page.evaluate() with aside/complementary/dialog/sidecar/sidebar selectors + label.includes('thought for') exclusion. Sol reviewer Mencius PASS.", "status": "met" },
+    { "id": "c4-g5", "scenario": "G5 turn ordering: latest assistant follows latest user", "expectedEvidence": "code showing user-turn DOM ordering check before accepting response", "capturedEvidence": "grep -n doesAssistantFollowUser chatgpt.mjs → line 365 (function) + line 469 (usage). compareDocumentPosition + result!==false. Sol high reviewer Kierkegaard PASS. Integration tests 6/6 pass.", "status": "met" },
+    { "id": "c5-tests", "scenario": "All tests pass", "expectedEvidence": "npm test output with 0 failures", "capturedEvidence": "npx vitest run: 1455 passed, 0 failed, 17 skipped (2 file-level Playwright env failures are pre-existing chromium_headless_shell not installed).", "status": "met" },
+    { "id": "c6-devlog", "scenario": "Devlog close-out documents written", "expectedEvidence": "ls showing 60_ and 70_ docs in oracle_chase", "capturedEvidence": "ls devlog/_plan/260712_oracle_chase/ → 60_streaming_hardening_closeout.md (EXISTS) + 70_turn_ordering_closeout.md (EXISTS). 8 total docs in folder.", "status": "met" },
+    { "id": "c7-matrix", "scenario": "Gap matrix updated with implementation status", "expectedEvidence": "grep showing implemented status in 40_gap_matrix.md", "capturedEvidence": "40_gap_matrix.md shows G3/G4/G5/G6 all marked IMPLEMENTED/Done with close dates 2026-07-13. Implementation Close-out section added.", "status": "met" }
+  ],
+  "host": {
+    "armed": true,
+    "armedAt": "2026-07-13T09:57:34.565Z",
+    "source": "freeze"
+  }
+}

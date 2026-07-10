@@ -1,0 +1,22 @@
+{
+  "phase": "IDLE",
+  "sessionId": "019f4bad-07ec-7870-b00a-88f7ace537a5",
+  "slug": "agbrowse-github-pages-docs-index-html-c5-neo-bru",
+  "updatedAt": "2026-07-10T12:37:36.298Z",
+  "flags": {
+    "interview": false,
+    "auditPassed": false,
+    "checkPassed": false
+  },
+  "supersededBy": null,
+  "injectedTurns": [
+    "019f4be7-dcd0-7c40-850d-27b1a2ec5a32",
+    "019f4c04-2696-7613-87b0-8e5f6b85c913",
+    "019f4c08-8b50-7542-8e72-78e1aa86347c"
+  ],
+  "lastInjectedPhase": null,
+  "orchestrationActive": false,
+  "interview": null,
+  "stopBlockPhase": null,
+  "stopBlockCount": 0
+}
