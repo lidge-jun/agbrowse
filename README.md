@@ -31,34 +31,6 @@ workflow. It gives an agent a small CLI surface for:
 It does not require a long-running MCP server. Each command is a short-lived
 Node process that reconnects to the same Chrome DevTools Protocol endpoint.
 
-## What's New in 0.1.17
-
-- **GPT-5.6 Chat contract**: select Chat families with
-  `--family gpt-5.6-sol|gpt-5.5|gpt-5.4|gpt-5.3|o3` and use canonical
-  `--effort medium|high|xhigh` values. The runtime understands the current
-  flat `Instant (5.5) / Medium / High / Extra High / Pro` Intelligence picker.
-- **ChatGPT Work surface v1**: submit through the dedicated
-  `agbrowse web-ai work send --prompt "..." --power 1..6` command or MCP
-  `web_ai_work_send`. Chat `send/query/poll/watch` and
-  `web_ai_submit_prompt` fail closed on an active Work surface.
-- **Long-run recovery**: ChatGPT Pro polls receive a 5400-second default
-  deadline, while Grok Heavy and Deep Research keep independent 3600-second
-  tiers. Saved sessions retain their original deadline across shell exits.
-- **Search and extraction**: the modular `search` skill now separates discovery
-  from original-page proof, and `agbrowse extract` maps tables or JSON-LD to a
-  supplied schema with fail-closed validation.
-- **Agent-first distribution and QA routing**: `skills install` ships
-  `browser`, `web-ai`, `search`, and `vision-click`; Playwright/browser-QA
-  intent routes to agbrowse for ad-hoc inspection while preserving maintained
-  project E2E suites.
-- **GitHub Pages redesign**: the docs landing page now presents browser control,
-  web-AI, search, and evidence as full-screen product lanes with reduced-motion
-  support.
-
-Provider UI automation remains beta because provider DOM and account state can
-change. Schema-bound CLI extraction remains experimental; see the
-[capability truth table](structure/CAPABILITY_TRUTH_TABLE.md) for exact labels.
-
 ## Public Surface
 
 | Surface | Link | Status |
@@ -147,24 +119,6 @@ produces a `research-fetch-enrichment-v1` evidence ledger. `browse-plan`
 converts remaining weak candidates into a reasoned browser command plan without
 mutating browser state.
 
-### Structured Extraction
-
-`agbrowse extract` pulls structured data from a URL or local HTML file using a
-JSON schema, without calling an LLM. When no structure matches the schema, it
-returns a fail-closed `no_mappable_structure` verdict instead of silent partial
-data. Tier 2 web-ai escalation is available as an explicit opt-in.
-
-```bash
-# Extract table data matching a schema (Tier 1, LLM-free)
-agbrowse extract "https://example.com/products" --schema products.json --json
-
-# Extract from a local HTML file
-agbrowse extract --from-file page.html --schema products.json --json
-
-# Tier 2: escalate to web-ai on Tier 1 failure
-agbrowse extract "https://example.com/products" --schema products.json --escalate-web-ai --vendor grok
-```
-
 ## What It Is Good For
 
 - **Browser automation for agents**: navigate, snapshot, click refs, type,
@@ -241,17 +195,16 @@ passing on `main`. Release publishing is dispatched through `release.yml`.
 
 This repository is packaged as a standalone skill/runtime.
 
-Source structure as of 2026-07-11:
+Source structure as of 2026-06-27:
 
 | Path | Files | Lines | Role |
 | --- | ---: | ---: | --- |
-| `skills/browser/` | 55 | 16 320 | Chrome lifecycle, CDP, refs, tabs, adaptive fetch v2, search, extract, Runway |
-| `skills/search/` | 5 | 896 | proof-first search skill hub and modular references |
-| `web-ai/` | 113 | 27 441 | provider automation, sessions, MCP, eval, policy, trace |
-| `test/unit/` | 141 | 17 628 | deterministic module tests |
-| `test/integration/` | 21 | 3 165 | CLI, MCP, policy, provider fixture tests |
+| `skills/browser/` | 54 | 15 587 | Chrome lifecycle, CDP, refs, tabs, adaptive fetch v2, search, Runway |
+| `web-ai/` | 112 | 25 409 | provider automation, sessions, MCP, eval, policy, trace |
+| `test/unit/` | 136 | 15 340 | deterministic module tests |
+| `test/integration/` | 19 | 2 639 | CLI, MCP, policy, provider fixture tests |
 | `scripts/` | 10 | 1 621 | release gates, eval runner, strict-baseline checks |
-| `docs/` | 41 | 3 540 | adoption, trace, production-readiness, developer docs |
+| `docs/` | 41 | 2 635 | adoption, trace, production-readiness, developer docs |
 
 Architecture and release-claim source of truth live in
 [`structure/INDEX.md`](structure/INDEX.md) and the Phase 11+ truth table lives
@@ -378,7 +331,7 @@ rungs:
 | --- | --- |
 | 203.1 TLS impersonation | JA3 fingerprint spoofing via `curl-impersonate` on 403/429/challenge, inserted before browser escalation |
 | 203.2 yt-dlp media reader | Extracts metadata and transcripts from video URLs via `yt-dlp` |
-| 203.3 Camoufox browser lane | Optional Firefox-based browser session via Camoufox for alternate rendering |
+| 203.3 Camoufox stealth lane | Firefox-based stealth browser session via Camoufox for anti-bot-heavy targets |
 | 203.4 Feed parser | RSS, Atom, and JSON Feed detection and parsing into structured evidence |
 | 203.5 BM25 lexical reranker | Content-relevance scoring using BM25 term weighting |
 | 203.6 Structured extractor | Table and heading extraction from HTML into structured records |
@@ -498,9 +451,8 @@ For Codex:
 agbrowse skills install --target ~/.codex/skills
 ```
 
-The default mode copies the bundled `browser`, `web-ai`, `search`, and
-`vision-click` skill directories. Use `--json` when another agent will parse
-the result:
+The default mode copies the bundled `browser`, `web-ai`, and `vision-click`
+skill directories. Use `--json` when another agent will parse the result:
 
 ```bash
 agbrowse skills install --target ~/.cli-jaw-3460/skills --json
