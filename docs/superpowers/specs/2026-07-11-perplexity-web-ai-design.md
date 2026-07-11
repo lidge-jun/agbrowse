@@ -117,9 +117,11 @@ Selection is fail-closed: after clicking a model or toggle, the runtime must
 read the resulting DOM state and verify it matches the request.
 
 The thinking control is not nested inside the selected model row. For an
-eligible selected model, the observed structure is an adjacent
+eligible selected model, the observed structure is the immediate next element
+sibling, not merely a later matching sibling: an adjacent
 `role=menuitemcheckbox` with visible text `Thinking`, containing exactly one
-`button[role=switch]`. The fixed order is model selection and verification,
+direct-child `button[role=switch]`. Traversal may not skip an intervening row.
+The fixed order is model selection and verification,
 then adjacent checkbox/switch discovery, switch mutation only when effort is
 explicit, and final verification of both states. When effort is omitted, the
 runtime performs no switch click and records the state only when it can read
@@ -144,8 +146,11 @@ This module owns:
 - stop via Escape
 
 The provider must work for both initial searches that navigate to a new
-`/search/...` URL and follow-up turns that remain on the same conversation URL.
+`/search/<UUID>` URL and follow-up turns that remain on the same conversation URL.
 URL change is evidence, not the sole completion condition.
+Until another authenticated ID grammar is captured, stored-session recovery
+accepts only UUID conversation paths. Both allowed hosts belong to one tab
+lifecycle pool and cleanup limit.
 The observed Search and Computer controls are separate `aria-pressed`
 buttons. V1 preserves their state and never clicks them.
 
@@ -232,7 +237,7 @@ Rules:
 - discard non-HTTP(S) URLs
 - deduplicate by normalized URL while retaining the first entry
 - retain a citation with an empty title when the URL is valid
-- never collect ordinary answer-body links, internal `/search/<id>` memory
+- never collect ordinary answer-body links, internal `/search/<UUID>` memory
   links, related questions, footer actions, or links from another turn
 
 `answerText` remains the full string for compatibility.
@@ -260,7 +265,7 @@ must change before the provider poller is built:
     "markdown": "full answer markdown",
     "citations": [
       {
-        "index": 1,
+        "index": null,
         "title": "Source title",
         "url": "https://example.com/source"
       }
@@ -286,7 +291,11 @@ implement structured citations.
 
 Missing citation DOM does not invalidate an otherwise complete answer. The
 result completes with `citations: []` and the string warning
-`citations-unavailable`.
+`citations-unavailable` after the citation grace, but only after a unique
+committed response root has been established. A missing/changed Sources
+control, unresolvable pane, or normalization that drops every candidate maps to
+the terminal degraded state `unavailable`; a missing or ambiguous committed
+response root never completes.
 
 Citation extraction remains DOM-primary even when copy-markdown supplies the
 answer body. The extractor receives the committed response locator, opens only
@@ -295,6 +304,13 @@ it never scans all anchors below the response. URL normalization resolves
 relative links, accepts only HTTP(S), removes fragments, preserves query
 parameters, and deduplicates by the resulting URL while retaining first
 visual order.
+
+Pane association is causal: record visible pane identities/fingerprints before
+the committed footer click, then accept only one newly visible pane, one unique
+changed pane fingerprint, or a fixture-proven ownership relation. Pane closing
+uses only an authenticated captured mechanism and verifies the answer text and
+response count did not change. V1 artifacts are immutable after completion;
+citations that arrive after the grace do not rewrite a terminal session.
 
 ## CLI And MCP Integration
 

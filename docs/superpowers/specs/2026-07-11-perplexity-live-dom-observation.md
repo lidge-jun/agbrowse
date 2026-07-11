@@ -54,6 +54,8 @@ TDD plan. Account text and unrelated history content are not fixture data.
   `role="menuitemcheckbox"` with visible text `Thinking`.
 - The checkbox contains one `button[role="switch"]` with `aria-checked` and
   `data-state=checked|unchecked`.
+- This evidence does not permit a selector that skips intervening siblings;
+  the implementation must inspect `following-sibling::*[1]` semantics.
 - Observed Terra state was Thinking OFF.
 - When effort is omitted, Web-AI must not require, click, or change this
   checkbox/switch.
@@ -93,6 +95,10 @@ TDD plan. Account text and unrelated history content are not fixture data.
 - The Sources pane does not expose numeric citation indices in the observed
   DOM; stored citation `index` is `null` unless explicit index evidence appears
   in a future fixture.
+- The first observation did not capture `aria-controls`, a stable pane ID,
+  close-button semantics, or verified Escape behavior. Task 5 must capture
+  before/after pane identity and the close mechanism before Task 8 implements
+  pane association or closing; fake fixtures may not invent either contract.
 
 ## Probe Evidence
 
@@ -104,4 +110,3 @@ A short query, `Reply exactly UI_PROBE_OK`, was submitted with GPT-5.6 Terra:
 - completed answer text included `UI_PROBE_OK`
 - completed footer reported `10 sources`
 - model preference was restored to Best after observation
-
