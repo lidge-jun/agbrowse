@@ -9,6 +9,7 @@ import {
     isImageAttachmentPath,
     scoreFileInputCandidate,
     setFilesViaUploadSurface,
+    resolveAttachmentUploadTimeoutMs,
 } from './chatgpt-upload-surface.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
@@ -71,6 +72,7 @@ import {
  * @property {AttachmentTarget|null} [uploadTarget]
  * @property {number|string|null} [maxUploadBytes]
  * @property {number|string|null} [maxImageBytes]
+ * @property {number|string|null} [attachmentUploadTimeoutMs]
  */
 
 const HARD_LIMIT_BYTES = 512 * 1024 * 1024;
@@ -226,16 +228,17 @@ export async function attachLocalFileLive(page, file, options = {}) {
         return { ok: false, stage: 'attachment-preflight', error: preflight.rejectedReason || 'preflight rejected', usedFallbacks };
     }
     warnings.push(...preflight.softWarnings);
+    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
 
     const inputSel = await findFirstFileInput(page, file);
     if (inputSel) {
         try {
-            await page.locator(inputSel).first().setInputFiles(file.path, { timeout: 10_000 });
+            await page.locator(inputSel).first().setInputFiles(file.path, { timeout: uploadTimeoutMs });
         } catch (e) {
             return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${/** @type {{message?: string}} */ (e)?.message}`, usedFallbacks };
         }
     } else {
-        const surfaceUpload = await setFilesViaUploadSurface(page, file.path, file, usedFallbacks, options.uploadTarget);
+        const surfaceUpload = await setFilesViaUploadSurface(page, file.path, file, usedFallbacks, options.uploadTarget, { uploadTimeoutMs });
         if (surfaceUpload.ok !== true) {
             return { ok: false, stage: 'attachment-upload', error: surfaceUpload.error, usedFallbacks };
         }
@@ -290,16 +293,17 @@ export async function attachLocalFilesLive(page, files, options = {}) {
     // the general (no-accept) input that takes all types.
     const batchIsImage = files.every(file => isImageAttachmentPath(file.basename || file.path || ''));
     const probeFile = { ...files[0], basename: batchIsImage ? files[0].basename : 'batch.bin' };
+    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
 
     const inputSel = await findFirstFileInput(page, probeFile);
     if (inputSel) {
         try {
-            await page.locator(inputSel).first().setInputFiles(files.map(file => file.path), { timeout: 15_000 });
+            await page.locator(inputSel).first().setInputFiles(files.map(file => file.path), { timeout: uploadTimeoutMs });
         } catch (e) {
             return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${/** @type {{message?: string}} */ (e)?.message}`, usedFallbacks };
         }
     } else {
-        const surfaceUpload = await setFilesViaUploadSurface(page, files.map(file => file.path), probeFile, usedFallbacks, options.uploadTarget);
+        const surfaceUpload = await setFilesViaUploadSurface(page, files.map(file => file.path), probeFile, usedFallbacks, options.uploadTarget, { uploadTimeoutMs });
         if (surfaceUpload.ok !== true) {
             return { ok: false, stage: 'attachment-upload', error: surfaceUpload.error, usedFallbacks };
         }

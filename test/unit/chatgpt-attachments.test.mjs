@@ -11,6 +11,7 @@ import {
     sendButtonTimeoutMs,
     UPLOAD_BUTTON_SELECTORS,
 } from '../../web-ai/chatgpt-attachments.mjs';
+import { resolveAttachmentUploadTimeoutMs } from '../../web-ai/chatgpt-upload-surface.mjs';
 
 describe('ChatGPT attachment upload surface', () => {
     it('tracks the current ChatGPT plus button label for upload capability probes', () => {
@@ -56,6 +57,20 @@ describe('ChatGPT attachment upload surface', () => {
         expect(page.filePath).toBe('/tmp/context.txt');
     });
 
+    it('passes explicit upload timeout through upload-menu file chooser', async () => {
+        const page = createUploadPage({ twoStepUploadMenu: true, menuItemFileChooser: true });
+        const result = await attachLocalFileLive(page, {
+            path: '/tmp/context.txt',
+            basename: 'context.txt',
+            sizeBytes: 12,
+        }, {
+            attachmentUploadTimeoutMs: 123_456,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(page.fileTimeout).toBe(123_456);
+    });
+
     it('uploads several mixed-type files through one setInputFiles array', async () => {
         const page = createUploadPage();
         const result = await attachLocalFilesLive(page, [
@@ -68,6 +83,20 @@ describe('ChatGPT attachment upload surface', () => {
         expect(result.stage).toBe('attachment-uploaded');
         // all three paths handed to setInputFiles in one call
         expect(page.filePath).toEqual(['/tmp/backend.zip', '/tmp/pixel.png', '/tmp/notes.txt']);
+    });
+
+    it('passes explicit upload timeout through direct batch setInputFiles', async () => {
+        const page = createUploadPage();
+        const result = await attachLocalFilesLive(page, [
+            { path: '/tmp/backend.zip', basename: 'backend.zip', sizeBytes: 200 },
+            { path: '/tmp/notes.txt', basename: 'notes.txt', sizeBytes: 12 },
+        ], {
+            uploadTarget: { selector: 'button[aria-label*="Attach" i]', resolution: 'css-fallback' },
+            attachmentUploadTimeoutMs: 98_765,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(page.fileTimeout).toBe(98_765);
     });
 
     it('delegates a single-element batch to the single-file path', async () => {
@@ -118,6 +147,21 @@ describe('ChatGPT attachment upload surface', () => {
         expect(sendButtonTimeoutMs(['context.pdf'])).toBe(45_000);
     });
 
+    it('resolves attachment upload timeout from explicit value or env fallback', () => {
+        const previous = process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS;
+        try {
+            delete process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS;
+            expect(resolveAttachmentUploadTimeoutMs(null)).toBe(60_000);
+            process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS = '77777';
+            expect(resolveAttachmentUploadTimeoutMs(undefined)).toBe(77_777);
+            expect(resolveAttachmentUploadTimeoutMs('88888')).toBe(88_888);
+            expect(resolveAttachmentUploadTimeoutMs('invalid')).toBe(60_000);
+        } finally {
+            if (previous === undefined) delete process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS;
+            else process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS = previous;
+        }
+    });
+
     it('builds scoped attachment readiness expression with nested label and count fallback terms', () => {
         const expression = buildAttachmentReadyExpression(['context.pdf']);
         expect(expression).toContain('Remove attachment');
@@ -134,6 +178,7 @@ function createUploadPage(options = {}) {
         clickedMenuItem: null,
         fileInputAvailable: false,
         filePath: null,
+        fileTimeout: null,
         chipVisible: false,
         menuOpen: false,
         waitedForFileChooser: false,
@@ -177,9 +222,10 @@ function createUploadLocator(page, selector) {
             if (page.twoStepUploadMenu && selector.includes('plus')) page.menuOpen = true;
             else page.fileInputAvailable = true;
         },
-        setInputFiles: async filePath => {
+        setInputFiles: async (filePath, options = {}) => {
             if (!isFileInput) throw new Error('not a file input');
             page.filePath = filePath;
+            page.fileTimeout = options.timeout;
             page.chipVisible = true;
         },
     };
@@ -194,8 +240,9 @@ function createUploadMenuItemLocator(page) {
             page.menuOpen = false;
             if (page.menuItemFileChooser && page.pendingFileChooser) {
                 page.pendingFileChooser({
-                    setFiles: async filePath => {
+                    setFiles: async (filePath, options = {}) => {
                         page.filePath = filePath;
+                        page.fileTimeout = options.timeout;
                         page.chipVisible = true;
                     },
                 });

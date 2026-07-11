@@ -17,6 +17,11 @@ import { basename } from 'node:path';
  */
 
 /**
+ * @typedef {Object} UploadSurfaceOptions
+ * @property {number|string|null} [uploadTimeoutMs]
+ */
+
+/**
  * @typedef {Object} UploadSurfaceResultOk
  * @property {true} ok
  * @property {string} method
@@ -32,6 +37,7 @@ import { basename } from 'node:path';
 /** @typedef {UploadSurfaceResultOk | UploadSurfaceResultFail} UploadSurfaceResult */
 
 export const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']);
+export const DEFAULT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
 
 export const UPLOAD_BUTTON_SELECTORS = [
     '[data-testid="composer-plus-btn"]',
@@ -141,23 +147,25 @@ export async function findFirstFileInput(page, file) {
  * @param {AttachmentProbeFile} probeFile
  * @param {string[]} usedFallbacks
  * @param {AttachmentTarget|null} [uploadTarget]
+ * @param {UploadSurfaceOptions} [options]
  * @returns {Promise<UploadSurfaceResult>}
  */
-export async function setFilesViaUploadSurface(page, filePaths, probeFile, usedFallbacks, uploadTarget = null) {
+export async function setFilesViaUploadSurface(page, filePaths, probeFile, usedFallbacks, uploadTarget = null, options = {}) {
     const selectors = uploadTarget?.selector ? [uploadTarget.selector] : UPLOAD_BUTTON_SELECTORS;
+    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.uploadTimeoutMs);
     let lastError = 'upload surface did not expose a file input or chooser';
     for (const selector of selectors) {
         const clicked = await clickUploadButton(page, selector, usedFallbacks);
         if (!clicked) continue;
         await page.waitForTimeout(300).catch(() => undefined);
 
-        const directInput = await setFilesOnDiscoveredInput(page, filePaths, probeFile, selector);
+        const directInput = await setFilesOnDiscoveredInput(page, filePaths, probeFile, selector, uploadTimeoutMs);
         if (directInput.ok === true) return directInput;
         lastError = directInput.error;
 
         const menuItem = await findVisibleUploadMenuItem(page);
         if (menuItem) {
-            const menuResult = await clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFile);
+            const menuResult = await clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFile, uploadTimeoutMs);
             if (menuResult.ok === true) return menuResult;
             lastError = menuResult.error;
         }
@@ -170,17 +178,30 @@ export async function setFilesViaUploadSurface(page, filePaths, probeFile, usedF
 }
 
 /**
+ * @param {unknown} value
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+export function resolveAttachmentUploadTimeoutMs(value, fallback = DEFAULT_ATTACHMENT_UPLOAD_TIMEOUT_MS) {
+    const configured = value ?? process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS;
+    if (configured === undefined || configured === null || configured === '') return fallback;
+    const parsed = Number(configured);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
  * @param {Page} page
  * @param {string|string[]} filePaths
  * @param {AttachmentProbeFile} probeFile
  * @param {string} openerSelector
+ * @param {number} uploadTimeoutMs
  * @returns {Promise<UploadSurfaceResult>}
  */
-async function setFilesOnDiscoveredInput(page, filePaths, probeFile, openerSelector) {
+async function setFilesOnDiscoveredInput(page, filePaths, probeFile, openerSelector, uploadTimeoutMs) {
     const inputSel = await findFirstFileInput(page, probeFile);
     if (!inputSel) return { ok: false, error: 'composer file input not found' };
     try {
-        await page.locator(inputSel).first().setInputFiles(filePaths, { timeout: 15_000 });
+        await page.locator(inputSel).first().setInputFiles(filePaths, { timeout: uploadTimeoutMs });
         return { ok: true, method: 'input', selector: inputSel };
     } catch (e) {
         return { ok: false, error: `setInputFiles after ${openerSelector} failed: ${/** @type {{message?: string}} */ (e)?.message}` };
@@ -192,9 +213,10 @@ async function setFilesOnDiscoveredInput(page, filePaths, probeFile, openerSelec
  * @param {Locator} menuItem
  * @param {string|string[]} filePaths
  * @param {AttachmentProbeFile} probeFile
+ * @param {number} uploadTimeoutMs
  * @returns {Promise<UploadSurfaceResult>}
  */
-async function clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFile) {
+async function clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFile, uploadTimeoutMs) {
     const chooserPromise = waitForFileChooser(page);
     const clicked = await menuItem.click({ timeout: 3_000 })
         .then(() => true)
@@ -210,7 +232,7 @@ async function clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFi
     const chooser = await chooserPromise;
     if (chooser) {
         try {
-            await chooser.setFiles(filePaths, { timeout: 15_000 });
+            await chooser.setFiles(filePaths, { timeout: uploadTimeoutMs });
             return { ok: true, method: 'filechooser' };
         } catch (e) {
             return { ok: false, error: `filechooser.setFiles failed: ${/** @type {{message?: string}} */ (e)?.message}` };
@@ -218,7 +240,7 @@ async function clickUploadMenuItemAndSetFiles(page, menuItem, filePaths, probeFi
     }
 
     await page.waitForTimeout(300).catch(() => undefined);
-    return setFilesOnDiscoveredInput(page, filePaths, probeFile, 'upload-menu-item');
+    return setFilesOnDiscoveredInput(page, filePaths, probeFile, 'upload-menu-item', uploadTimeoutMs);
 }
 
 /**

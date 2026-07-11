@@ -168,6 +168,7 @@ export async function grokSendWebAi(deps, input = {}) {
     if (uploadPath) {
         const uploaded = await attachLocalFileLive(page, fileInfoFromPath(uploadPath), {
             maxUploadBytes: input.maxUploadFileSize,
+            attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
         });
         if (!uploaded.ok) throw new WebAiError({
             errorCode: 'provider.attachment-evidence-missing',

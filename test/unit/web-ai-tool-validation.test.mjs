@@ -36,6 +36,7 @@ describe('web-ai tool input validation', () => {
             filePath: '/tmp/context.txt',
             reasoningEffort: 'high',
             maxUploadFileSize: 1024,
+            attachmentUploadTimeoutMs: 120000,
             policy: { version: 1 },
         })).toBe(true);
     });

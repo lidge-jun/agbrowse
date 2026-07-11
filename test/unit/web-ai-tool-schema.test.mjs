@@ -34,6 +34,7 @@ describe('web-ai MCP tool schema', () => {
         const submit = toolSchemaForMcp('web_ai_submit_prompt');
         expect(submit.description).toContain('CLI-only/deferred');
         expect(submit.inputSchema.properties.maxUploadFileSize).toMatchObject({ type: 'number', minimum: 1 });
+        expect(submit.inputSchema.properties.attachmentUploadTimeoutMs).toMatchObject({ type: 'number', minimum: 1 });
         expect(toolSchemaForMcp('web_ai_wait_response').description).toContain('recoverable timeout');
         expect(toolSchemaForMcp('web_ai_wait_response').description).toContain('sessionId');
         expect(toolSchemaForMcp('web_ai_session_resume').description).toContain('session-bound recovery');

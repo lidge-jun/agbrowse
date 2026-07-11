@@ -258,6 +258,7 @@ export async function sendWebAi(deps, input = {}) {
             const upload = await attachLocalFilesLive(page, uploadPaths.map(fileInfoFromPath), {
                 uploadTarget: /** @type {any} */ (uploadResolution?.target || null),
                 maxUploadBytes: input.maxUploadFileSize,
+                attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
             });
             if (!upload.ok) throw new WebAiError({
                 errorCode: 'provider.attachment-evidence-missing',

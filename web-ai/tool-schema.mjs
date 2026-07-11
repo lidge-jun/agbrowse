@@ -68,6 +68,7 @@ export const WEB_AI_TOOLS = {
                 description: 'Explicit submit timeout in seconds; overrides the selected tier default.',
             },
             maxUploadFileSize: { type: 'number', minimum: 1 },
+            attachmentUploadTimeoutMs: { type: 'number', minimum: 1 },
             policy: policySchema,
         }, ['prompt']),
     },

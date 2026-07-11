@@ -175,6 +175,10 @@ Attachments and context:
                                     Apps/Sites/connectors are not configured
                                     unless a future explicit flag requests them.
   --max-upload-file-size <bytes>    Per-file live upload cap for --file.
+  --attachment-upload-timeout-ms <ms>
+                                    Timeout for browser file handoff before the
+                                    provider processes the upload. Env fallback:
+                                    AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS.
   --max-context-file-size <bytes>   Preferred name for per-file context budget.
   --context-from-files <glob|path>  Add files to a context package; repeatable
   --context-exclude <glob>          Exclude from the package; repeatable
@@ -592,6 +596,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'max-file-size': { type: 'string' },
             'max-context-file-size': { type: 'string' },
             'max-upload-file-size': { type: 'string' },
+            'attachment-upload-timeout-ms': { type: 'string' },
             'files-report': { type: 'boolean', default: false },
             'context-transport': { type: 'string' },
             'trace-dir': { type: 'string' },
@@ -692,6 +697,7 @@ async function runWebAiCliInner(argv = [], deps) {
         maxInput: values['max-input'],
         maxFileSize: values['max-context-file-size'] || values['max-file-size'],
         maxUploadFileSize: values['max-upload-file-size'],
+        attachmentUploadTimeoutMs: values['attachment-upload-timeout-ms'] || process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS,
         filesReport: values['files-report'],
         contextTransport: values['context-transport'],
         inlineOnly: values['inline-only'],
