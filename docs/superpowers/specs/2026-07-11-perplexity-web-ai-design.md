@@ -22,6 +22,9 @@ are outside the first release.
 
 The observed mobile model-picker screen used for this design is preserved at
 `docs/superpowers/specs/assets/perplexity-model-picker.jpg`.
+The authenticated desktop DOM observation from July 11, 2026 is recorded at
+`docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md` and is
+the source of truth when it resolves ambiguity in the screenshot.
 
 ## Current Architecture
 
@@ -59,7 +62,7 @@ Canonical model aliases:
 | Alias | Visible label |
 | --- | --- |
 | `best` | `Best` / localized equivalent such as `최고` |
-| `sonar-2` | `Sonar 2` (provisional; only admitted if live DOM proves it is selectable) |
+| `sonar-2` | `Sonar 2` |
 | `gpt-5.6-terra` | `GPT-5.6 Terra` |
 | `gpt-5.6-sol` | `GPT-5.6 Sol` |
 | `gemini-3.1-pro` | `Gemini 3.1 Pro` |
@@ -69,16 +72,20 @@ Canonical model aliases:
 | `kimi-k2.6` | `Kimi K2.6` |
 | `nemotron-3-ultra` | `Nemotron 3 Ultra` |
 
-`gpt-5.6-sol` and `claude-opus-4.8` must remain valid aliases even when the UI
+The observed selectable models are `Best`, `Sonar 2`, `GPT-5.6 Terra`,
+`Gemini 3.1 Pro`, `Claude Sonnet 5`, `GLM 5.2`, `Kimi K2.6`, and
+`Nemotron 3 Ultra`. The observed locked rows are `GPT-5.6 Sol Max` and
+`Claude Opus 4.8 Max`.
+
+`gpt-5.6-sol` and `claude-opus-4.8` remain valid aliases even when the UI
 shows them as locked. A locked option produces a typed
 `provider.model-entitlement` error before any click or prompt submission.
 
-The supplied screenshot is ambiguous about `Sonar 2`: it may be a section
-heading rather than a selectable option. The implementation must capture the
-picker DOM before freezing this alias. If the fixture shows no selectable-row
-semantics, `sonar-2` is omitted from the shipped alias set and retained only as
-an observed group label. The runtime must never click a heading by text
-fallback.
+The live picker exposes selectable models as `role=menuitemradio` with
+`aria-checked` and `data-state`. `Sonar 2` has those selectable-row semantics
+and is not a group heading. Locked models are non-radio `role=menuitem` rows
+with lock-icon evidence. The runtime never clicks a heading or a locked
+non-radio row through text fallback.
 
 Model matching ignores case, repeated whitespace, localized descriptions,
 `Max`, lock labels, and auxiliary badges such as `새로 만들기`. The actual model
@@ -109,9 +116,14 @@ outside V1 and is rejected before browser mutation.
 Selection is fail-closed: after clicking a model or toggle, the runtime must
 read the resulting DOM state and verify it matches the request.
 
-The thinking switch is nested inside the selected model row. The fixed order is
-model selection and verification, then switch discovery inside that selected
-row, switch mutation, and final verification of both states.
+The thinking control is not nested inside the selected model row. For an
+eligible selected model, the observed structure is an adjacent
+`role=menuitemcheckbox` with visible text `Thinking`, containing exactly one
+`button[role=switch]`. The fixed order is model selection and verification,
+then adjacent checkbox/switch discovery, switch mutation only when effort is
+explicit, and final verification of both states. When effort is omitted, the
+runtime performs no switch click and records the state only when it can read
+one unambiguous switch without mutation.
 
 ### `web-ai/perplexity-live.mjs`
 
@@ -119,10 +131,12 @@ This module owns:
 
 - provider host verification for `perplexity.ai` and `www.perplexity.ai`
 - non-destructive overlay dismissal
-- composer and send-button discovery
+- composer discovery through the unique visible `#ask-input` textbox
+- send-button discovery through the `Submit` accessible name after text entry
 - fresh-thread preparation
 - model and thinking preflight
-- file upload and attachment evidence
+- file upload through `Add files or tools` then `Upload files or images`,
+  followed by attachment evidence
 - prompt insertion and commit verification
 - URL transition and response-turn detection
 - response stability polling
@@ -132,6 +146,8 @@ This module owns:
 The provider must work for both initial searches that navigate to a new
 `/search/...` URL and follow-up turns that remain on the same conversation URL.
 URL change is evidence, not the sole completion condition.
+The observed Search and Computer controls are separate `aria-pressed`
+buttons. V1 preserves their state and never clicks them.
 
 ## Capability Contract
 
@@ -162,7 +178,8 @@ It must not click login, subscription, destructive, or consent controls.
 7. Insert the rendered question envelope.
 8. Attach a file when requested and verify visible attachment evidence.
 9. Capture the response count, URL, and visible text baseline.
-10. Submit the prompt and verify the composer committed the turn.
+10. Resolve the now-visible `Submit` button, submit the prompt, and verify the
+    composer committed the turn.
 11. Create and bind a session containing structured model-selection evidence:
 
 ```js
@@ -189,7 +206,9 @@ not depend on warning text.
    after streaming signals disappear.
 5. Prefer DOM response extraction. Use the provider copy control only when the
    caller enables copy-markdown fallback.
-6. Extract citations from the final response turn and normalize them.
+6. Within the committed response root, open its unique `${count} sources`
+   footer control, read the associated Sources pane, and normalize only those
+   source links.
 7. Finalize the session and pool the tab using existing infrastructure.
 
 ## Citation Contract
@@ -198,7 +217,7 @@ Citation entries use this shape:
 
 ```js
 {
-    index: 1,
+    index: null,
     title: 'Source title',
     url: 'https://example.com/source',
 }
@@ -208,10 +227,13 @@ Rules:
 
 - preserve visual citation order
 - normalize `index` to a positive integer when available
+- use `index: null` when the UI exposes no explicit data/ARIA index evidence
 - resolve relative URLs against the current Perplexity page
 - discard non-HTTP(S) URLs
 - deduplicate by normalized URL while retaining the first entry
 - retain a citation with an empty title when the URL is valid
+- never collect ordinary answer-body links, internal `/search/<id>` memory
+  links, related questions, footer actions, or links from another turn
 
 `answerText` remains the full string for compatibility.
 
@@ -267,9 +289,12 @@ result completes with `citations: []` and the string warning
 `citations-unavailable`.
 
 Citation extraction remains DOM-primary even when copy-markdown supplies the
-answer body. URL normalization resolves relative links, accepts only HTTP(S),
-removes fragments, preserves query parameters, and deduplicates by the
-resulting URL while retaining first visual order.
+answer body. The extractor receives the committed response locator, opens only
+that response's sources control, and reads only the associated Sources pane;
+it never scans all anchors below the response. URL normalization resolves
+relative links, accepts only HTTP(S), removes fragments, preserves query
+parameters, and deduplicates by the resulting URL while retaining first
+visual order.
 
 ## CLI And MCP Integration
 
@@ -358,8 +383,7 @@ Implementation follows strict red-green-refactor TDD.
 
 ### Unit tests
 
-- DOM reconnaissance establishes whether `Sonar 2` is selectable or a group
-  heading before its alias test is admitted
+- fixture-backed tests verify `Sonar 2` is a selectable `menuitemradio`
 - alias and visible-label normalization for every supported model
 - locked model detection
 - thinking alias mapping and unsupported-control errors
@@ -375,14 +399,16 @@ Add fixtures for:
 
 - baseline composer
 - model picker with all visible entries
-- group-heading semantics for `Sonar 2`
+- selectable `menuitemradio` semantics for `Sonar 2`
 - locked Max entries
+- duplicate and missing Thinking switch cases
 - selected model with thinking off
 - selected model with thinking on
 - blocking overlay
 - attachment preview
 - streaming response
 - stable response with citations
+- complete response footer and Sources pane with decoy body/action links
 - cosmetic churn
 - structural churn
 
@@ -402,13 +428,19 @@ screen and desktop English variants where observed.
 
 ### Live smoke test
 
-The manual smoke gate uses the user's authenticated headed Chrome:
+The manual smoke gate uses the user's authenticated headed Chrome and the
+repository-local `node ./bin/agbrowse.mjs` after `npm ci`:
 
-1. `status` reports a usable Perplexity composer.
-2. Select `gpt-5.6-terra`.
-3. Enable thinking.
-4. Submit a short query.
-5. Verify a stable answer, conversation URL, citations, and persisted session.
+1. Navigate explicitly to `https://www.perplexity.ai`.
+2. `status` reports a usable composer and sanitized model options without
+   changing the selected model or Thinking state.
+3. Choose an unlocked model that status reports with
+   `thinkingAvailable: true`; do not hardcode a catalog entry.
+4. Enable thinking.
+5. Submit a short query.
+6. Verify a stable answer, conversation URL, citations, and persisted session.
+7. Resume and reattach the actual session, then test an observed locked alias
+   only when status reports one.
 
 Live smoke is not part of deterministic CI.
 
