@@ -59,7 +59,7 @@ Canonical model aliases:
 | Alias | Visible label |
 | --- | --- |
 | `best` | `Best` / localized equivalent such as `최고` |
-| `sonar-2` | `Sonar 2` |
+| `sonar-2` | `Sonar 2` (provisional; only admitted if live DOM proves it is selectable) |
 | `gpt-5.6-terra` | `GPT-5.6 Terra` |
 | `gpt-5.6-sol` | `GPT-5.6 Sol` |
 | `gemini-3.1-pro` | `Gemini 3.1 Pro` |
@@ -72,6 +72,13 @@ Canonical model aliases:
 `gpt-5.6-sol` and `claude-opus-4.8` must remain valid aliases even when the UI
 shows them as locked. A locked option produces a typed
 `provider.model-entitlement` error before any click or prompt submission.
+
+The supplied screenshot is ambiguous about `Sonar 2`: it may be a section
+heading rather than a selectable option. The implementation must capture the
+picker DOM before freezing this alias. If the fixture shows no selectable-row
+semantics, `sonar-2` is omitted from the shipped alias set and retained only as
+an observed group label. The runtime must never click a heading by text
+fallback.
 
 Model matching ignores case, repeated whitespace, localized descriptions,
 `Max`, lock labels, and auxiliary badges such as `새로 만들기`. The actual model
@@ -96,8 +103,15 @@ The existing rule that `--effort` requires `--model` remains in force. If the
 selected model does not expose a thinking toggle, the command fails before
 prompt submission with `provider.mode-unavailable`.
 
+Applying `--effort` to the current model without an explicit `--model` is
+outside V1 and is rejected before browser mutation.
+
 Selection is fail-closed: after clicking a model or toggle, the runtime must
 read the resulting DOM state and verify it matches the request.
+
+The thinking switch is nested inside the selected model row. The fixed order is
+model selection and verification, then switch discovery inside that selected
+row, switch mutation, and final verification of both states.
 
 ### `web-ai/perplexity-live.mjs`
 
@@ -149,8 +163,22 @@ It must not click login, subscription, destructive, or consent controls.
 8. Attach a file when requested and verify visible attachment evidence.
 9. Capture the response count, URL, and visible text baseline.
 10. Submit the prompt and verify the composer committed the turn.
-11. Create and bind a session containing model-selection evidence and the
-    selected thinking state.
+11. Create and bind a session containing structured model-selection evidence:
+
+```js
+{
+    requestedModel: 'gpt-5.6-terra',
+    resolvedModel: 'gpt-5.6-terra',
+    resolvedLabel: 'GPT-5.6 Terra',
+    locked: false,
+    thinking: 'on',
+    verified: true,
+}
+```
+
+The same state is stored in `envelopeSummary.model` and
+`envelopeSummary.reasoningEffort` so timeout recovery and session inspection do
+not depend on warning text.
 
 ## Poll Data Flow
 
@@ -187,10 +215,18 @@ Rules:
 
 `answerText` remains the full string for compatibility.
 
-`answerArtifact` gains an optional `citations` array. `createAnswerArtifact()`
-and `artifactFromPollResult()` must preserve it.
+`answerArtifact` gains an optional `citations` array. The shared implementation
+must change before the provider poller is built:
 
-`finalizeProviderTab()` accepts the finalized `answerArtifact` and stores both:
+- `web-ai/types.mjs` extends the `AnswerArtifact` typedef.
+- `createAnswerArtifact()` validates and retains `input.citations`.
+- `artifactFromPollResult()` forwards `result.citations` or an existing
+  artifact's citations.
+- `withAnswerArtifact()` must not rebuild an existing artifact and lose its
+  citation data.
+
+`finalizeProviderTab()` gains an `answerArtifact` option, normalizes it through
+`createAnswerArtifact()`, and stores both:
 
 ```json
 {
@@ -222,9 +258,18 @@ The same artifact must be returned by:
 - MCP submit/wait/resume structured responses
 - direct reads of `web-ai-sessions.json`
 
+Every completed Perplexity result and session contains `citations`, including
+an empty array. This distinguishes "none found" from providers that do not
+implement structured citations.
+
 Missing citation DOM does not invalidate an otherwise complete answer. The
-result completes with an empty citation list and a
-`citations-unavailable` warning.
+result completes with `citations: []` and the string warning
+`citations-unavailable`.
+
+Citation extraction remains DOM-primary even when copy-markdown supplies the
+answer body. URL normalization resolves relative links, accepts only HTTP(S),
+removes fragments, preserves query parameters, and deduplicates by the
+resulting URL while retaining first visual order.
 
 ## CLI And MCP Integration
 
@@ -241,8 +286,41 @@ Add `perplexity` to:
 - eval vendor registries
 - skills and reference documentation
 
+The complete fan-out includes:
+
+- `web-ai/types.mjs`
+- `web-ai/question.mjs`
+- `web-ai/cli.mjs`
+- `web-ai/mcp-server.mjs`
+- `web-ai/tool-schema.mjs`
+- `web-ai/cli-sessions.mjs`
+- `web-ai/session.mjs`
+- `web-ai/copy-markdown.mjs`
+- `web-ai/doctor.mjs`
+- `web-ai/navigation-ready.mjs`
+- `web-ai/policy/default-policy.mjs`
+- `web-ai/vendor-editor-contract.mjs`
+- capability catalogs used by doctor and eval
+- `web-ai/eval/types.mjs`
+- shared answer-artifact and tab-finalizer modules
+- skills, CLI help, generated references, and structure counts
+
 Perplexity's default timeout is 1200 seconds. Thinking-enabled requests use a
 3600-second tier when no explicit timeout is supplied.
+
+To make that timeout contract real:
+
+- `deriveTimeoutTier()` accepts effort/reasoning-effort.
+- `resolveTimeoutDefaultSec()` forwards the requested effort.
+- CLI send/query timeout injection passes the effort value.
+- `summarizeEnvelope()` persists `reasoningEffort`.
+- session budget fallback reads `envelopeSummary.reasoningEffort`.
+- a dedicated `perplexity-thinking` tier maps to 3600 seconds.
+
+CLI validation adds a Perplexity-specific branch. It accepts the documented
+binary effort aliases, requires `--model`, and leaves ChatGPT effort validation
+unchanged. MCP schemas add `perplexity` and `on`/`off` without changing other
+provider semantics.
 
 `--follow-up`, ChatGPT tools/plugins, ChatGPT Deep Research, Work mode, and
 generated-image output remain unsupported for Perplexity.
@@ -265,12 +343,23 @@ All public failures use `WebAiError`.
 
 No failure path silently falls back to another model.
 
+`web-ai/errors.mjs`, CLI help, and skill error documentation list the new error
+codes and their fixed retry hints.
+
+A visible unambiguous Stop control is preferred; Escape is the fallback.
+
+For `sessions reattach --navigate`, a Perplexity session may open its saved
+`conversationUrl` in a fresh provider tab using the provider host allowlist and
+session target rebinding rules. It must not use ChatGPT's `/c/...` URL pattern.
+
 ## Test Strategy
 
 Implementation follows strict red-green-refactor TDD.
 
 ### Unit tests
 
+- DOM reconnaissance establishes whether `Sonar 2` is selectable or a group
+  heading before its alias test is admitted
 - alias and visible-label normalization for every supported model
 - locked model detection
 - thinking alias mapping and unsupported-control errors
@@ -286,6 +375,7 @@ Add fixtures for:
 
 - baseline composer
 - model picker with all visible entries
+- group-heading semantics for `Sonar 2`
 - locked Max entries
 - selected model with thinking off
 - selected model with thinking on
@@ -305,6 +395,8 @@ screen and desktop English variants where observed.
 - poll returns answer text and structured citations
 - session JSON round-trips the full artifact
 - session resume dispatches to the Perplexity poller
+- session-bound send/query dispatches to the Perplexity provider
+- reattach with navigation restores a saved Perplexity conversation URL
 - MCP submit/wait accepts `perplexity`
 - existing ChatGPT/Gemini/Grok tests remain unchanged and passing
 
