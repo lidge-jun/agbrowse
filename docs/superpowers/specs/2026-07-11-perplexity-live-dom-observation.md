@@ -62,10 +62,15 @@ TDD plan. Account text and unrelated history content are not fixture data.
 - When effort is explicit, selection order is model row first, then the unique
   adjacent Thinking checkbox/switch, followed by model and switch
   postcondition verification.
+- This observation proves Thinking support for the selected Terra fixture only.
+  It cannot establish live Thinking-control presence for unselected models;
+  non-mutating status must return `thinkingControlPresent: null` for them.
 
 ## Send And Completion
 
 - Submit changes the URL to `/search/<uuid>`.
+- The observed completed URL uses `www.perplexity.ai`; bare
+  `perplexity.ai` redirects to that canonical host and is not a second site.
 - During generation the composer action is a button named
   `Stop response (Esc)`.
 - A completed answer footer contains buttons named:

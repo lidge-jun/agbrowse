@@ -95,7 +95,9 @@ No selector mutation occurs when `--model` is omitted.
 
 ### Thinking Toggle Contract
 
-The Perplexity "thinking" toggle is independent of model selection.
+The Perplexity "thinking" toggle is model-scoped and appears only for an
+eligible selected model. Its requested state is a separate input from the model
+alias, but its DOM availability cannot be inspected before selection.
 
 No toggle mutation occurs when `--effort` is omitted.
 
@@ -126,6 +128,10 @@ then adjacent checkbox/switch discovery, switch mutation only when effort is
 explicit, and final verification of both states. When effort is omitted, the
 runtime performs no switch click and records the state only when it can read
 one unambiguous switch without mutation.
+Any click that can close or rerender the picker invalidates every previously
+created menu/row/checkbox/switch Locator. The runtime reopens and resolves a
+fresh selected row before Thinking inspection and again before final
+postcondition verification.
 
 ### `web-ai/perplexity-live.mjs`
 
@@ -150,7 +156,10 @@ The provider must work for both initial searches that navigate to a new
 URL change is evidence, not the sole completion condition.
 Until another authenticated ID grammar is captured, stored-session recovery
 accepts only UUID conversation paths. Both allowed hosts belong to one tab
-lifecycle pool and cleanup limit.
+lifecycle pool and cleanup limit. One shared provider-URL identity contract is
+used by reusable-tab acquisition, driveability, navigation readiness, recovery,
+and cleanup. The bare host is a redirect alias; successful navigation stores
+the browser's canonical live `www` URL.
 The observed Search and Computer controls are separate `aria-pressed`
 buttons. V1 preserves their state and never clicks them.
 
@@ -167,6 +176,12 @@ Perplexity exposes the same capability rows as other providers:
 
 An unauthenticated page with a usable composer may report `ready` with a warning.
 Requests for unavailable paid models or thinking controls fail before mutation.
+
+Status reports fixture-backed `supportsThinking: true|false|null` separately
+from live `thinkingControlPresent: true|false|null`. The latter is populated
+only for the currently selected row; unselected models are always `null`.
+Status never selects models to discover capability, and send always revalidates
+the actual adjacent control after model selection.
 
 Overlay dismissal may press Escape or click an unambiguous close control.
 It must not click login, subscription, destructive, or consent controls.
@@ -411,22 +426,26 @@ Implementation follows strict red-green-refactor TDD.
 
 ### Provider DOM fixtures
 
-Add fixtures for:
+Authenticated live captures cover naturally observable surfaces only:
 
 - baseline composer
 - model picker with all visible entries
+- authenticated non-mutating model-menu close behavior
 - selectable `menuitemradio` semantics for `Sonar 2`
 - locked Max entries
-- duplicate and missing Thinking switch cases
 - selected model with thinking off
 - selected model with thinking on
 - blocking overlay
 - attachment preview
 - streaming response
 - stable response with citations
-- complete response footer and Sources pane with decoy body/action links
-- cosmetic churn
-- structural churn
+- complete response footer and an opened/closed Sources pane
+
+Deterministically derived fixtures cover duplicate/missing switches, adjacent
+decoys, detached-locator remounts, Copy/pane decoys, stale/two-visible panes,
+same-pane fingerprint replacement, late citations, cosmetic/structural churn,
+and the breaking variant. Provenance records each parent hash and transform;
+derived fixtures are never labeled `live-frontend`.
 
 Fixture tests must include Korean labels shown in the supplied model-picker
 screen and desktop English variants where observed.
@@ -450,13 +469,16 @@ repository-local `node ./bin/agbrowse.mjs` after `npm ci`:
 1. Navigate explicitly to `https://www.perplexity.ai`.
 2. `status` reports a usable composer and sanitized model options without
    changing the selected model or Thinking state.
-3. Choose an unlocked model that status reports with
-   `thinkingAvailable: true`; do not hardcode a catalog entry.
+3. Select `gpt-5.6-terra` only when status reports it unlocked with
+   fixture-backed `supportsThinking: true`. Current evidence does not claim
+   Thinking support for unobserved aliases.
 4. Enable thinking.
 5. Submit a short query.
 6. Verify a stable answer, conversation URL, citations, and persisted session.
 7. Resume and reattach the actual session, then test an observed locked alias
    only when status reports one.
+8. Allow a 3,720-second external watcher limit for the 3,600-second Thinking
+   deadline and record both values in smoke evidence.
 
 Live smoke is not part of deterministic CI.
 
