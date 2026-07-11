@@ -52,6 +52,9 @@ Node: v24.17.0 (/opt/homebrew/bin/node), vitest 2.x
    stashing this change set and re-running).
 
 ## Red→green notes
+- Red run executed literally: with `web-ai/` reset to the pre-change commit
+  (cbb4aa2), `chatgpt-sent-verify` + `chatgpt-upload-surface` suites fail
+  18/22 (19:16 KST); restored to HEAD they pass 22/22 → red→green proven.
 - Acceptance-strictness and sent-turn-evidence tests were written against the
   new contract; they fail on the pre-change implementation by construction
   (old code returned ok on bare chips / generic img evidence — the exact

@@ -179,6 +179,11 @@ Attachments and context:
                                     Timeout for browser file handoff before the
                                     provider processes the upload. Env fallback:
                                     AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS.
+                                    Acceptance waits auto-scale with file size;
+                                    AGBROWSE_ATTACHMENT_ACCEPT_TIMEOUT_MS sets a
+                                    floor. Missing sent-turn attachment evidence
+                                    fails the send unless
+                                    AGBROWSE_SENT_ATTACHMENT_POLICY=warn.
   --max-context-file-size <bytes>   Preferred name for per-file context budget.
   --context-from-files <glob|path>  Add files to a context package; repeatable
   --context-exclude <glob>          Exclude from the package; repeatable
