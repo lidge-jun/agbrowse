@@ -253,9 +253,10 @@ export async function sendWebAi(deps, input = {}) {
             });
         }
         const uploadPaths = requestedPaths.length ? requestedPaths : (contextAttachmentPath ? [contextAttachmentPath] : []);
+        const uploadFiles = uploadPaths.map(fileInfoFromPath);
         if (uploadPaths.length) {
             const uploadResolution = await resolveOptionalChatGptUploadTarget(page, traceCtx);
-            const upload = await attachLocalFilesLive(page, uploadPaths.map(fileInfoFromPath), {
+            const upload = await attachLocalFilesLive(page, uploadFiles, {
                 uploadTarget: /** @type {any} */ (uploadResolution?.target || null),
                 maxUploadBytes: input.maxUploadFileSize,
                 attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
@@ -272,21 +273,26 @@ export async function sendWebAi(deps, input = {}) {
             usedFallbacks = upload.usedFallbacks || [];
         }
         const sendResolution = await resolveOptionalChatGptSendTarget(page, traceCtx);
-        const submitTimeoutMs = sendButtonTimeoutMs(uploadPaths);
-        await adapter.submitPrompt({
+        const totalUploadBytes = uploadFiles.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0);
+        const submitTimeoutMs = sendButtonTimeoutMs(uploadPaths, totalUploadBytes);
+        const submitResult = await adapter.submitPrompt({
             sendTarget: /** @type {any} */ (sendResolution?.target || null),
             sendButtonTimeoutMs: submitTimeoutMs,
+            requireEnabledSendButton: uploadPaths.length > 0,
         });
+        if (submitResult.failure === 'send-button-disabled') {
+            throw new WebAiError({
+                errorCode: 'provider.send-click',
+                stage: 'send-click',
+                vendor: 'chatgpt',
+                retryHint: 'retry-send',
+                message: 'send button never became enabled while attachments were pending',
+            });
+        }
         await adapter.verifyPromptCommitted(rendered.composerText, commitBaseline, {
             timeoutMs: submitTimeoutMs,
         });
-        for (const uploadPath of uploadPaths) {
-            const sentAttachment = await verifySentTurnAttachmentLive(page, fileInfoFromPath(uploadPath));
-            if (!sentAttachment.ok) {
-                usedFallbacks.push('sent-attachment-evidence-unavailable');
-                attachmentWarnings.push(`sent attachment evidence unavailable after submit (${fileInfoFromPath(uploadPath).basename}): ${sentAttachment.error}`);
-            }
-        }
+        await verifySentAttachments(page, uploadFiles, { usedFallbacks, attachmentWarnings });
         const finalUrl = page.url();
         if (session && finalUrl !== session.conversationUrl) {
             updateSession(session.sessionId, { conversationUrl: finalUrl });
@@ -319,6 +325,33 @@ export async function sendWebAi(deps, input = {}) {
         };
     } finally {
         if (!tracePersisted) persistResolverTrace(session.sessionId, traceCtx);
+    }
+}
+
+/**
+ * @param {Page} page
+ * @param {Array<{basename: string}>} uploadFiles
+ * @param {{usedFallbacks: string[], attachmentWarnings: string[]}} evidence
+ * @param {(page: Page, file: any) => Promise<any>} [verifyAttachment]
+ */
+export async function verifySentAttachments(page, uploadFiles, evidence, verifyAttachment = verifySentTurnAttachmentLive) {
+    for (const file of uploadFiles) {
+        const sentAttachment = await verifyAttachment(page, file);
+        if (sentAttachment.ok) continue;
+        const underlyingError = sentAttachment.error || 'unknown verification failure';
+        if (process.env.AGBROWSE_SENT_ATTACHMENT_POLICY === 'warn') {
+            evidence.usedFallbacks.push('sent-attachment-evidence-unavailable');
+            evidence.attachmentWarnings.push(`sent attachment evidence unavailable after submit (${file.basename}): ${underlyingError}`);
+            continue;
+        }
+        throw new WebAiError({
+            errorCode: 'provider.sent-attachment-missing',
+            stage: 'attachment-verify',
+            vendor: 'chatgpt',
+            retryHint: 're-upload',
+            mutationAllowed: true,
+            message: `sent attachment missing after submit (${file.basename}): ${underlyingError}`,
+        });
     }
 }
 

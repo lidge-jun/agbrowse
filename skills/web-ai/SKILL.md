@@ -374,6 +374,17 @@ instead of creating temporary `.txt`/`.md` files.
 Upload must verify visible attachment evidence and sent-turn evidence where the
 provider exposes it. Input-only success is not enough.
 
+Large files: ChatGPT uploads at or above ~45MB are injected through raw CDP
+`DOM.setFileInputFiles` (local path, zero-byte transfer), bypassing the
+Playwright connectOverCDP ~50MB transfer limit; smaller files fall back to CDP
+automatically when Playwright rejects the transfer. Upload timeouts scale with
+total attachment bytes (acceptance up to 15 minutes). Overrides:
+`--attachment-upload-timeout-ms <ms>` (or `AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS`)
+for the browser handoff, `AGBROWSE_ATTACHMENT_ACCEPT_TIMEOUT_MS` as an
+acceptance-wait floor. Missing sent-turn attachment evidence now FAILS the send
+(`provider.sent-attachment-missing`) instead of returning a false `sent`;
+set `AGBROWSE_SENT_ATTACHMENT_POLICY=warn` to restore warn-only behavior.
+
 Use `--max-upload-file-size <bytes>` for live `--file` uploads. Use
 `--max-context-file-size <bytes>` for context package selection; legacy
 `--max-file-size <bytes>` is the context-budget alias, not the live upload cap.
