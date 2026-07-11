@@ -13,6 +13,7 @@
 - Provider ID is exactly `perplexity`; default URL is `https://www.perplexity.ai`.
 - Implementation commands run from a complete Git checkout. The external-review ZIP is source evidence only and is not an executable checkout.
 - Provider-specific argument validation completes before `ensureProviderTab()`, `deps.getPage()`, `openFreshPerplexityThread()`, `page.goto()`, or any `Page`/`Locator` operation.
+- CLI Perplexity validation runs after normalized input/alias resolution but before `ensureHeadedBrowserForWebAi()`; invalid input performs zero browser startup, tab acquisition, navigation, target, Page, or Locator calls.
 - `--model` omission does not mutate the picker; `--effort` omission does not mutate Thinking.
 - Perplexity `--effort` requires an explicit `--model`.
 - Thinking OFF aliases are `off`, `low`, `light`, `standard`, `normal`, `default`.
@@ -20,6 +21,7 @@
 - Ambiguous/missing rows, group headings, unknown lock state, noninteractive rows, ambiguous switches, and unknown selected state fail before click.
 - Locked rows fail with `provider.model-entitlement` and retry hint `choose-unlocked-model`.
 - Missing or ambiguous Thinking controls fail with `provider.mode-unavailable` and retry hint `omit-effort-or-change-model`.
+- Unknown effort aliases fail as `provider.invalid-effort` with retry hint `use-on-off-effort-aliases`; `provider.mode-unavailable` is reserved for a valid effort whose observed control is unavailable.
 - `Sonar 2` is an observed selectable `menuitemradio` and is included as alias `sonar-2`.
 - Observed selectable V1 aliases are `best`, `sonar-2`, `gpt-5.6-terra`, `gemini-3.1-pro`, `claude-sonnet-5`, `glm-5.2`, `kimi-k2.6`, and `nemotron-3-ultra`.
 - Observed locked aliases are `gpt-5.6-sol` and `claude-opus-4.8`; they are valid inputs that fail before click.
@@ -38,6 +40,7 @@
 - Until another authenticated route format is captured, a Perplexity conversation path is exactly `/search/<UUID>` with an optional trailing slash.
 - `perplexity.ai` and `www.perplexity.ai` are one lifecycle provider pool and share cleanup limits.
 - Provider origin identity is shared by tab acquisition, driveability, navigation readiness, recovery compatibility, and cleanup. Successful navigation persists the browser's canonical live URL (`www.perplexity.ai` today).
+- Lease keys, active per-key capacity, pooled checkout, scoped target identity, and pool stats canonicalize both Perplexity host aliases to `https://www.perplexity.ai` inside `tab-lease-store.mjs`.
 - `web-ai watch`, `sessions resume`, and `sessions reattach --navigate` are required Perplexity integration surfaces.
 - A completed Perplexity artifact always has `citations`, including `[]`.
 - `answer` is byte-for-byte equal to `answerArtifact.text`.
@@ -46,9 +49,14 @@
 - `provider-adapter.mjs` stays contract-only, but its vendor typedef includes Perplexity.
 - `parallel-eval.json` remains unchanged because it is the existing parallel-isolation contract.
 - Fixture provenance distinguishes authenticated `live-captured` fixtures from deterministic `derived` adversarial fixtures; synthetic failure states are never labeled `live-frontend`.
+- Blocking-overlay support is conditional on a live-captured authenticated dismiss mechanism; `not-observed` enables only the zero-mutation no-overlay path.
+- Standalone fresh-thread preparation uses either an authenticated unique control or guarded exact-root navigation and verifies zero committed responses, a unique composer, and no retained prior UUID before submit.
+- Citation-pane close failure is non-terminal `unknown`; response identity/text/count drift discards citations, resets stability clocks, and prevents finalization.
+- Fixture screenshots are local-only ignored evidence with `retained: false`, capture timestamp, and SHA-256 in provenance; no account/history screenshot is committed.
 - The live DOM source of truth is `docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md`.
 - The GPT-5.6 High review records are `docs/superpowers/specs/2026-07-11-chatgpt-5.6-high-plan-review.md` and `docs/superpowers/specs/2026-07-11-chatgpt-5.6-high-plan-rereview.md`.
 - The follow-up external review disposition is `docs/superpowers/specs/2026-07-11-perplexity-plan-external-rereview.md`.
+- The ChatGPT 5.6 High + Grok-4.5 synthesis is `docs/superpowers/specs/2026-07-11-perplexity-dual-model-final-review.md`.
 - Conflicting CLI aliases (`--effort` and `--reasoning-effort`) and MCP requested-provider/session-vendor mismatches fail before browser, target, session-page, or navigation access.
 - Status may open and close the unique model menu for inspection, but must not click a model row, Thinking checkbox/switch, Search, Computer, Connectors, or Spaces; it verifies selected state is unchanged before returning.
 - Spaces, Focus, Deep Research, login automation, and subscription changes are out of scope.
@@ -80,7 +88,7 @@
 - `test/fixtures/provider-dom/perplexity-streaming.html`
 - `test/fixtures/provider-dom/perplexity-complete-citations.html`
 - `test/fixtures/provider-dom/perplexity-copy-decoys.html`
-- `test/fixtures/provider-dom/perplexity-blocking-overlay.html`
+- `test/fixtures/provider-dom/perplexity-blocking-overlay.html` (only when live-observed)
 - `test/fixtures/provider-dom/perplexity-attachment-preview.html`
 - `test/fixtures/provider-dom/perplexity-thinking-on.html`
 - `test/fixtures/provider-dom/perplexity-thinking-off.html`
@@ -91,10 +99,15 @@
 - `test/fixtures/provider-dom/perplexity-late-citation.html`
 - `test/fixtures/provider-dom/perplexity-sources-pane-open.html`
 - `test/fixtures/provider-dom/perplexity-sources-pane-stale.html`
+- `test/fixtures/provider-dom/perplexity-sources-pane-two-visible.html`
+- `test/fixtures/provider-dom/perplexity-sources-pane-fingerprint-replacement.html`
 - `test/fixtures/provider-dom/perplexity-sources-pane-close.html`
+- `test/fixtures/provider-dom/perplexity-new-thread.html`
 - `test/fixtures/provider-dom/perplexity-eval.json`
 - `test/fixtures/provider-dom/perplexity-fixture-provenance.json`
 - `test/unit/web-ai-provider-url-identity.test.mjs`
+- `test/unit/web-ai-tab-lease-store.test.mjs`
+- `test/unit/web-ai-tab-pool.test.mjs`
 - `test/fixtures/session-store/read-session-summary.mjs`
 
 ### Shared surfaces modified
@@ -121,6 +134,7 @@ test -f benchmarks/agbrowse/run-task.mjs
 test -f bin/agbrowse.mjs
 test -f docs/superpowers/specs/2026-07-11-chatgpt-5.6-high-plan-rereview.md
 test -f docs/superpowers/specs/2026-07-11-perplexity-plan-external-rereview.md
+test -f docs/superpowers/specs/2026-07-11-perplexity-dual-model-final-review.md
 command -v jq
 command -v timeout
 ```
@@ -172,6 +186,7 @@ The task is not Green and must not be committed if any gate fails.
 ### Task 0: Register Identity, Error Taxonomy, And Capability Scope
 
 **Files:**
+- Modify: `.gitignore`
 - Modify: `web-ai/types.mjs`
 - Modify: `types/agbrowse-shared.d.ts`
 - Modify: `web-ai/question.mjs`
@@ -197,6 +212,8 @@ The task is not Green and must not be committed if any gate fails.
 - Produces: `modelMismatchError(vendor, model, evidence)`
 - Produces: `modelEntitlementError(vendor, model, evidence)`
 - Produces: `modeUnavailableError(vendor, model, effort, evidence)`
+- Produces: `invalidEffortError(vendor, effort, evidence)`
+- Produces: `optionConflictError(vendor, primaryName, primaryValue, aliasValue, evidence)`
 
 - [ ] **Step 1: Write Red identity tests**
 
@@ -238,10 +255,23 @@ expect(modeUnavailableError(
     retryHint: 'omit-effort-or-change-model',
     mutationAllowed: false,
 });
-expect(optionConflictError('effort', 'on', 'off').toJSON())
+expect(optionConflictError(
+    'perplexity',
+    'effort',
+    'on',
+    'off',
+).toJSON())
     .toMatchObject({
         errorCode: 'provider.option-conflict',
         stage: 'provider-input-validation',
+        vendor: 'perplexity',
+        mutationAllowed: false,
+    });
+expect(invalidEffortError('perplexity', 'turbo').toJSON())
+    .toMatchObject({
+        errorCode: 'provider.invalid-effort',
+        retryHint: 'use-on-off-effort-aliases',
+        vendor: 'perplexity',
         mutationAllowed: false,
     });
 expect(sessionVendorMismatchError(
@@ -344,10 +374,54 @@ export function modeUnavailableError(
 }
 ```
 
-Also add `optionConflictError(primaryName, primaryValue, aliasValue)` and
+Also add `invalidEffortError(vendor, effort, evidence)` and
+`optionConflictError(vendor, primaryName, primaryValue, aliasValue, evidence)`
+as provider-aware factories. `optionConflictError()` uses retry hint
+`remove-conflicting-option`; `invalidEffortError()` uses
+`use-on-off-effort-aliases`. Add
 `sessionVendorMismatchError(sessionVendor, requestedProvider, sessionId)`
 factories with the exact codes/stages asserted in Step 1. Task 9 and Task 10
 consume these factories rather than constructing ad hoc errors.
+
+```js
+export function invalidEffortError(vendor, effort, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.invalid-effort',
+        stage: 'provider-input-validation',
+        retryHint: 'use-on-off-effort-aliases',
+        message: `unsupported ${vendor} effort: ${effort}`,
+        mutationAllowed: false,
+        evidence: { effort, ...evidence },
+    });
+}
+
+export function optionConflictError(
+    vendor,
+    primaryName,
+    primaryValue,
+    aliasValue,
+    evidence = {},
+) {
+    return providerError(vendor, {
+        errorCode: 'provider.option-conflict',
+        stage: 'provider-input-validation',
+        retryHint: 'remove-conflicting-option',
+        mutationAllowed: false,
+        evidence: {
+            primaryName,
+            primaryValue,
+            aliasValue,
+            ...evidence,
+        },
+    });
+}
+```
+
+Do not rely on `wrapError(error, { vendor })` to add vendor context to an
+existing `WebAiError`: current `wrapError()` returns typed errors unchanged.
+Provider/vendor conflicts preserve both values in evidence and use the primary
+`provider` value as serialized `vendor` when present; effort conflicts always
+serialize the already-resolved canonical provider.
 
 Extend `WebAiVendorScope` with `perplexity`. Add these observation exports:
 
@@ -897,6 +971,37 @@ the existing exact-origin behavior for the other providers. Use it in
 logic so a same-UUID cross-host redirect causes zero `goto()` calls and updates
 the session to the live canonical URL.
 
+Change the navigation helper signature and every caller explicitly:
+
+```js
+export function shouldNavigateToRequestedProviderUrl(
+    currentUrl,
+    requestedUrl,
+    vendor,
+) {
+    if (!requestedUrl) return false;
+    if (!currentUrl || currentUrl === 'about:blank') return true;
+    if (
+        vendor === 'perplexity'
+        && isProviderOriginUrl(vendor, currentUrl)
+        && isProviderOriginUrl(vendor, requestedUrl)
+    ) {
+        const currentId = perplexityConversationId(currentUrl);
+        const requestedId = perplexityConversationId(requestedUrl);
+        if (currentId || requestedId) {
+            return currentId !== requestedId;
+        }
+        return normalizeProviderPath(new URL(currentUrl).pathname)
+            !== normalizeProviderPath(new URL(requestedUrl).pathname);
+    }
+    return existingShouldNavigateLogic(currentUrl, requestedUrl);
+}
+```
+
+Pass `vendor` from `bindProviderPage()`, `isProviderPageDriveable()`, pooled
+tab acquisition, and recovery. Same-UUID bare/`www` pages cause zero
+navigation; different UUIDs remain incompatible.
+
 Do not rewrite `isSafeChatGptConversationUrl()`. Call the provider guard
 immediately before ChatGPT/Perplexity stored-session navigation in
 all five paths:
@@ -913,6 +1018,49 @@ re-thrown and is never swallowed by the existing broad catch/fallback.
 Make new-tab recovery accept `{ vendor, conversationUrl }`. Split
 compatibility and readiness by provider so Perplexity does not depend on
 ChatGPT selectors.
+
+Replace the current broad-catch shape with a guarded sequence:
+
+```js
+assertSafeStoredConversationUrl(session.vendor, targetUrl);
+try {
+    assertSafeStoredConversationUrl(session.vendor, targetUrl);
+    await page.goto(targetUrl, navigationOptions);
+    return await resolveRecoveredPage(/* ... */);
+} catch (error) {
+    if (
+        error instanceof WebAiError
+        && error.errorCode === 'cdp.target-mismatch'
+    ) throw error;
+    // Only ordinary stale/dead-page failures may fall through.
+}
+
+assertSafeStoredConversationUrl(session.vendor, targetUrl);
+const created = await createTab(port, targetUrl);
+```
+
+Tests inject an unsafe URL at entry, immediately before existing-tab `goto`,
+and immediately before fallback `createTab`; all three paths make zero
+navigation calls. A typed guard error is rethrown through the broad catch.
+
+Make readiness provider-aware:
+
+```js
+export async function waitForConversationReady(page, url, vendor) {
+    if (vendor === 'perplexity') {
+        await page.locator('#ask-input').first().waitFor({
+            state: 'visible',
+            timeout: 10_000,
+        });
+        return;
+    }
+    return existingConversationReadiness(page, url, vendor);
+}
+```
+
+Perplexity readiness never queries ChatGPT's
+`[data-message-author-role="assistant"]`; answer/turn stability remains Task 8's
+responsibility.
 
 The new-tab precondition is:
 
@@ -1017,6 +1165,30 @@ updateSession(id, {
 });
 ```
 
+Expand the existing ChatGPT-only reattach gate:
+
+```js
+if (
+    input.navigate === true
+    && ['chatgpt', 'perplexity'].includes(session.vendor)
+) {
+    const reopened = await openConversationInNewTab(deps, {
+        vendor: session.vendor,
+        conversationUrl: session.conversationUrl,
+    });
+    if (reopened.opened) {
+        updateSession(id, {
+            targetId: reopened.targetId,
+            conversationUrl: reopened.conversationUrl,
+        });
+    }
+}
+```
+
+Assert Perplexity reattach opens the guarded new tab, persists the live
+canonical URL, and passes `vendor: 'perplexity'`; unsafe/mismatched URLs open no
+tab.
+
 - [ ] **Step 4: Verify Green, refactor, and regress ChatGPT**
 
 Run Step 2. Public ChatGPT, Gemini, and Grok resume/watch behavior must remain
@@ -1044,8 +1216,11 @@ git commit -m "feat: guard provider conversation recovery URLs"
 
 **Files:**
 - Modify: `web-ai/cli.mjs`
+- Modify: `web-ai/tab-lease-store.mjs`
 - Modify: `skills/browser/tab-lifecycle.mjs`
 - Modify: `test/integration/web-ai-cli-contract.test.mjs`
+- Create: `test/unit/web-ai-tab-lease-store.test.mjs`
+- Create: `test/unit/web-ai-tab-pool.test.mjs`
 - Modify: `test/unit/tab-lifecycle.test.mjs`
 
 **Interfaces:**
@@ -1064,12 +1239,19 @@ Add reusable-tab and driveability tests proving a bare-host pooled/unmanaged tab
 is reused for a `www` request and vice versa, without navigation. Reject
 credentials, explicit default/non-default ports, `http:`, and unrelated
 subdomains. Keep ChatGPT/Gemini/Grok origin behavior byte-for-byte compatible.
+Add lease-store tests proving bare and `www` URLs share one active capacity,
+pooled checkout key, scoped target identity, and `poolStats()` key in both
+directions. Assert the three existing providers' lease-key strings are
+byte-for-byte unchanged.
 
 - [ ] **Step 2: Verify Red**
 
 ```bash
 npx vitest run test/unit/tab-lifecycle.test.mjs
 npx vitest run test/integration/web-ai-cli-contract.test.mjs
+npx vitest run \
+  test/unit/web-ai-tab-lease-store.test.mjs \
+  test/unit/web-ai-tab-pool.test.mjs
 ```
 
 - [ ] **Step 3: Add the origin**
@@ -1078,12 +1260,29 @@ npx vitest run test/integration/web-ai-cli-contract.test.mjs
 tabs.filter(tab =>
     isProviderOriginUrl(vendor, tab.url)
 );
+
+function canonicalLeaseOrigin(vendor, originOrUrl) {
+    const origin = parseOrigin(originOrUrl);
+    if (
+        vendor === 'perplexity'
+        && [
+            'https://perplexity.ai',
+            'https://www.perplexity.ai',
+        ].includes(origin)
+    ) return 'https://www.perplexity.ai';
+    return origin;
+}
 ```
 
 Replace lifecycle and `findReusableProviderTab()` exact-origin comparisons with
 the Task 3 shared helper. Do not create a second Perplexity-only host map. Use
 one vendor key for bare and `www` tabs so cleanup, pooled lease ownership,
 unmanaged reusable-tab acquisition, and max-per-provider accounting agree.
+Canonicalization is authoritative inside `tab-lease-store.mjs`, not at callers.
+Apply it in `buildLeaseKey()`, `normalizeLease().origin`, `scopedTargetKey()`,
+pooled checkout, active max-per-key accounting, and stats. `tab-pool.mjs`
+continues delegating to the store; its compatibility tests prove both host
+directions.
 
 - [ ] **Step 4: Verify Green and regress existing providers**
 
@@ -1093,8 +1292,11 @@ unchanged for ChatGPT/Gemini/Grok.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add web-ai/cli.mjs skills/browser/tab-lifecycle.mjs \
+git add web-ai/cli.mjs web-ai/tab-lease-store.mjs \
+  skills/browser/tab-lifecycle.mjs \
   test/integration/web-ai-cli-contract.test.mjs \
+  test/unit/web-ai-tab-lease-store.test.mjs \
+  test/unit/web-ai-tab-pool.test.mjs \
   test/unit/tab-lifecycle.test.mjs
 git commit -m "feat: track Perplexity tab lifecycle"
 ```
@@ -1118,7 +1320,7 @@ git commit -m "feat: track Perplexity tab lifecycle"
 - Create: `test/fixtures/provider-dom/perplexity-streaming.html`
 - Create: `test/fixtures/provider-dom/perplexity-complete-citations.html`
 - Create: `test/fixtures/provider-dom/perplexity-copy-decoys.html`
-- Create: `test/fixtures/provider-dom/perplexity-blocking-overlay.html`
+- Conditional create: `test/fixtures/provider-dom/perplexity-blocking-overlay.html` only when live-observed
 - Create: `test/fixtures/provider-dom/perplexity-attachment-preview.html`
 - Create: `test/fixtures/provider-dom/perplexity-thinking-on.html`
 - Create: `test/fixtures/provider-dom/perplexity-thinking-off.html`
@@ -1132,6 +1334,7 @@ git commit -m "feat: track Perplexity tab lifecycle"
 - Create: `test/fixtures/provider-dom/perplexity-sources-pane-two-visible.html`
 - Create: `test/fixtures/provider-dom/perplexity-sources-pane-fingerprint-replacement.html`
 - Create: `test/fixtures/provider-dom/perplexity-sources-pane-close.html`
+- Create: `test/fixtures/provider-dom/perplexity-new-thread.html`
 - Create: `test/fixtures/provider-dom/perplexity-fixture-provenance.json`
 - Create: `test/unit/web-ai-perplexity-model.test.mjs`
 - Create: `test/unit/web-ai-perplexity-citations.test.mjs`
@@ -1151,7 +1354,7 @@ Create `scripts/capture-perplexity-fixtures.mjs` as a read-only CDP capture
 command accepting:
 
 ```text
---surface picker-ko|picker-en|picker-locked|picker-close|thinking-on|thinking-off|attachment|baseline|streaming|complete-citations|sources-pane-open|sources-pane-close|overlay
+--surface picker-ko|picker-en|picker-locked|picker-close|thinking-on|thinking-off|attachment|baseline|streaming|complete-citations|sources-pane-open|sources-pane-close|new-thread|overlay
 --output <fixture-path>
 --screenshot-output <png-path>
 ```
@@ -1182,6 +1385,16 @@ mechanism. Do not implement pane closing from an invented selector or unverified
 Escape behavior.
 For status, `picker-close` records the authenticated close action and proves the
 selected alias and selected-row Thinking state are unchanged afterward.
+`new-thread` captures either the unique authenticated new-thread control or the
+clean provider-root state reached by exact navigation. Record the allowed host,
+root path, unique `#ask-input`, zero committed responses, and absence of the
+previous conversation UUID.
+
+Add `devlog/_evidence/*.png` to `.gitignore`. Screenshots are local-only audit
+inputs: crop to the surface, redact account/history/prompt content before
+hashing, and record `retained: false`, capture timestamp, redaction version,
+and SHA-256 in provenance. Do not stage PNGs. Tests assert capture leaves no
+untracked screenshot and provenance never claims a discarded image is retained.
 
 After sanitizing live captures, run
 `scripts/derive-perplexity-adversarial-fixtures.mjs`. It deterministically
@@ -1212,6 +1425,10 @@ model fixture proves presence/absence; otherwise use `null`. With current
 evidence, `gpt-5.6-terra` is the only required `true` entry. Runtime send still
 revalidates the adjacent control after selection and never treats this catalog
 as mutation evidence.
+For overlay, either store a `live-captured` entry with an authenticated close
+mechanism or a `not-observed` entry with no selector. Never derive or enable an
+overlay-closing branch from a synthetic fixture. The no-overlay baseline must
+remain Green with zero dismissal actions.
 For eval fixtures, remove or rewrite every external `href`, `src`, `action`,
 and `formaction`; `runOneFixture()` must not return `eval.network-blocked`.
 Citation URL normalization fixtures store source URLs in inert
@@ -1282,10 +1499,10 @@ export function validatePerplexitySelectionRequest(model, effort) {
         });
     }
     if (hasEffort && !requestedThinking) {
-        throw modeUnavailableError(
+        throw invalidEffortError(
             'perplexity',
-            requestedModel,
             String(effort),
+            { model: requestedModel },
         );
     }
     return { requestedModel, requestedThinking };
@@ -1303,7 +1520,7 @@ all live selected-row state.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add web-ai/perplexity-model.mjs web-ai/perplexity-citations.mjs \
+git add .gitignore web-ai/perplexity-model.mjs web-ai/perplexity-citations.mjs \
   scripts/capture-perplexity-fixtures.mjs \
   scripts/derive-perplexity-adversarial-fixtures.mjs \
   web-ai/capability-observation-presets.mjs \
@@ -1385,46 +1602,50 @@ const initial = await openAndResolveRequestedModelRow(
     requestedModel,
 );
 
-let selectedRowAfterModel = initial.row;
+let verifiedSelection = initial;
 if (!initial.selected) {
     await initial.row.click({ timeout: 5_000 });
-    selectedRowAfterModel = (
-        await reopenAndResolveSelectedModelRow(
-            page,
-            requestedModel,
-        )
-    ).row;
+    verifiedSelection = await reopenAndResolveSelectedModelRow(
+        page,
+        requestedModel,
+    );
 }
 
 let thinking = null;
 if (requestedThinking !== null) {
     const thinkingControl =
         await resolveAdjacentThinkingControl(
-            selectedRowAfterModel,
+            verifiedSelection.row,
         );
     thinking = await setPerplexityThinking(
         thinkingControl.switch,
         requestedThinking,
     );
 
-    const afterThinking =
+    verifiedSelection =
         await reopenAndResolveSelectedModelRow(
             page,
             requestedModel,
         );
     await verifyAdjacentThinkingState(
-        afterThinking.row,
+        verifiedSelection.row,
         requestedThinking,
     );
 } else {
     thinking =
         await readPerplexityThinkingStateWithoutMutation(
-            selectedRowAfterModel,
+            verifiedSelection.row,
         );
 }
+await verifySelectedModelRow(
+    verifiedSelection.row,
+    requestedModel,
+);
 return {
     requestedModel,
-    resolvedModel: requestedModel,
+    resolvedModel: verifiedSelection.alias,
+    resolvedLabel: verifiedSelection.label,
+    locked: false,
     thinking,
     verified: true,
 };
@@ -1437,6 +1658,11 @@ click may be queried again. Tests assert the action sequence: open/resolve
 model, click when needed, reopen/resolve fresh selected row, resolve adjacent
 Thinking, click switch when needed, reopen/resolve fresh row, and verify model
 plus switch. A stale-locator query fails the fake harness immediately.
+Assert the exact result keys, localized `resolvedLabel`, `locked: false`, no
+return on entitlement failure, and byte-for-byte session-store round-trip of
+the complete `modelSelection`. Store the canonical alias in
+`envelopeSummary.model`; keep the display label only in
+`modelSelection.resolvedLabel`.
 
 When effort is omitted, a missing Thinking item is valid, no switch click is
 allowed, and the stored state is `null` unless exactly one switch can be read
@@ -1529,11 +1755,17 @@ Assert:
   before send is implemented;
 - standalone send calls `openFreshPerplexityThread()` once;
 - session-bound send never calls it;
+- standalone fresh-thread from `/search/<UUID>` reaches an allowed exact root,
+  has zero committed responses, one visible composer, and no retained old UUID;
+  failure yields zero submit/session calls and all pre-navigation Locators are
+  invalid;
 - invalid model/effort/scope yields zero calls to `deps.getPage()`,
   `openFreshPerplexityThread()`, `goto`, `locator`, `evaluate`, and `click`;
 - missing target ID fails with `cdp.target-mismatch` before provider mutation;
-- overlay dismissal uses only an observed close control or Escape and never
-  clicks login, subscribe, or consent;
+- overlay dismissal uses only a live-captured authenticated close mechanism and
+  never clicks login, subscribe, or consent; when provenance is
+  `not-observed`, the no-overlay path makes zero dismissal actions and no
+  speculative Escape branch exists;
 - context-package attachment plus explicit `filePath` fails before Page access;
 - composer resolution prefers the unique visible `#ask-input` textbox;
 - the upload path clicks `Add files or tools`, then the unique
@@ -1622,10 +1854,11 @@ export async function perplexitySendWebAi(deps, input = {}) {
 
     const page = await deps.getPage();
     await verifyPerplexityHost(page);
-    await dismissPerplexityBlockingOverlay(page);
     if (!input.session) {
         await openFreshPerplexityThread(page);
     }
+    await verifyPerplexityHost(page);
+    await dismissPerplexityBlockingOverlay(page);
 
     const composer =
         await resolvePerplexityComposer(page);
@@ -1711,6 +1944,17 @@ observed `Add files or tools` button and `Upload files or images` menu item;
 it does not infer upload from a broad paperclip selector. The implementation
 must not click the observed Search or Computer `aria-pressed` controls.
 
+`openFreshPerplexityThread()` is an independently tested prerequisite. It
+captures current URL/response count, no-ops only on an allowed provider root
+with zero committed responses, otherwise navigates to the exact default
+`https://www.perplexity.ai/` (or uses a uniquely live-captured new-thread
+control). After the action it discards every old Locator and verifies allowed
+host, normalized root path, one visible composer, response count `0`, and no
+retained prior conversation UUID. Any failed postcondition throws before
+composer insertion, submit, or session creation. Overlay detection runs after
+fresh-thread action because navigation may remount it. Session-bound send/query
+never calls this helper.
+
 `validatePerplexityUnsupportedFeatures()` rejects `tools`, `plugins`,
 `webSearch`, `autoTools`, `outputImage`, `followUps`, and
 `research: 'deep'` with `capability.unsupported` before browser access. The
@@ -1729,8 +1973,9 @@ expect(callOrder).toEqual([
     'get-target-id',
     'get-page',
     'verify-host',
-    'dismiss-overlay',
     'open-fresh-thread',
+    'verify-host-after-fresh',
+    'dismiss-overlay',
     'resolve-composer',
     'select-model',
     'insert-prompt',
@@ -1744,8 +1989,11 @@ expect(callOrder).toEqual([
 ]);
 ```
 
-Use `perplexity-blocking-overlay.html`,
-`perplexity-attachment-preview.html`, `perplexity-thinking-on.html`, and
+Use `perplexity-blocking-overlay.html` only when its provenance is
+`live-captured` with an authenticated close mechanism. Otherwise test the
+baseline no-overlay zero-mutation path and leave dismissal disabled. Always use
+`perplexity-new-thread.html`, `perplexity-attachment-preview.html`,
+`perplexity-thinking-on.html`, and
 `perplexity-thinking-off.html` in the behavioral tests.
 
 Implement `perplexityStatusWebAi()` first and make its focused Red test Green
@@ -1826,6 +2074,10 @@ Assert:
 - before/after pane identity tests cover an already-open previous pane, hidden
   stale plus new visible pane, two visible panes, same-node content replacement,
   no pane change, close failure, and answer/response-count drift during close;
+- close action failure or a still-visible pane yields `citationState:
+  'unknown'`, `complete: false`, empty candidate citations, and zero finalizer
+  calls; close-time turn/text/count drift discards candidates, resets response
+  and citation stability clocks, and retries response resolution;
 - ordinary body links, internal `/search/<UUID>` memory links, related
   questions, Share/Download/Rewrite/action links, and links from other turns
   are excluded;
@@ -1926,12 +2178,21 @@ Use explicit data/ARIA index evidence; otherwise `index: null`. State mapping:
   association, or normalization dropping every candidate -> `unavailable`;
 - a pane or citations that may still appear -> `pending`;
 - contradictory evidence -> `unknown`;
+- authenticated close failure, an associated pane remaining visible, or an
+  unauthenticated close mechanism -> `unknown` and non-terminal;
+- close-time committed turn/text/count drift -> response-resolution retry,
+  discard citation candidates, reset both stability clocks, and make zero
+  `finalizeProviderTab()` calls;
 - ambiguous committed response root -> response-resolution failure, not a
   citation state.
 
 `unavailable` completion stores `citations: []` and warning
 `citations-unavailable`. The V1 artifact is immutable after terminal completion;
 citations arriving after the 2-second grace do not rewrite a completed session.
+On a later poll with an already-open associated pane, reuse it only when its
+identity/fingerprint still maps uniquely to the committed root; otherwise
+attempt the authenticated close first and remain `unknown` if closure cannot be
+verified.
 
 - [ ] **Step 4: Finalize with one artifact**
 
@@ -2011,6 +2272,11 @@ Assert equal duplicate aliases are accepted once, while conflicting
 `--effort on --reasoning-effort off` fails with
 `provider.option-conflict` before `ensureHeadedBrowserForWebAi()`, `getPage()`,
 or `getTargetId()`.
+Assert the current CLI gates accept every Task 5 Perplexity model alias and
+canonicalizable effort, reject unknown models and `turbo` with the typed input
+errors, and preserve ChatGPT/Gemini/Grok behavior. Invalid Perplexity input
+records zero calls to `ensureHeadedBrowserForWebAi()`, `ensureProviderTab()`,
+`createTab()`, `goto()`, `getTargetId()`, and `getPage()`.
 
 - [ ] **Step 2: Verify Red**
 
@@ -2032,10 +2298,13 @@ preparation. Do not validate raw `values` with normalized-input helpers.
 Resolve aliases before creating normalized input:
 
 ```js
+const vendor = values.vendor || 'chatgpt';
 const reasoningEffort = resolveEqualAlias(
-    values,
+    vendor,
     'effort',
+    values.effort,
     'reasoning-effort',
+    values['reasoning-effort'],
 );
 ```
 
@@ -2043,6 +2312,66 @@ const reasoningEffort = resolveEqualAlias(
 throws a typed `provider.option-conflict` with `mutationAllowed: false` on
 disagreement. Use the resolved value for validation and timeout calculation;
 do not retain an `a || b` fallback elsewhere in CLI scope checks.
+
+Update the pre-existing CLI gates rather than relying only on provider-local
+validation:
+
+```js
+function isSupportedWebAiModel(vendor, model) {
+    if (vendor === 'perplexity') {
+        return normalizePerplexityModelChoice(model) !== null;
+    }
+    return existingModelSupport(vendor, model);
+}
+
+function isSupportedWebAiEffort(vendor, model, effort) {
+    if (vendor === 'perplexity') {
+        return Boolean(model)
+            && normalizePerplexityEffort(effort) !== null;
+    }
+    return existingEffortSupport(vendor, model, effort);
+}
+```
+
+Add `perplexity` to `rejectFutureScope()`'s vendor allowlist and delegate its
+model/effort checks to the Task 5 normalizers. Unknown effort uses
+`invalidEffortError()`, not `modeUnavailableError()`.
+
+Build normalized input and its timeout from the resolved effort:
+
+```js
+const input = {
+    // ...
+    vendor,
+    model: values.model,
+    reasoningEffort,
+    timeout: values.timeout != null
+        ? values.timeout
+        : ['send', 'query'].includes(command)
+            ? resolveTimeoutDefaultSec({
+                model: values.model,
+                research: values.research,
+                reasoningEffort,
+            }, vendor)
+            : undefined,
+};
+
+if (vendor === 'perplexity') {
+    validatePerplexitySelectionRequest(
+        input.model,
+        input.reasoningEffort,
+    );
+    validatePerplexityUnsupportedFeatures(input);
+}
+
+await ensureHeadedBrowserForWebAi(deps, command, argv);
+```
+
+This block sits after Work/code-mode's existing dedicated gates and before
+`ensureHeadedBrowserForWebAi()`, policy browser access, or `runCommand()`.
+Provider-local validation remains defense in depth but is not the first CLI
+call site. Add a direct timeout-injection assertion proving `--effort on`
+creates a 3,600-second deadline rather than storing 1,200 seconds.
 
 Add:
 
@@ -2180,6 +2509,9 @@ Assert validation happens before `getPage()`/`getTargetId()`:
 - MCP wait/resume returns exact citation artifacts.
 - MCP errors preserve `errorCode`, `stage`, `retryHint`, `vendor`,
   `mutationAllowed`, and `evidence` in `structuredContent.error`.
+- Perplexity effort conflict serializes `vendor: 'perplexity'`; a regression
+  test proves `wrapError()` does not inject fallback context into an existing
+  typed error, so the factory itself must own vendor.
 
 Add policy cases `omitted → true`, `false → false`, `true → true`. Add doctor assertions for a non-empty Perplexity feature list and Perplexity semantic targets. Add a copy fixture with two answers, a source panel, and a decoy copy button.
 For copy fallback, assert overlapping turn selectors resolve the actual last
@@ -2230,6 +2562,23 @@ For Perplexity, compare canonical `on|off` values; for existing providers,
 preserve their current normalization rules. Remove every downstream
 `args.effort || args.reasoningEffort` expression and pass only the resolved
 value. Conflicts use Task 0's `optionConflictError()`.
+Pass the canonical provider into Task 0's provider-aware factory:
+
+```js
+throw optionConflictError(
+    provider,
+    'effort',
+    args.effort,
+    args.reasoningEffort,
+    { canonicalEffort, canonicalReasoningEffort },
+);
+```
+
+Assert `structuredContent.error` contains `provider.option-conflict`, stage
+`provider-input-validation`, `vendor: 'perplexity'`, both raw values, and
+`mutationAllowed: false`. For a conflicting `provider`/`vendor` pair, preserve
+both values in evidence and serialize the explicit `provider` as vendor when
+present.
 
 For session tools, resolve the explicit requested provider separately from the
 stored session. If present and unequal to `stored.vendor`, throw
@@ -2572,6 +2921,8 @@ git commit -m "docs: document Perplexity web-ai support"
 
 **Files:**
 - Create: `devlog/_smoke/260711_perplexity_web_ai/README.md`
+- Create: `scripts/write-perplexity-smoke-evidence.mjs`
+- Create: `test/unit/write-perplexity-smoke-evidence.test.mjs`
 
 - [ ] **Step 1: Run focused and shared regression tests**
 
@@ -2582,6 +2933,7 @@ npx vitest run \
   test/unit/web-ai-perplexity-citations.test.mjs \
   test/unit/web-ai-perplexity-live-policy.test.mjs \
   test/integration/web-ai-perplexity-session.test.mjs
+npx vitest run test/unit/write-perplexity-smoke-evidence.test.mjs
 npm run test:unit
 npm run test:integration
 npm test
@@ -2615,6 +2967,9 @@ git diff --check
 
 ```bash
 set -euo pipefail
+SMOKE_DIR=devlog/_smoke/260711_perplexity_web_ai
+mkdir -p "$SMOKE_DIR"
+: > "$SMOKE_DIR/README.md"
 
 node ./bin/agbrowse.mjs navigate https://www.perplexity.ai
 
@@ -2657,13 +3012,37 @@ test -n "$SID"
 test "$SID" != "null"
 
 # 3600-second Thinking deadline plus a 120-second shutdown/evidence margin.
+set +e
 timeout 3720 node ./bin/agbrowse.mjs web-ai watch \
   --session "$SID" \
   --interval 5s \
   --poll-timeout 30 \
   --navigate \
   --json | tee /tmp/perplexity-watch.jsonl
+WATCH_RC="${PIPESTATUS[0]}"
+set -e
 
+case "$WATCH_RC" in
+  0) WATCHDOG_REASON=watch-completed ;;
+  124) WATCHDOG_REASON=external-timeout ;;
+  *) WATCHDOG_REASON="watch-error-$WATCH_RC" ;;
+esac
+
+node ./bin/agbrowse.mjs web-ai sessions show "$SID" \
+  --json > /tmp/perplexity-session-after-watch.json || true
+
+node scripts/write-perplexity-smoke-evidence.mjs \
+  --output "$SMOKE_DIR/README.md" \
+  --status /tmp/perplexity-status.json \
+  --send /tmp/perplexity-send.json \
+  --watch /tmp/perplexity-watch.jsonl \
+  --session /tmp/perplexity-session-after-watch.json \
+  --watch-rc "$WATCH_RC" \
+  --watchdog-reason "$WATCHDOG_REASON" \
+  --provider-deadline-sec 3600 \
+  --external-watchdog-sec 3720
+
+test "$WATCH_RC" -eq 0
 grep -q '"type":"watch.complete"' /tmp/perplexity-watch.jsonl
 
 node ./bin/agbrowse.mjs web-ai sessions resume "$SID" \
@@ -2713,9 +3092,8 @@ OBSERVED_LOCKED_MODEL_ALIAS="$(
 )"
 
 if [ -z "$OBSERVED_LOCKED_MODEL_ALIAS" ]; then
-  printf '%s\n' \
-    'locked-model check: not-observable' \
-    >> devlog/_smoke/260711_perplexity_web_ai/README.md
+  jq -n '{ executed: false, reason: "not-observable" }' \
+    > /tmp/perplexity-locked-status.json
 else
   set +e
   node ./bin/agbrowse.mjs web-ai send \
@@ -2733,10 +3111,40 @@ else
   jq -e '
     .error.errorCode == "provider.model-entitlement"
   ' /tmp/perplexity-locked.err
+  jq -n \
+    --arg alias "$OBSERVED_LOCKED_MODEL_ALIAS" \
+    --argjson rc "$RC" \
+    '{ executed: true, alias: $alias, exitCode: $rc,
+       errorCode: "provider.model-entitlement" }' \
+    > /tmp/perplexity-locked-status.json
 fi
 ```
 
 - [ ] **Step 6: Record only executed evidence**
+
+`scripts/write-perplexity-smoke-evidence.mjs` is an idempotent structured
+evidence writer. Its tests cover successful watch, watch error, external exit
+`124`, missing/unexecuted checks, and refusal to write `true` without evidence.
+Run it again after resume/reattach/locked-model steps with all available `/tmp`
+artifacts to merge the final record.
+
+```bash
+set -euo pipefail
+SMOKE_DIR=devlog/_smoke/260711_perplexity_web_ai
+ARGS=(
+  --output "$SMOKE_DIR/README.md"
+  --status /tmp/perplexity-status.json
+  --send /tmp/perplexity-send.json
+  --watch /tmp/perplexity-watch.jsonl
+  --session /tmp/perplexity-session.json
+  --resume /tmp/perplexity-resume.json
+  --reattach /tmp/perplexity-reattach.json
+  --locked-status /tmp/perplexity-locked-status.json
+  --provider-deadline-sec 3600
+  --external-watchdog-sec 3720
+)
+node scripts/write-perplexity-smoke-evidence.mjs "${ARGS[@]}"
+```
 
 `devlog/_smoke/260711_perplexity_web_ai/README.md` must include command,
 timestamp, exit code, session ID, observed conversation URL, citation count,
@@ -2744,11 +3152,14 @@ provider deadline, external watchdog timeout, watchdog exit reason, and exact
 booleans for watch, resume, reattach, and locked-model checks. Do not
 write `yes` for an unexecuted check. Every fenced smoke block is self-contained
 with `set -euo pipefail` and reloads values it needs from `/tmp` JSON evidence.
+Watch failure is recorded before `test "$WATCH_RC" -eq 0` fails the gate.
 
 - [ ] **Step 7: Commit evidence**
 
 ```bash
-git add devlog/_smoke/260711_perplexity_web_ai/README.md
+git add scripts/write-perplexity-smoke-evidence.mjs \
+  test/unit/write-perplexity-smoke-evidence.test.mjs \
+  devlog/_smoke/260711_perplexity_web_ai/README.md
 git commit -m "test: record Perplexity web-ai smoke"
 git status --short
 ```
@@ -2759,23 +3170,23 @@ Expected: the final `git status --short` prints no output.
 
 - [ ] Full checkout baseline and all pre-existing failures are documented.
 - [ ] Identity registration precedes live dispatch and eval execution.
-- [ ] Validation completes before any Page/Locator call.
+- [ ] CLI validation completes before headed-browser startup/tab acquisition; provider defense-in-depth validation completes before any Page/Locator mutation.
 - [ ] Model row and its immediate-next-sibling Thinking switch are unique, scoped, interactive, and post-verified without sibling skipping.
 - [ ] `Sonar 2` is recognized as the observed selectable
   `menuitemradio`, while headings and locked non-radio rows are never clicked.
-- [ ] Standalone send opens a fresh thread; session-bound send does not.
+- [ ] Standalone send verifies guarded fresh-root postconditions and rechecks overlay state; session-bound send does not open a fresh thread.
 - [ ] Baseline, assistant count, active lease, target binding, model, and effort persist.
 - [ ] Completion requires a unique committed response, progress, settled citation state, and no streaming; `unavailable` degrades only after grace with a warning.
 - [ ] Timeout, page-death, and stop postconditions match existing provider behavior.
-- [ ] Citation extraction proves Sources-pane causality, uses an authenticated close mechanism, is scoped to the committed response, and never invents indices.
+- [ ] Citation extraction proves Sources-pane causality, uses an authenticated close mechanism, remains non-terminal on close failure/drift, is scoped to the committed response, and never invents indices.
 - [ ] `answer === answerArtifact.text`; 2 MiB answers and 500 citations survive a fresh process.
-- [ ] Thinking timeout restores to 3600 seconds during resume without a deadline.
+- [ ] CLI send injects the resolved effort into its 3600-second deadline, and resume restores the same tier without a deadline.
 - [ ] Existing-tab and new-tab recovery share the strict provider URL guard.
 - [ ] CLI, MCP, policy, doctor, copy fallback, sessions, watcher, and search help include Perplexity.
 - [ ] Capability registry/presets expose the six Perplexity rows without browser mutation in Task 0.
-- [ ] Tab lifecycle treats bare and `www` Perplexity hosts as one provider and preserves active lease/session ownership.
-- [ ] MCP errors preserve the structured WebAiError contract.
+- [ ] Tab lifecycle and durable lease keys treat bare and `www` Perplexity hosts as one provider for active capacity, pooled checkout, stats, and ownership.
+- [ ] CLI/MCP errors preserve the structured WebAiError contract, including provider-aware option conflicts and invalid-effort taxonomy.
 - [ ] Unsupported/conflicting Perplexity options and MCP session-vendor mismatches fail before browser preparation or session-page recovery.
 - [ ] `parallel-eval.json` remains unchanged; dedicated Perplexity eval is part of `gate:all` and passes.
 - [ ] ChatGPT/Gemini/Grok regression tests, `npm test`, `test:e2e`, and `npm run gate:all` pass.
-- [ ] Smoke evidence includes the watcher path and records only commands that actually ran.
+- [ ] Smoke evidence writer records success/error/exit-124 before gate failure, and local screenshots are ignored with redacted hash-only provenance.

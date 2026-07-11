@@ -1,5 +1,9 @@
 # Perplexity Web-AI Plan External Re-review Disposition
 
+> Superseded for implementation approval by
+> `2026-07-11-perplexity-dual-model-final-review.md`. This file remains the
+> disposition record for its specific input review.
+
 ## Input
 
 - Date reviewed: 2026-07-11

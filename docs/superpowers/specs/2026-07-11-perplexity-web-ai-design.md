@@ -160,6 +160,10 @@ lifecycle pool and cleanup limit. One shared provider-URL identity contract is
 used by reusable-tab acquisition, driveability, navigation readiness, recovery,
 and cleanup. The bare host is a redirect alias; successful navigation stores
 the browser's canonical live `www` URL.
+The durable lease store canonicalizes both aliases to
+`https://www.perplexity.ai` for lease keys, scoped target identity, active
+capacity, pooled checkout, and pool statistics. Caller-only normalization is
+insufficient.
 The observed Search and Computer controls are separate `aria-pressed`
 buttons. V1 preserves their state and never clicks them.
 
@@ -183,16 +187,21 @@ only for the currently selected row; unselected models are always `null`.
 Status never selects models to discover capability, and send always revalidates
 the actual adjacent control after model selection.
 
-Overlay dismissal may press Escape or click an unambiguous close control.
-It must not click login, subscription, destructive, or consent controls.
+Overlay dismissal exists only when an authenticated live capture proves a
+unique close mechanism. If overlay provenance is `not-observed`, runtime uses a
+zero-mutation no-overlay path and does not speculate with Escape or a generic
+close selector. It must not click login, subscription, destructive, or consent
+controls.
 
 ## Send Data Flow
 
 1. Ensure a headed provider tab and navigate to the requested/default
    Perplexity URL.
-2. Verify the host and dismiss blocking overlays.
-3. Prepare a fresh thread unless the request is session-bound.
-4. Resolve the composer.
+2. Verify the host.
+3. Prepare a fresh thread unless the request is session-bound, then discard
+   pre-navigation Locators.
+4. Re-verify the host, apply only an authenticated overlay dismissal path, and
+   resolve the composer.
 5. If `--model` is present, select the requested unlocked model and verify it.
 6. If `--effort` is present, set the thinking toggle and verify it.
 7. Insert the rendered question envelope.
@@ -213,6 +222,12 @@ It must not click login, subscription, destructive, or consent controls.
 }
 ```
 
+Fresh-thread preparation no-ops only on a provider root with zero committed
+responses. Otherwise it uses a live-captured unique control or guarded exact
+root navigation and verifies allowed host, normalized root path, one visible
+composer, zero committed responses, and no retained prior conversation UUID.
+Failure prevents submit and session creation.
+
 The same state is stored in `envelopeSummary.model` and
 `envelopeSummary.reasoningEffort` so timeout recovery and session inspection do
 not depend on warning text.
@@ -230,6 +245,11 @@ not depend on warning text.
    footer control, read the associated Sources pane, and normalize only those
    source links.
 7. Finalize the session and pool the tab using existing infrastructure.
+
+If authenticated pane close fails or the pane remains visible, citation state
+is non-terminal `unknown`. If turn identity, answer text, or response count
+changes during close, discard citation candidates, reset response/citation
+stability clocks, retry response resolution, and do not finalize.
 
 ## Citation Contract
 
@@ -375,8 +395,11 @@ To make that timeout contract real:
 
 CLI validation adds a Perplexity-specific branch. It accepts the documented
 binary effort aliases, requires `--model`, and leaves ChatGPT effort validation
-unchanged. MCP schemas add `perplexity` and `on`/`off` without changing other
-provider semantics.
+unchanged. It runs before headed-browser startup/tab acquisition and updates
+the existing CLI vendor/model/effort allowlists rather than relying only on the
+provider module. MCP schemas add `perplexity` and `on`/`off` without changing
+other provider semantics. CLI and MCP option-conflict errors are provider-aware
+and serialize `vendor: 'perplexity'`.
 
 `--follow-up`, ChatGPT tools/plugins, ChatGPT Deep Research, Work mode, and
 generated-image output remain unsupported for Perplexity.
@@ -392,6 +415,7 @@ All public failures use `WebAiError`.
 | Unknown model alias | `provider.model-mismatch` | `model-fallback` |
 | Locked model | `provider.model-entitlement` | `choose-unlocked-model` |
 | Thinking control unavailable | `provider.mode-unavailable` | `omit-effort-or-change-model` |
+| Unknown effort alias | `provider.invalid-effort` | `use-on-off-effort-aliases` |
 | Attachment not verified | `provider.attachment-evidence-missing` | `re-upload` |
 | Submit not verified | `provider.commit-not-verified` | `re-snapshot` |
 | Missing baseline | `provider.poll-timeout` | `send-first` |
@@ -435,7 +459,8 @@ Authenticated live captures cover naturally observable surfaces only:
 - locked Max entries
 - selected model with thinking off
 - selected model with thinking on
-- blocking overlay
+- blocking overlay only when live-observed with an authenticated close action
+- fresh-thread root/control and zero-response postcondition
 - attachment preview
 - streaming response
 - stable response with citations
@@ -446,6 +471,10 @@ decoys, detached-locator remounts, Copy/pane decoys, stale/two-visible panes,
 same-pane fingerprint replacement, late citations, cosmetic/structural churn,
 and the breaking variant. Provenance records each parent hash and transform;
 derived fixtures are never labeled `live-frontend`.
+
+Capture screenshots are surface-cropped, redacted, local-only ignored files.
+Provenance retains their hash/timestamp/redaction version with
+`retained: false`; account/history screenshots are never committed.
 
 Fixture tests must include Korean labels shown in the supplied model-picker
 screen and desktop English variants where observed.

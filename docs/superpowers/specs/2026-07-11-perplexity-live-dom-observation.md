@@ -68,6 +68,12 @@ TDD plan. Account text and unrelated history content are not fixture data.
 
 ## Send And Completion
 
+- The provider root `https://www.perplexity.ai/` exposed the empty composer and
+  no committed response in the observation session. No unique new-thread
+  control was captured; V1 must prefer guarded exact-root navigation unless a
+  later authenticated fixture proves such a control.
+- No blocking overlay was observed. This provides only a zero-mutation
+  no-overlay contract and does not authorize Escape or a generic close selector.
 - Submit changes the URL to `/search/<uuid>`.
 - The observed completed URL uses `www.perplexity.ai`; bare
   `perplexity.ai` redirects to that canonical host and is not a second site.
