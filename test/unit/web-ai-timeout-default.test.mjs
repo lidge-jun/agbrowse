@@ -15,12 +15,13 @@ import {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('web-ai tier-aware default poll timeout', () => {
-    it('exposes the 3-split tier table (chatgpt-pro=5400, grok-heavy=3600, deep-research=3600)', () => {
+    it('exposes provider-specific timeout tiers including Perplexity Thinking', () => {
         expect({ ...TIER_DEFAULT_TIMEOUT_SEC }).toEqual({
             instant: 120,
             thinking: 600,
             'chatgpt-pro': 5400,
             'grok-heavy': 3600,
+            'perplexity-thinking': 3600,
             'deep-research': 3600,
         });
         expect(CHATGPT_PRO_TIMEOUT_SEC).toBe(5400);

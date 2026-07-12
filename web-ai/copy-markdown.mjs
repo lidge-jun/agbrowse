@@ -5,6 +5,7 @@
  * @typedef {{
  *   turnSelectors: string[],
  *   copyButtonSelectors: string[],
+ *   copyButtonNames?: string[],
  * }} CopySelectors
  */
 
@@ -13,6 +14,7 @@
  *   copyTarget?: { selector?: string }|null,
  *   timeoutMs?: number,
  *   stableTicks?: number,
+ *   committedRoot?: import('playwright-core').Locator|null,
  * }} CaptureCopyOptions
  */
 
@@ -59,6 +61,15 @@ export const GROK_COPY_SELECTORS = {
     ],
 };
 
+/** @type {CopySelectors} */
+export const PERPLEXITY_COPY_SELECTORS = {
+    // Runtime callers pass the semantically resolved committed response Locator.
+    // This standards-compatible selector remains only for deterministic fixtures.
+    turnSelectors: ['[data-agbrowse-perplexity-response="committed"]'],
+    copyButtonSelectors: ['button'],
+    copyButtonNames: ['Copy'],
+};
+
 /**
  * @param {import('playwright-core').Page} page
  * @param {CopySelectors} selectors
@@ -67,26 +78,40 @@ export const GROK_COPY_SELECTORS = {
  */
 export async function captureCopiedResponseText(page, selectors, options = {}) {
     const selectorSet = copySelectorsWithTarget(selectors, options.copyTarget ?? null);
+    const committedRoot = options.committedRoot && typeof options.committedRoot.elementHandle === 'function'
+        ? await options.committedRoot.elementHandle()
+        : null;
     try {
         const result = await page.evaluate?.(
             /**
-             * @param {{ selectorSet: CopySelectors, timeoutMs: number, stableTicks: number }} args
+             * @param {{ selectorSet: CopySelectors, timeoutMs: number, stableTicks: number, committedRoot: Element|null }} args
              * @returns {Promise<CaptureCopyResult>}
              */
-            async ({ selectorSet, timeoutMs, stableTicks }) => {
-                const turns = selectorSet.turnSelectors
-                    .flatMap((/** @type {string} */ selector) => Array.from(document.querySelectorAll(selector)))
-                    .filter((/** @type {Element} */ node, /** @type {number} */ index, /** @type {Element[]} */ arr) => arr.indexOf(node) === index);
+            async ({ selectorSet, timeoutMs, stableTicks, committedRoot }) => {
+                const turns = committedRoot
+                    ? [committedRoot]
+                    : selectorSet.turnSelectors
+                        .flatMap((/** @type {string} */ selector) => Array.from(document.querySelectorAll(selector)))
+                        .filter((/** @type {Element} */ node, /** @type {number} */ index, /** @type {Element[]} */ arr) => arr.indexOf(node) === index)
+                        .sort((/** @type {Element} */ left, /** @type {Element} */ right) => {
+                            if (left === right) return 0;
+                            return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+                        });
                 const turn = turns.at(-1);
                 if (!turn) return { ok: false, status: 'missing-turn' };
 
                 /** @type {HTMLElement|null} */
                 let button = null;
                 for (const selector of selectorSet.copyButtonSelectors) {
-                    const scoped = /** @type {HTMLElement[]} */ (Array.from(turn.querySelectorAll(selector)));
-                    // 203.9: prefer a visible candidate but fall back to the last scoped button
-                    // rather than returning missing-button — copy controls are often present but
-                    // report offsetParent=null until hover.
+                    let scoped = /** @type {HTMLElement[]} */ (Array.from(turn.querySelectorAll(selector)));
+                    if (selectorSet.copyButtonNames?.length) {
+                        scoped = scoped.filter((candidate) => {
+                            const accessibleName = String(candidate.getAttribute('aria-label') || candidate.textContent || '').trim();
+                            return selectorSet.copyButtonNames.includes(accessibleName);
+                        });
+                    }
+                    // Prefer a visible candidate but fall back to the last scoped button rather
+                    // than returning missing-button: copy controls can remain layout-hidden until hover.
                     button = scoped.find((/** @type {HTMLElement} */ candidate) => candidate.offsetParent !== null || candidate.getClientRects().length > 0) || scoped.at(-1) || null;
                     if (button) break;
                 }
@@ -136,14 +161,8 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                         return origFocus.call(this, Object.assign({}, opts, { preventScroll: true }));
                     };
 
-                    const init = { bubbles: true, cancelable: true, view: window };
-                    button.dispatchEvent(new PointerEvent('pointerdown', init));
-                    button.dispatchEvent(new MouseEvent('mousedown', init));
-                    button.dispatchEvent(new PointerEvent('pointerup', init));
-                    button.dispatchEvent(new MouseEvent('mouseup', init));
-                    button.dispatchEvent(new MouseEvent('click', init));
-                    // 203.9: also fire the element's real click handler — synthetic events alone
-                    // miss React onClick handlers bound via the property, not addEventListener.
+                    // Invoke exactly one click path. Native click dispatches the browser event
+                    // sequence and avoids duplicate React handlers.
                     button.click?.();
 
                     const deadline = Date.now() + timeoutMs;
@@ -176,6 +195,7 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
                 selectorSet,
                 timeoutMs: Math.max(250, options.timeoutMs ?? 1500),
                 stableTicks: Math.max(1, options.stableTicks ?? 3),
+                committedRoot,
             },
         );
         if (result?.ok && typeof result.text === 'string' && result.text.trim()) return { ok: true, text: result.text };
@@ -184,6 +204,8 @@ export async function captureCopiedResponseText(page, selectors, options = {}) {
         return { ok: false, status, ...errField };
     } catch (e) {
         return { ok: false, status: 'exception', error: e instanceof Error ? e.message : String(e) };
+    } finally {
+        await committedRoot?.dispose?.().catch(() => undefined);
     }
 }
 

@@ -10,7 +10,7 @@
 import { WebAiError } from './errors.mjs';
 
 /**
- * @typedef {'chatgpt'|'gemini'|'grok'} WebAiVendorId
+ * @typedef {'chatgpt'|'gemini'|'grok'|'perplexity'} WebAiVendorId
  *
  * @typedef {Object} WaitForResponseOptions
  * @property {number} timeoutMs

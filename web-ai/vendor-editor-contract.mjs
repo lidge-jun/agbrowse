@@ -7,7 +7,7 @@ import {
     submitPromptFromComposer,
     verifyPromptCommitted,
 } from './chatgpt-composer.mjs';
-import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } from './copy-markdown.mjs';
+import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS, PERPLEXITY_COPY_SELECTORS } from './copy-markdown.mjs';
 import { CHATGPT_MODEL_SELECTOR_BUTTONS } from './chatgpt-model.mjs';
 import { UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_BUTTON_SELECTORS } from './chatgpt-attachments.mjs';
 
@@ -31,7 +31,7 @@ import { UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_BUTTON_SELECTORS } from './ch
  */
 
 /**
- * @typedef {'chatgpt' | 'gemini' | 'grok'} VendorName
+ * @typedef {'chatgpt' | 'gemini' | 'grok' | 'perplexity'} VendorName
  */
 
 /**
@@ -108,6 +108,13 @@ export const GROK_UPLOAD_SELECTORS = ['button[aria-label*="Upload" i]', 'button[
 export const GROK_RESPONSE_SELECTORS = ['[data-testid="assistant-message"]', '[id^="response-"]:has([data-testid="assistant-message"])'];
 export const GROK_STREAMING_SELECTORS = ['button[aria-label*="Stop" i]'];
 
+export const PERPLEXITY_COMPOSER_SELECTORS = ['#ask-input'];
+export const PERPLEXITY_SEND_SELECTORS = ['button:has-text("Submit")'];
+export const PERPLEXITY_MODEL_PICKER_SELECTORS = ['button:has-text("Model")'];
+export const PERPLEXITY_UPLOAD_SELECTORS = ['button:has-text("Add files or tools")'];
+export const PERPLEXITY_RESPONSE_SELECTORS = ['[data-agbrowse-perplexity-response="committed"]', '.perplexity-response:has(button:has-text("Copy")):has(button:has-text("sources"))'];
+export const PERPLEXITY_STREAMING_SELECTORS = ['button:has-text("Stop response (Esc)")'];
+
 export const CHATGPT_EDITOR_CONTRACT = Object.freeze({
     vendor: 'chatgpt',
     semanticTargets: {
@@ -152,10 +159,25 @@ export const GROK_EDITOR_CONTRACT = Object.freeze({
     },
 });
 
+
+export const PERPLEXITY_EDITOR_CONTRACT = Object.freeze({
+    vendor: 'perplexity',
+    semanticTargets: {
+        composer: { roles: ['textbox'], names: [/ask/i, /question/i, /질문/i, /search/i], excludeNames: [/filter/i], cssFallbacks: PERPLEXITY_COMPOSER_SELECTORS, required: true },
+        sendButton: { roles: ['button'], names: [/submit/i, /send/i, /검색/i], cssFallbacks: PERPLEXITY_SEND_SELECTORS },
+        modelPicker: { roles: ['button', 'combobox'], names: [/model/i, /모델/i], cssFallbacks: PERPLEXITY_MODEL_PICKER_SELECTORS },
+        uploadSurface: { roles: ['button'], names: [/^add files or tools$/i], cssFallbacks: PERPLEXITY_UPLOAD_SELECTORS },
+        responseFeed: { roles: [], names: [], cssFallbacks: PERPLEXITY_RESPONSE_SELECTORS },
+        copyButton: { roles: ['button'], names: [/copy/i, /복사/i], cssFallbacks: PERPLEXITY_COPY_SELECTORS.copyButtonSelectors },
+        streamingIndicator: { roles: ['button'], names: [/^stop response \(esc\)$/i, /중지/i], cssFallbacks: PERPLEXITY_STREAMING_SELECTORS },
+    },
+});
+
 export const EDITOR_CONTRACT_BY_VENDOR = Object.freeze({
     chatgpt: CHATGPT_EDITOR_CONTRACT,
     gemini: GEMINI_EDITOR_CONTRACT,
     grok: GROK_EDITOR_CONTRACT,
+    perplexity: PERPLEXITY_EDITOR_CONTRACT,
 });
 
 /**

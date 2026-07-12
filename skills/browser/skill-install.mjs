@@ -16,7 +16,7 @@ export const INSTALLABLE_SKILLS = Object.freeze(['browser', 'web-ai', 'search', 
 /** @type {Readonly<Record<string, string>>} */
 export const SKILL_DESCRIPTIONS = Object.freeze({
     browser: 'Chrome/CDP browser control: navigate, inspect, click, type, screenshot, logs, and network.',
-    'web-ai': 'Browser web-ai workflow for ChatGPT, Gemini, and Grok: send, poll, upload files, and capture answers.',
+    'web-ai': 'Browser web-ai workflow for ChatGPT, Gemini, Grok, and Perplexity: send, poll, upload files, and capture answers.',
     search: 'Standalone deep search: query rewrite, original-page fetch verification, and evidence scoring.',
     'vision-click': 'Screenshot-to-coordinate click helper for targets with no reliable DOM ref.',
 });
@@ -80,7 +80,7 @@ export const INSTALL_SKILLS_USAGE = [
     '',
 'Installed skills:',
     '  browser       Chrome/CDP browser control skill',
-    '  web-ai        ChatGPT, Gemini, and Grok browser web-ai workflow skill',
+    '  web-ai        ChatGPT, Gemini, Grok, and Perplexity browser web-ai workflow skill',
     '  search        Standalone deep search and URL evidence verification skill',
     '  vision-click  Screenshot-to-coordinate click helper skill',
     '',

@@ -19,7 +19,7 @@ original pages, updates a constraint ledger, and returns an evidence decision.
 | `--stdin-results` | boolean | off | Read candidate-result JSON from stdin |
 | `--browser` | `auto`, `never`, `required` | `auto` | Select adaptive-fetch browser mode; invalid search values silently become `auto` |
 | `--max-results` | integer-like string | `5` | Fetch at least one candidate; invalid input falls back to `5` |
-| `--vendor` | `grok`, `chatgpt`, `gemini` | `grok` | Vendor passed to web-ai when `--deep` runs; other values are rejected downstream by `web-ai query` |
+| `--vendor` | `grok`, `chatgpt`, `gemini`, `perplexity` | `grok` | Vendor passed to web-ai when `--deep` runs; other values are rejected downstream by `web-ai query` |
 | `--help` | boolean | off | Print search help |
 
 Without `--stdin-results`, search builds internal candidates from the planned

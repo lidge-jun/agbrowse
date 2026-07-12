@@ -12,8 +12,10 @@ import { pollWebAi } from './chatgpt.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
+import { perplexityPollWebAi } from './perplexity-live.mjs';
 import { getSession, updateSession } from './session.mjs';
 import { withSessionPage, urlsCompatible } from './tab-recovery.mjs';
+import { isSafeProviderConversationUrl } from './provider-url-identity.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
@@ -33,12 +35,14 @@ const WATCHER_STREAMING_SELECTORS = {
     chatgpt: ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]'],
     grok: ['button[aria-label*="Stop" i]', 'button:has-text("Stop")'],
     gemini: ['button[aria-label*="Stop" i]', 'button[aria-label*="Stop generating" i]'],
+    perplexity: ['button[aria-label="Stop response (Esc)"]'],
 };
 
 const PROVIDER_HOSTS = {
     chatgpt: new Set(['chatgpt.com', 'chat.openai.com']),
     gemini: new Set(['gemini.google.com']),
     grok: new Set(['grok.com']),
+    perplexity: new Set(['perplexity.ai', 'www.perplexity.ai']),
 };
 
 /**
@@ -487,6 +491,9 @@ async function ensureWatcherAttached(page, session, options) {
     // non-provider landing still mismatches and (with --navigate) re-navigates.
     if (urlsCompatible(targetUrl, currentUrl)) return { ok: true, url: currentUrl, warnings: [] };
     if (options.navigate) {
+        if (['chatgpt', 'perplexity'].includes(session.vendor || '') && !isSafeProviderConversationUrl(session.vendor, targetUrl)) {
+            throw new WebAiError({ errorCode: 'cdp.target-mismatch', stage: 'target-resolution', vendor: session.vendor, retryHint: 'pass-session', message: 'refusing unsafe stored conversation URL', mutationAllowed: false, evidence: { targetUrl } });
+        }
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: options.navigateTimeoutMs });
         return { ok: true, url: targetUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
     }
@@ -507,6 +514,7 @@ async function callVendorPoll(deps, vendor, session, options) {
     const pollFn = isWorkSession(session) ? pollWorkSession
         : vendor === 'gemini' ? geminiPollWebAi
         : vendor === 'grok' ? grokPollWebAi
+        : vendor === 'perplexity' ? perplexityPollWebAi
             : pollWebAi;
     try {
         return await pollFn(deps, {

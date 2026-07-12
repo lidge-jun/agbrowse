@@ -15,7 +15,7 @@ export const DEFAULT_WEB_AI_POLICY = Object.freeze({
 });
 
 /** @type {ReadonlySet<string>} */
-const PROVIDER_FILE_ACCESS_PROVIDERS = new Set(['chatgpt', 'gemini', 'grok']);
+const PROVIDER_FILE_ACCESS_PROVIDERS = new Set(['chatgpt', 'gemini', 'grok', 'perplexity']);
 
 /**
  * Apply provider-specific file-access default.

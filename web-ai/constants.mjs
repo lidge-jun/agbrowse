@@ -3,7 +3,7 @@
 /**
  * G09 (Model Adapter) — FROZEN.
  *
- * The web-ai skill (agbrowse web-ai query --vendor chatgpt|gemini|grok) IS the
+ * The web-ai skill (agbrowse web-ai query --vendor chatgpt|gemini|grok|perplexity) IS the
  * model-adapter surface for this release. No provider API clients are added.
  *
  * Hard cap = 1 initial attempt + 1 retry = 2 total attempts.

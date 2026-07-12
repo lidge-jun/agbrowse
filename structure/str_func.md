@@ -8,7 +8,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 `agbrowse`는 long-running server 없이 Chrome DevTools Protocol에 붙는 짧은 Node CLI다. 사용자는 `agbrowse start`로 Chrome을 띄우고, `snapshot`, `click`, `type`, `web-ai query` 같은 명령을 독립 프로세스로 실행한다. 상태는 `BROWSER_AGENT_HOME` 아래에 저장되고, provider web-AI 세션과 tab lease도 같은 홈을 기준으로 이어진다.
 
-구조를 볼 때 핵심은 세 계층이다. 첫째, `skills/browser/`는 Chrome lifecycle과 일반 browser primitive를 담당한다. 둘째, `web-ai/`는 ChatGPT, Gemini, Grok 웹 UI를 provider별 계약으로 다룬다. 셋째, `test/`, `scripts/`, `devlog/`, `structure/`는 실제 동작을 검증하고 public claim을 제한하는 근거를 남긴다.
+구조를 볼 때 핵심은 세 계층이다. 첫째, `skills/browser/`는 Chrome lifecycle과 일반 browser primitive를 담당한다. 둘째, `web-ai/`는 ChatGPT, Gemini, Grok, Perplexity 웹 UI를 provider별 계약으로 다룬다. 셋째, `test/`, `scripts/`, `devlog/`, `structure/`는 실제 동작을 검증하고 public claim을 제한하는 근거를 남긴다.
 
 개발자는 새 기능을 넣기 전에 이 문서에서 어느 계층에 들어가는지 먼저 정한다. 일반 브라우저 동작이면 `skills/browser/`, provider UI 자동화면 `web-ai/`, 검증 자동화면 `test/`나 `scripts/`, 장기 의사결정이면 `devlog/`에 둔다. `cli-jaw`와 mirror할 때도 같은 기준으로 `.mjs` standalone 표면과 `.ts` server-routed 표면을 나눠 본다.
 
@@ -16,26 +16,26 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 ## 현재 구조 스냅샷
 
-마지막 측정: 2026-07-11.
+마지막 측정: 2026-07-12.
 
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 55 | 16320 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
+| `skills/browser/` | 55 | 16325 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
-| `skills/web-ai/` | 3 | 872 | bundled agent workflow skill |
-| `web-ai/` | 113 | 27479 | provider automation, sessions, MCP, eval, policy, trace |
+| `skills/web-ai/` | 3 | 894 | bundled agent workflow skill |
+| `web-ai/` | 117 | 29414 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 858 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
-| `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 141 | 17677 | deterministic module tests |
-| `test/integration/` | 21 | 3167 | CLI, MCP, policy, provider fixture tests |
+| `scripts/` | 12 | 1829 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
+| `test/unit/` | 151 | 18431 | deterministic module tests |
+| `test/integration/` | 22 | 3289 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
-| `docs/` | 41 | 3540 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
+| `docs/` | 49 | 7851 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
 | `devlog/` | 512 | 70710 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
@@ -44,12 +44,12 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
-| `skills/browser/browser.mjs` | 3536 | root CLI parser, Chrome lifecycle, browser primitive commands |
+| `skills/browser/browser.mjs` | 3537 | root CLI parser, Chrome lifecycle, browser primitive commands |
 | `skills/browser/search.mjs` | 410 | standalone search orchestrator: query rewrite → fetch → evidence score → output |
 | `skills/browser/runway.mjs` | 598 | Runway Apps/Custom selector contract, status/open/preflight command surface |
 | `skills/browser/runway-monitor.mjs` | 383 | Runway read-only queue/completion poller and progress signal extraction |
 | `skills/browser/tab-manager.mjs` | 446 | CDP target list, create, close, switch |
-| `skills/browser/tab-lifecycle.mjs` | 382 | idle cleanup, pinned target, duration parsing |
+| `skills/browser/tab-lifecycle.mjs` | 386 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 374 | bundled skill list/get/install |
 | `skills/browser/adaptive-fetch/index.mjs` | 737 | adaptive fetch v2 CLI + 6-phase escalation scheduler |
 | `skills/browser/adaptive-fetch/safety.mjs` | 320 | URL validation, SSRF guard, DNS rebinding guard with --resolve pinning |
@@ -80,16 +80,16 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/adaptive-fetch/transforms.mjs` | 86 | URL transforms, HTML-to-text, content-type checks |
 | `skills/browser/adaptive-fetch/third-party-readers.mjs` | 46 | Jina Reader integration |
 | `skills/browser/adaptive-fetch/browser-runtime.mjs` | 38 | browser page acquisition and cleanup |
-| `web-ai/cli.mjs` | 2010 | `web-ai` subcommand parser and command orchestration |
+| `web-ai/cli.mjs` | 2038 | `web-ai` subcommand parser and command orchestration |
 | `web-ai/session-target-guard.mjs` | 151 | shared CDP session candidate selection, ambiguity errors, and target-mismatch recovery envelopes |
 | `web-ai/chatgpt.mjs` | 1110 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
 | `web-ai/chatgpt-response-dom.mjs` | 74 | shared ChatGPT top-level assistant DOM extraction helpers |
 | `web-ai/chatgpt-response-observer.mjs` | 190 | ChatGPT observer wake signal and timeout recovery metadata |
 | `web-ai/gemini-live.mjs` | 804 | Gemini provider send/poll/query/status |
 | `web-ai/grok-live.mjs` | 594 | Grok provider send/poll/query/status |
-| `web-ai/mcp-server.mjs` | 467 | stdio JSON-RPC MCP bridge |
-| `web-ai/tool-schema.mjs` | 208 | MCP and AI SDK schema source |
-| `web-ai/answer-artifact.mjs` | 153 | provider poll result artifact normalization |
+| `web-ai/mcp-server.mjs` | 498 | stdio JSON-RPC MCP bridge |
+| `web-ai/tool-schema.mjs` | 263 | MCP and AI SDK schema source |
+| `web-ai/answer-artifact.mjs` | 182 | provider poll result artifact normalization |
 | `web-ai/source-audit.mjs` | 183 | claim/source coverage audit helper |
 | `web-ai/ax-snapshot.mjs` | 484 | compact accessibility snapshot and refs |
 | `web-ai/self-heal.mjs` | 489 | deterministic target resolution and validation |
@@ -132,7 +132,7 @@ sequenceDiagram
 | 계층 | 포함 | 포함하지 않음 |
 | --- | --- | --- |
 | Browser primitive | CDP connection, tab state, DOM refs, screenshot, console/network, click/type/wait | provider별 prompt contract |
-| Web-AI provider | ChatGPT/Gemini/Grok status, send, poll, model selection, copy fallback, session resume | generic desktop/browser launch policy |
+| Web-AI provider | ChatGPT/Gemini/Grok/Perplexity status, send, poll, model selection, copy fallback, session resume | generic desktop/browser launch policy |
 | Evidence | trace writer, eval fixtures, contract audit, policy tests | live account entitlement claims |
 | Release | test gates, package export, dry-run publish | credential setup, provider subscription validation |
 

@@ -10,6 +10,7 @@ import { sendWebAi, pollWebAi } from './chatgpt.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiSendWebAi, geminiPollWebAi } from './gemini-live.mjs';
 import { grokSendWebAi, grokPollWebAi } from './grok-live.mjs';
+import { perplexitySendWebAi, perplexityPollWebAi, resolveLatestPerplexityResponseRoot } from './perplexity-live.mjs';
 import { runDoctor } from './doctor.mjs';
 import { getSession, resolveTimeoutBudgetSec } from './session.mjs';
 import {
@@ -17,8 +18,10 @@ import {
     CHATGPT_COPY_SELECTORS,
     GEMINI_COPY_SELECTORS,
     GROK_COPY_SELECTORS,
+    PERPLEXITY_COPY_SELECTORS,
 } from './copy-markdown.mjs';
-import { allToolSchemas, isKnownMcpTool, isKnownWebAiTool, validateWebAiToolInput } from './tool-schema.mjs';
+import { allToolSchemas, isKnownMcpTool, isKnownWebAiTool, validateProviderWebAiInput, validateWebAiToolInput } from './tool-schema.mjs';
+import { optionConflictError, sessionVendorMismatchError, wrapError } from './errors.mjs';
 import { KeyedMutex } from '../skills/browser/keyed-mutex.mjs';
 import { isKnownBrowserTool, validateBrowserToolInput, getDeferredBrowserToolMetadata } from './browser-tool-schema.mjs';
 import { enforcePolicy } from './policy/enforce.mjs';
@@ -32,7 +35,7 @@ const MCP_PROTOCOL_VERSION = '2025-06-18';
 const JSON_RPC = '2.0';
 const WEB_AI_SCOPE = 'web_ai';
 const BROWSER_SCOPE = 'browser';
-const PROVIDERS = new Set(['chatgpt', 'gemini', 'grok']);
+const PROVIDERS = new Set(['chatgpt', 'gemini', 'grok', 'perplexity']);
 const tabMutex = new KeyedMutex();
 
 /**
@@ -47,12 +50,19 @@ const VENDOR_DEFAULT_URLS = {
     chatgpt: 'https://chatgpt.com',
     gemini: 'https://gemini.google.com',
     grok: 'https://grok.com',
+    perplexity: 'https://www.perplexity.ai',
 };
 
 /**
  * @param {any} args
  */
 function providerFromArgs(args = {}) {
+    if (args.provider && args.vendor && args.provider !== args.vendor) {
+        throw optionConflictError(String(args.provider), 'provider', args.provider, args.vendor, {
+            provider: args.provider,
+            vendor: args.vendor,
+        });
+    }
     const provider = args.provider || args.vendor || 'chatgpt';
     if (!PROVIDERS.has(provider)) throw new Error(`unsupported provider: ${provider}`);
     return provider;
@@ -102,6 +112,7 @@ function jsonResponse(id, result) {
 async function pollByProvider(provider, deps, input) {
     if (provider === 'gemini') return geminiPollWebAi(deps, input);
     if (provider === 'grok') return grokPollWebAi(deps, input);
+    if (provider === 'perplexity') return perplexityPollWebAi(deps, input);
     return pollWebAi(deps, input);
 }
 
@@ -113,6 +124,7 @@ async function pollByProvider(provider, deps, input) {
 async function sendByProvider(provider, deps, input) {
     if (provider === 'gemini') return geminiSendWebAi(deps, input);
     if (provider === 'grok') return grokSendWebAi(deps, input);
+    if (provider === 'perplexity') return perplexitySendWebAi(deps, input);
     return sendWebAi(deps, input);
 }
 
@@ -122,6 +134,7 @@ async function sendByProvider(provider, deps, input) {
 function copySelectorsForProvider(provider) {
     if (provider === 'gemini') return GEMINI_COPY_SELECTORS;
     if (provider === 'grok') return GROK_COPY_SELECTORS;
+    if (provider === 'perplexity') return PERPLEXITY_COPY_SELECTORS;
     return CHATGPT_COPY_SELECTORS;
 }
 
@@ -150,7 +163,10 @@ async function callMcpTool(name, args, deps, state) {
     rejectClientPolicyFields(args || {});
     const policy = normalizeMcpPolicy(args.policy === undefined ? {} : args.policy);
     if (isKnownBrowserTool(name)) validateBrowserToolInput(name, args || {});
-    if (isKnownWebAiTool(name)) validateWebAiToolInput(name, args || {});
+    if (isKnownWebAiTool(name)) {
+        validateWebAiToolInput(name, args || {});
+        args = validateProviderWebAiInput(name, args || {});
+    }
     if (name === 'browser_snapshot') {
         const page = await deps.getPage();
         const snapshot = await buildWebAiSnapshot(page, {
@@ -216,7 +232,7 @@ async function callMcpTool(name, args, deps, state) {
                 vendor: provider,
                 inlineOnly: args.inlineOnly !== false,
                 attachmentPolicy: 'inline-only',
-                reasoningEffort: args.effort || args.reasoningEffort,
+                reasoningEffort: args.reasoningEffort,
             })),
         );
     }
@@ -296,7 +312,16 @@ async function callMcpTool(name, args, deps, state) {
         enforcePolicy(policy, action);
         const page = await deps.getPage();
         enforcePolicy(policy, { ...action, url: page.url?.() || fallbackUrl });
-        const copied = await withMcpActiveCommand(name, provider, deps, args, () => captureCopiedResponseText(page, copySelectorsForProvider(provider)));
+        const committedRoot = provider === 'perplexity'
+            ? await resolveLatestPerplexityResponseRoot(page)
+            : null;
+        const copied = await withMcpActiveCommand(
+            name,
+            provider,
+            deps,
+            args,
+            () => captureCopiedResponseText(page, copySelectorsForProvider(provider), { committedRoot }),
+        );
         return { ok: copied.ok, vendor: provider, text: copied.text || '', status: copied.status || 'copied' };
     }
     if (name === 'web_ai_doctor') {
@@ -318,7 +343,11 @@ async function runMcpSessionPoll(name, args, deps) {
     const sessionId = args.sessionId;
     const stored = getSession(sessionId);
     if (!stored) throw new Error(`no session record for ${sessionId}`);
-    providerFromArgs({ provider: args.provider || args.vendor || stored.vendor || 'chatgpt' });
+    const explicitProvider = args.provider || args.vendor || null;
+    if (explicitProvider && stored.vendor && explicitProvider !== stored.vendor) {
+        throw sessionVendorMismatchError(explicitProvider, stored.vendor, sessionId);
+    }
+    providerFromArgs({ provider: explicitProvider || stored.vendor || 'chatgpt' });
     return withSessionCommandLock(sessionId, () =>
         withSessionPage(deps, sessionId, async ({ page, targetId, session }) => {
             const provider = providerFromArgs({ provider: session.vendor || stored.vendor || args.provider || args.vendor || 'chatgpt' });
@@ -405,8 +434,10 @@ export async function handleMcpMessage(message, deps, state = {}) {
         }
         return jsonError(message.id, -32601, `Method not found: ${message.method}`);
     } catch (error) {
+        const wrapped = wrapError(error);
         return jsonResponse(message.id, {
-            content: [{ type: 'text', text: (/** @type {any} */ (error))?.message || String(error) }],
+            content: [{ type: 'text', text: wrapped.message }],
+            structuredContent: { error: wrapped.toJSON() },
             isError: true,
         });
     }

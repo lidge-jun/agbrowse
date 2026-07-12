@@ -3,6 +3,8 @@ import { updateSession } from './session.mjs';
 import { poolTab } from './tab-pool.mjs';
 import { trySaveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
 import { resolveArchivePolicy, archiveConversation } from './chatgpt-archive.mjs';
+import { createAnswerArtifact } from './answer-artifact.mjs';
+import { WebAiError } from './errors.mjs';
 
 const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
 
@@ -32,6 +34,7 @@ const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
  * @property {FinalizePage} [page]
  * @property {string} [answerText]
  * @property {string} [artifactText]
+ * @property {Record<string, any>} [answerArtifact]
  * @property {string} [status]
  * @property {unknown[]} [warnings]
  * @property {string} [archiveFlag]
@@ -53,6 +56,7 @@ export async function finalizeProviderTab(deps, {
     page,
     answerText,
     artifactText,
+    answerArtifact,
     status = 'complete',
     warnings = [],
     archiveFlag,
@@ -63,17 +67,48 @@ export async function finalizeProviderTab(deps, {
     }
     const conversationUrl = page?.url?.() || session.conversationUrl || session.originalUrl || undefined;
     const baseWarnings = Array.isArray(warnings) ? warnings : [];
+    if (answerText != null && answerArtifact?.text != null && answerText !== answerArtifact.text) {
+        throw new WebAiError({
+            errorCode: 'internal.answer-artifact-mismatch',
+            stage: 'finalize',
+            retryHint: 'report',
+            mutationAllowed: false,
+        });
+    }
+    const canonicalAnswer = answerText ?? answerArtifact?.text ?? '';
+    const provider = vendor || session.vendor || 'chatgpt';
+    const normalizedArtifact = answerArtifact
+        ? createAnswerArtifact({
+            ...answerArtifact,
+            provider: answerArtifact.provider ?? provider,
+            sessionId: answerArtifact.sessionId ?? session.sessionId,
+            conversationUrl: answerArtifact.conversationUrl ?? conversationUrl,
+            text: canonicalAnswer,
+            markdown: answerArtifact.markdown ?? artifactText ?? canonicalAnswer,
+            citations: provider === 'perplexity' ? (answerArtifact.citations ?? []) : answerArtifact.citations,
+            warnings: [...baseWarnings, ...(answerArtifact.warnings ?? [])],
+        })
+        : (canonicalAnswer ? createAnswerArtifact({
+            provider,
+            sessionId: session.sessionId,
+            conversationUrl,
+            text: canonicalAnswer,
+            markdown: artifactText ?? canonicalAnswer,
+            citations: provider === 'perplexity' ? [] : undefined,
+            warnings: baseWarnings,
+        }) : null);
     updateSession(session.sessionId, {
         status: 'complete',
         conversationUrl,
-        answer: answerText,
-        warnings: baseWarnings,
+        answer: canonicalAnswer,
+        answerArtifact: normalizedArtifact,
+        warnings: normalizedArtifact?.warnings ?? baseWarnings,
         completedAt: new Date().toISOString(),
     });
     /** @type {{ required: boolean, ok: boolean, descriptor?: unknown, stage?: string, error?: string }} */
     let artifactStatus = { required: false, ok: true };
-    if (answerText) {
-        const saved = trySaveTranscript(session.sessionId, artifactText || answerText);
+    if (canonicalAnswer) {
+        const saved = trySaveTranscript(session.sessionId, normalizedArtifact?.markdown ?? artifactText ?? canonicalAnswer);
         artifactStatus = saved.ok
             ? { required: true, ok: true, descriptor: saved.descriptor }
             : { required: true, ok: false, stage: saved.stage, error: saved.error };

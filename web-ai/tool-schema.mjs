@@ -1,12 +1,14 @@
 // @ts-check
 import { BROWSER_TOOLS, isKnownBrowserTool, policySchema, validateSchema } from './browser-tool-schema.mjs';
+import { optionConflictError, modelMismatchError } from './errors.mjs';
+import { normalizePerplexityEffort, validatePerplexitySelectionRequest } from './perplexity-model.mjs';
 
 /**
  * @typedef {{ description: string, inputSchema: Record<string, unknown> }} ToolDefinition
  * @typedef {{ name: string, description?: string, inputSchema?: unknown, parameters?: unknown }} ToolSchema
  */
 
-const providerEnum = ['chatgpt', 'gemini', 'grok'];
+const providerEnum = ['chatgpt', 'gemini', 'grok', 'perplexity'];
 const providerSchema = { type: 'string', enum: providerEnum };
 const optionalUrlSchema = { type: 'string' };
 const MCP_WEB_AI_DEFERRED_NOTE = ' Note: generated image output, Deep Research, multi-turn follow-ups, archive mutation, Project Sources, and context package fields are CLI-only/deferred in MCP for this release.';
@@ -47,15 +49,15 @@ export const WEB_AI_TOOLS = {
         }, ['snapshotId', 'ref']),
     },
     web_ai_submit_prompt: {
-        description: `Submit prompt to ChatGPT/Gemini/Grok web UI. When timeout is omitted, the selected model tier supplies the persisted session deadline.${MCP_WEB_AI_DEFERRED_NOTE}`,
+        description: `Submit prompt to ChatGPT/Gemini/Grok/Perplexity web UI. When timeout is omitted, the selected model tier supplies the persisted session deadline.${MCP_WEB_AI_DEFERRED_NOTE}`,
         inputSchema: objectSchema({
             provider: { ...providerSchema, default: 'chatgpt' },
             vendor: providerSchema,
             surface: { type: 'string', enum: ['chat'] },
             family: { type: 'string', enum: ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3', 'o3'] },
             model: { type: 'string' },
-            effort: { type: 'string', enum: ['medium', 'high', 'xhigh', 'extra-high', 'extra_high', 'extra high', 'light', 'low', 'standard', 'normal', 'regular', 'default', 'extended', 'heavy'] },
-            reasoningEffort: { type: 'string', enum: ['medium', 'high', 'xhigh', 'extra-high', 'extra_high', 'extra high', 'light', 'low', 'standard', 'normal', 'regular', 'default', 'extended', 'heavy'] },
+            effort: { type: 'string', enum: ['medium', 'high', 'xhigh', 'extra-high', 'extra_high', 'extra high', 'light', 'low', 'standard', 'normal', 'regular', 'default', 'extended', 'heavy', 'on', 'off'] },
+            reasoningEffort: { type: 'string', enum: ['medium', 'high', 'xhigh', 'extra-high', 'extra_high', 'extra high', 'light', 'low', 'standard', 'normal', 'regular', 'default', 'extended', 'heavy', 'on', 'off'] },
             prompt: { type: 'string', minLength: 1 },
             system: { type: 'string' },
             context: { type: 'string' },
@@ -190,6 +192,59 @@ export function isKnownMcpTool(toolName) {
  */
 export function isKnownWebAiTool(toolName) {
     return Boolean(WEB_AI_TOOLS[toolName]);
+}
+
+/**
+ * @param {string} toolName
+ * @param {unknown} input
+ * @returns {boolean}
+ */
+
+/**
+ * Apply provider-specific semantic validation after JSON schema validation but
+ * before any page, target, navigation, or mutex access.
+ * @param {string} toolName
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function validateProviderWebAiInput(toolName, input = {}) {
+    const explicitProvider = input.provider;
+    const explicitVendor = input.vendor;
+    const provider = explicitProvider || explicitVendor || 'chatgpt';
+    if (explicitProvider && explicitVendor && explicitProvider !== explicitVendor) {
+        throw optionConflictError(String(explicitProvider), 'provider', explicitProvider, explicitVendor, {
+            provider: explicitProvider,
+            vendor: explicitVendor,
+        });
+    }
+    if (toolName !== 'web_ai_submit_prompt' || provider !== 'perplexity') {
+        return {
+            ...input,
+            provider,
+            reasoningEffort: input.effort || input.reasoningEffort,
+        };
+    }
+    if (input.family !== undefined) {
+        throw modelMismatchError('perplexity', String(input.family), {
+            reason: 'chatgpt-family-is-not-valid-for-perplexity',
+            family: input.family,
+        });
+    }
+    const effort = input.effort === undefined ? null : normalizePerplexityEffort(input.effort);
+    const reasoningEffort = input.reasoningEffort === undefined ? null : normalizePerplexityEffort(input.reasoningEffort);
+    if (input.effort !== undefined && input.reasoningEffort !== undefined && effort !== reasoningEffort) {
+        throw optionConflictError('perplexity', 'effort', input.effort, input.reasoningEffort, {
+            canonicalEffort: effort,
+            canonicalReasoningEffort: reasoningEffort,
+        });
+    }
+    const resolvedEffort = effort || reasoningEffort;
+    validatePerplexitySelectionRequest(input.model, resolvedEffort);
+    return {
+        ...input,
+        provider,
+        reasoningEffort: resolvedEffort || undefined,
+    };
 }
 
 /**

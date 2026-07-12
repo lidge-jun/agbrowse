@@ -6,7 +6,7 @@
 // so other files can reference these typedefs via import('./capability-types.mjs').X.
 
 /**
- * @typedef {'chatgpt'|'gemini'|'grok'|'shared'} WebAiVendorScope
+ * @typedef {'chatgpt'|'gemini'|'grok'|'perplexity'|'shared'} WebAiVendorScope
  */
 
 /**

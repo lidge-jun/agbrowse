@@ -3,6 +3,7 @@ export const WEB_AI_VENDOR = Object.freeze({
     CHATGPT: 'chatgpt',
     GEMINI: 'gemini',
     GROK: 'grok',
+    PERPLEXITY: 'perplexity',
 });
 
 export const WEB_AI_STATUS = Object.freeze({
@@ -24,7 +25,7 @@ export const ATTACHMENT_POLICY = Object.freeze({
 });
 
 /**
- * @typedef {'chatgpt'|'gemini'|'grok'} WebAiVendor
+ * @typedef {'chatgpt'|'gemini'|'grok'|'perplexity'} WebAiVendor
  * @typedef {'inline-only'|'upload'|'auto'} AttachmentPolicy
  * @typedef {'ready'|'rendered'|'sent'|'polling'|'streaming'|'complete'|'blocked'|'timeout'|'error'} WebAiStatus
  *
@@ -54,6 +55,11 @@ export const ATTACHMENT_POLICY = Object.freeze({
  * @property {string=} textHash
  * @property {string} capturedAt
  *
+ * @typedef {Object} AnswerCitation
+ * @property {number|null} index
+ * @property {string} title
+ * @property {string} url
+ *
  * @typedef {Object} AnswerArtifact
  * @property {WebAiVendor|string} provider
  * @property {string|null} sessionId
@@ -64,6 +70,7 @@ export const ATTACHMENT_POLICY = Object.freeze({
  * @property {number} exactnessScore
  * @property {number|null} responseStableMs
  * @property {string[]} warnings
+ * @property {AnswerCitation[]} citations
  *
  * @typedef {Object} WebAiOutput
  * @property {boolean} ok

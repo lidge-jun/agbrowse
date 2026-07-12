@@ -12,8 +12,16 @@
  *   exactnessScore?: number|string,
  *   responseStableMs?: number|string|null,
  *   warnings?: unknown[],
+ *   citations?: unknown[],
  *   [extra: string]: unknown,
  * }} AnswerArtifactInput
+ */
+
+/**
+ * @typedef {Object} AnswerCitation
+ * @property {number|null} index
+ * @property {string} title
+ * @property {string} url
  */
 
 /**
@@ -27,6 +35,7 @@
  *   exactnessScore: number,
  *   responseStableMs: number|null,
  *   warnings: string[],
+ *   citations: AnswerCitation[],
  * }} AnswerArtifact
  */
 
@@ -41,6 +50,7 @@ export function createAnswerArtifact(input = {}) {
     const markdown = normalizeText(input.markdown);
     const text = normalizeText(input.text || markdown);
     const warnings = Array.isArray(input.warnings) ? input.warnings.filter(Boolean).map(String) : [];
+    const citations = normalizeCitations(input.citations);
     const exactnessScore = input.exactnessScore === undefined
         ? estimateExactnessScore({ capturedBy, markdown, text })
         : clampScore(Number(input.exactnessScore));
@@ -55,6 +65,7 @@ export function createAnswerArtifact(input = {}) {
         exactnessScore,
         responseStableMs: Number.isFinite(Number(input.responseStableMs)) ? Number(input.responseStableMs) : null,
         warnings,
+        citations,
     };
 }
 
@@ -78,6 +89,7 @@ export function artifactFromPollResult(result = {}, context = {}) {
         text: result.text || result.answerText || result.markdown || result.answerMarkdown || '',
         responseStableMs: result.responseStableMs,
         warnings: [...(context.warnings || []), ...(result.warnings || [])],
+        citations: result.citations || result.answerArtifact?.citations || [],
     });
 }
 
@@ -111,6 +123,23 @@ export function summarizeAnswerArtifact(artifact = {}) {
         exactnessScore: normalized.exactnessScore,
         warningCount: normalized.warnings.length,
     };
+}
+
+/**
+ * @param {unknown} value
+ * @returns {AnswerCitation[]}
+ */
+function normalizeCitations(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((entry) => {
+        const item = entry && typeof entry === 'object' ? /** @type {Record<string, unknown>} */ (entry) : {};
+        const parsedIndex = Number(item.index);
+        return {
+            index: Number.isInteger(parsedIndex) && parsedIndex > 0 ? parsedIndex : null,
+            title: typeof item.title === 'string' ? item.title : '',
+            url: typeof item.url === 'string' ? item.url : '',
+        };
+    });
 }
 
 /**

@@ -14,7 +14,7 @@ export const EVAL_SCHEMA_VERSION = 1;
 export const DEFAULT_MAX_FIXTURE_CONCURRENCY = 1;
 export const MAX_FIXTURE_CONCURRENCY = 4;
 
-export const EVAL_VENDORS = ['chatgpt', 'gemini', 'grok'];
+export const EVAL_VENDORS = ['chatgpt', 'gemini', 'grok', 'perplexity'];
 export const EVAL_VARIANTS = ['baseline', 'cosmetic-churn', 'structural-churn', 'breaking'];
 export const DEFAULT_EVAL_RUN_VARIANTS = ['baseline', 'cosmetic-churn', 'structural-churn'];
 export const EVAL_VENDOR_SET = new Set(EVAL_VENDORS);

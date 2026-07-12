@@ -18,7 +18,7 @@
  *   --stdin-results     Read normalized search results from stdin (pipe from any provider)
  *   --browser <mode>    auto | never | required (default: auto)
  *   --max-results <n>   Max URLs to fetch-enrich (default: 5)
- *   --vendor <name>     Web-ai vendor for --deep (chatgpt | gemini | grok, default: grok)
+ *   --vendor <name>     Web-ai vendor for --deep (chatgpt | gemini | grok | perplexity, default: grok)
  */
 
 import { parseArgs } from 'node:util';
@@ -374,7 +374,7 @@ Options:
   --stdin-results     Read search results from stdin (JSON array or object)
   --browser <mode>    auto | never | required (default: auto)
   --max-results <n>   Max URLs to fetch-enrich (default: 5)
-  --vendor <name>     Web-ai vendor for --deep (chatgpt | gemini | grok)
+  --vendor <name>     Web-ai vendor for --deep (chatgpt | gemini | grok | perplexity)
   --help              Show this help
 
 Examples:

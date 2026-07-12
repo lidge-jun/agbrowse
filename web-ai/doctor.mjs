@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { domHashAround, selectorMatchSummary } from './dom-hash.mjs';
 import { findActiveSession } from './session.mjs';
-import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } from './copy-markdown.mjs';
+import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS, PERPLEXITY_COPY_SELECTORS } from './copy-markdown.mjs';
 import { CHATGPT_MODEL_SELECTOR_BUTTONS, CHATGPT_SURFACE_RADIO_SELECTOR, CHATGPT_WORK_PICKER_MARKER_SELECTOR } from './chatgpt-model.mjs';
 import { CHATGPT_MODEL_SELECTOR_OBSERVATION } from './capability-observation-presets.mjs';
 import { buildWebAiSnapshot, summarizeSnapshotForDoctor } from './ax-snapshot.mjs';
@@ -44,11 +44,22 @@ const GROK_FEATURES = [
     { feature: 'streaming-indicator', selectors: ['button[aria-label*="Stop" i]'] },
 ];
 
+export const PERPLEXITY_FEATURES = [
+    { feature: 'composer', selectors: ['#ask-input'] },
+    { feature: 'model-picker', selectors: ['button:has-text("Model")'] },
+    { feature: 'upload', selectors: ['button:has-text("Add files or tools")'] },
+    { feature: 'response-feed', selectors: ['[data-agbrowse-perplexity-response="committed"]', '.perplexity-response:has(button:has-text("Copy")):has(button:has-text("sources"))'] },
+    { feature: 'copy-fallback', selectors: PERPLEXITY_COPY_SELECTORS.copyButtonSelectors },
+    { feature: 'streaming-indicator', selectors: ['button:has-text("Stop response (Esc)")'] },
+];
+
+
 /** @type {Readonly<Record<string, Set<string>>>} */
 const PROVIDER_HOSTS = {
     chatgpt: new Set(['chatgpt.com', 'chat.openai.com']),
     gemini: new Set(['gemini.google.com']),
     grok: new Set(['grok.com']),
+    perplexity: new Set(['perplexity.ai', 'www.perplexity.ai']),
 };
 
 const DEFAULT_MAX_REPORT_BYTES = 4096;
@@ -65,6 +76,7 @@ export function featureDefinitionsForVendor(vendor) {
         case 'chatgpt': return CHATGPT_FEATURES.map(deepCopy);
         case 'gemini': return GEMINI_FEATURES.map(deepCopy);
         case 'grok': return GROK_FEATURES.map(deepCopy);
+        case 'perplexity': return PERPLEXITY_FEATURES.map(deepCopy);
         default: return [];
     }
 }
