@@ -132,3 +132,40 @@ export const CHATGPT_DEEP_RESEARCH_OBSERVATION = {
     mutationRisk: 'medium',
     notes: ['Observed in headed 30_browser on 2026-04-29.', 'Runtime state machine remains separate from normal chat.'],
 };
+
+
+/** @type {FrontendCapabilityObservation} */
+export const PERPLEXITY_MODEL_PICKER_OBSERVATION = {
+    status: 'not-observed',
+    source: 'planning',
+    selectorCandidates: [],
+    textCandidates: [],
+    activationPath: [],
+    activeStateSignals: [],
+    mutationRisk: 'medium',
+    notes: ['Task 5 replaces this with fixture-backed evidence.'],
+};
+
+/** @type {FrontendCapabilityObservation} */
+export const PERPLEXITY_UPLOAD_OBSERVATION = {
+    status: 'not-observed',
+    source: 'planning',
+    selectorCandidates: [],
+    textCandidates: [],
+    activationPath: [],
+    activeStateSignals: [],
+    mutationRisk: 'medium',
+    notes: ['Task 5 replaces this with fixture-backed evidence.'],
+};
+
+/** @type {FrontendCapabilityObservation} */
+export const PERPLEXITY_RESPONSE_OBSERVATION = {
+    status: 'not-observed',
+    source: 'planning',
+    selectorCandidates: [],
+    textCandidates: [],
+    activationPath: [],
+    activeStateSignals: [],
+    mutationRisk: 'read-only',
+    notes: ['Task 5 replaces this with fixture-backed evidence.'],
+};

@@ -119,6 +119,20 @@ describe('tab lifecycle cleanup selection', () => {
         expect(selected[0].cleanupReason).toBe('provider-overflow');
     });
 
+    it('treats Perplexity bare and www hosts as one lifecycle provider', () => {
+        const selected = selectProviderTabsForCleanup({
+            vendor: 'perplexity',
+            keep: 1,
+            tabs: [
+                { targetId: 'www-new', url: 'https://www.perplexity.ai/search/123e4567-e89b-12d3-a456-426614174000', lastActiveAt: 300 },
+                { targetId: 'bare-old', url: 'https://perplexity.ai/', lastActiveAt: 100 },
+                { targetId: 'http', url: 'http://perplexity.ai/', lastActiveAt: 50 },
+                { targetId: 'subdomain', url: 'https://foo.perplexity.ai/', lastActiveAt: 25 },
+            ],
+        });
+        expect(selected.map(tab => tab.targetId)).toEqual(['bare-old']);
+    });
+
     it('counts only owned closeable leases toward managed max-tabs when lease metadata is present', () => {
         const leaseByTargetId = new Map([
             ['pooled-old', { targetId: 'pooled-old', owner: 'web-ai', state: 'pooled' }],

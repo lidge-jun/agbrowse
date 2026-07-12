@@ -9,6 +9,7 @@ import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi, 
 import { codeWebAi, extractCodeArtifacts } from './code-mode.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
+import { perplexityStatusWebAi, perplexitySendWebAi, perplexityPollWebAi, perplexityQueryWebAi, perplexityStopWebAi } from './perplexity-live.mjs';
 import { isWorkSession, pollWorkSession, submitWorkPrompt } from './chatgpt-work-picker.mjs';
 import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
@@ -18,6 +19,7 @@ import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
 import { isChatGptEffortSupported, normalizeChatGptFamilyChoice } from './chatgpt-model.mjs';
+import { normalizePerplexityEffort, normalizePerplexityModelChoice } from './perplexity-model.mjs';
 import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
@@ -37,12 +39,14 @@ import { applyProviderDefaults } from './policy/default-policy.mjs';
 import { activeCommandTargetIds, withActiveCommand } from './active-command-store.mjs';
 import { auditSources } from './source-audit.mjs';
 import { isProviderPageDriveable, shouldNavigateToRequestedProviderUrl, waitForPageUrl } from './navigation-ready.mjs';
+import { canonicalProviderOrigin, isProviderOriginUrl } from './provider-url-identity.mjs';
 export { parseDurationToMs };
 
 const VENDOR_DEFAULT_URLS = {
     chatgpt: 'https://chatgpt.com',
     gemini: 'https://gemini.google.com',
     grok: 'https://grok.com',
+    perplexity: 'https://www.perplexity.ai',
 };
 
 const COMMANDS = new Set([
@@ -59,7 +63,7 @@ const BROWSER_REQUIRED_COMMANDS = new Set(['status', 'send', 'poll', 'query', 's
 const BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach', 'doctor']);
 export const WEB_AI_USAGE = `
 Usage:
-  agbrowse web-ai <command> --vendor <chatgpt|gemini|grok> [options]
+  agbrowse web-ai <command> --vendor <chatgpt|gemini|grok|perplexity> [options]
 
 Agent skill setup:
   agbrowse skills get web-ai
@@ -109,25 +113,28 @@ Commands:
                       No browser, no provider. Use --json for machine-readable output.
 
 Provider:
-  --vendor <name>     chatgpt | gemini | grok (default: chatgpt)
+  --vendor <name>     chatgpt | gemini | grok | perplexity (default: chatgpt)
   --url <url>         Navigate or verify the provider URL before mutation
   --model <alias>     Provider model alias; aliases below
                         ChatGPT: instant, thinking, pro
                         Gemini  models: flash-lite, flash, pro
                         Gemini  tool:   deepthink
                         Grok:   auto, fast, expert, thinking, heavy
-  --effort <alias>    ChatGPT reasoning effort. The reasoning-effort menu is
+                        Perplexity: best, sonar-2, gpt-5.6-terra, gemini-3.1-pro,
+                                    claude-sonnet-5, glm-5.2, kimi-k2.6, nemotron-3-ultra
+  --effort <alias>    ChatGPT or Perplexity reasoning effort. The control is
                       ONLY touched when this flag is provided; otherwise the
-                      currently-checked effort in the browser is left as-is.
-                      Requires a model because legacy Pro/Thinking menus and the
-                      simplified Intelligence menu map efforts differently.
-                        Pro: standard, extended
-                        Thinking: light, standard, extended, heavy
+                      current browser state is left as-is. Requires --model.
+                        ChatGPT Pro: standard, extended
+                        ChatGPT Thinking: light, standard, extended, heavy
+                        Perplexity Thinking: on, off (heavy=on, normal=off)
   --reasoning-effort <alias>
                       Alias for --effort
-  --timeout <sec>     Polling timeout. When omitted, the default scales by model tier:
-                      instant 120s, thinking 600s, pro/deep-research 3600s (vendor
-                      default 1200/1200/600 for unknown models). --timeout overrides.
+  --timeout <sec>     Polling timeout. When omitted, defaults scale by tier:
+                      instant 120s, thinking 600s, chatgpt-pro 5400s,
+                      grok-heavy/perplexity-thinking/deep-research 3600s;
+                      unknown tiers use 1200s ChatGPT/Gemini/Perplexity or
+                      600s Grok. --timeout always overrides.
 
 Prompt envelope (every prompt also gets a [INSTRUCTIONS] block telling the
 model to use web search and cite sources inline):
@@ -307,7 +314,7 @@ Failure envelope (when --json or AGBROWSE_JSON_ERRORS=1):
          grok.context-pack-not-allowed | internal.unhandled
 
 Capability boundary: web-ai query uses the existing local browser automation
-skill for chatgpt, gemini, and grok. G09 does not add provider API clients,
+skill for chatgpt, gemini, grok, and perplexity. G09 does not add provider API clients,
 API-key auth, hosted model routing, or MCP model tools. API model adapters
 are explicitly deferred and unavailable in this release.
 
@@ -666,7 +673,7 @@ async function runWebAiCliInner(argv = [], deps) {
         timeout: values.timeout != null
             ? values.timeout
             : (command === 'send' || command === 'query')
-                ? resolveTimeoutDefaultSec({ model: values.model, research: values.research }, values.vendor || 'chatgpt')
+                ? resolveTimeoutDefaultSec({ model: values.model, research: values.research, reasoningEffort: values.effort || values['reasoning-effort'] }, values.vendor || 'chatgpt')
                 : undefined,
         deadline: values.deadline,
         session: values.session,
@@ -1103,7 +1110,9 @@ async function findReusableProviderTab(port, vendor, targetUrl) {
         .filter(tab => !activeSessionTargets.has(tab.targetId))
         .filter(tab => !isPinned(tab.targetId))
         .filter(tab => isReusableByLease(tab.targetId, leaseByTargetId))
-        .filter(tab => providerOriginFromUrl(tab.url) === origin)
+        .filter(tab => vendor === 'perplexity'
+            ? isProviderOriginUrl('perplexity', tab.url)
+            : providerOriginFromUrl(tab.url) === origin)
         .filter(tab => !shouldNavigateToRequestedProviderUrl(tab.url, targetUrl))
         .sort((a, b) => (Number(b.lastActiveAt) || 0) - (Number(a.lastActiveAt) || 0))[0] || null;
 }
@@ -1124,7 +1133,8 @@ function isReusableByLease(targetId, leaseByTargetId) {
  * @param {any} fallbackUrl
  */
 function providerOrigin(vendor, fallbackUrl = '') {
-    return providerOriginFromUrl(fallbackUrl || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[vendor] || '');
+    const value = fallbackUrl || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[vendor] || '';
+    return vendor === 'perplexity' ? canonicalProviderOrigin('perplexity', value) : providerOriginFromUrl(value);
 }
 
 /**
@@ -1337,6 +1347,10 @@ async function runBoundSendOrQuery(command, deps, input) {
                     if (command === 'send') return grokSendWebAi(sessionDeps, sessionInput);
                     return grokQueryWebAi(sessionDeps, sessionInput);
                 }
+                if (session.vendor === 'perplexity') {
+                    if (command === 'send') return perplexitySendWebAi(sessionDeps, sessionInput);
+                    return perplexityQueryWebAi(sessionDeps, sessionInput);
+                }
                 if (command === 'send') return sendWebAi(sessionDeps, sessionInput);
                 return queryWebAi(sessionDeps, sessionInput);
             });
@@ -1400,6 +1414,17 @@ async function runCommand(command, deps, input) {
             case 'poll': return runBoundCommand(command, deps, input, grokPollWebAi, grokStopWebAi);
             case 'query': return withWebAiActiveCommand(command, deps, input, () => grokQueryWebAi(deps, input));
             case 'stop': return runBoundCommand(command, deps, input, grokPollWebAi, grokStopWebAi);
+            default: throw new Error(`unknown web-ai command: ${command}`);
+        }
+    }
+    if (input.vendor === 'perplexity') {
+        switch (command) {
+            case 'render': return renderWebAi(input);
+            case 'status': return perplexityStatusWebAi(deps, input);
+            case 'send': return withWebAiActiveCommand(command, deps, input, () => perplexitySendWebAi(deps, input));
+            case 'poll': return runBoundCommand(command, deps, input, perplexityPollWebAi, perplexityStopWebAi);
+            case 'query': return withWebAiActiveCommand(command, deps, input, () => perplexityQueryWebAi(deps, input));
+            case 'stop': return runBoundCommand(command, deps, input, perplexityPollWebAi, perplexityStopWebAi);
             default: throw new Error(`unknown web-ai command: ${command}`);
         }
     }
@@ -1564,7 +1589,7 @@ function applyVendorDefaults(values, command) {
  * @param {any} values
  */
 function rejectFutureScope(values) {
-    if (values.vendor && !['chatgpt', 'gemini', 'grok'].includes(values.vendor)) {
+    if (values.vendor && !['chatgpt', 'gemini', 'grok', 'perplexity'].includes(values.vendor)) {
         throw new WebAiError({
             errorCode: 'provider.runtime-disabled',
             stage: 'provider-runtime-gate',
@@ -1647,6 +1672,7 @@ function isSupportedWebAiModel(vendor, model) {
     if (String(vendor || 'chatgpt') === 'gemini' && /^(?:gemini\s+)?(?:\d+(?:\.\d+)?\s+)?(?:flash[-_\s]?lite|flash|pro)$/.test(key)) {
         return true;
     }
+    if (String(vendor || 'chatgpt') === 'perplexity') return normalizePerplexityModelChoice(model) !== null;
     const byVendor = {
         chatgpt: new Set(['instant', 'fast', 'gpt-5-3', 'gpt-5.3', 'thinking', 'think', 'gpt-5-5-thinking', 'gpt-5.5-thinking', 'pro', 'gpt-5-5-pro', 'gpt-5.5-pro']),
         gemini: new Set(['fast', 'flash-lite', 'flash_lite', 'flash lite', 'gemini-fast', 'gemini-flash-lite', 'gemini-flash_lite', 'gemini flash lite', 'flash', 'gemini-flash', 'thinking', 'think', 'gemini-thinking', 'pro', 'gemini-pro', 'deepthink', 'deep-think', 'deep_think', 'deep think', 'gemini-deepthink', 'gemini-deep-think']),
@@ -1661,6 +1687,7 @@ function isSupportedWebAiModel(vendor, model) {
  * @param {any} effort
  */
 function isSupportedWebAiEffort(vendor, model, effort) {
+    if (String(vendor || 'chatgpt') === 'perplexity') return normalizePerplexityEffort(effort) !== null;
     if (String(vendor || 'chatgpt') !== 'chatgpt') return false;
     return isChatGptEffortSupported(model, effort);
 }
@@ -1673,6 +1700,7 @@ function webAiVendorLabel(vendor) {
     if (key === 'chatgpt') return 'ChatGPT';
     if (key === 'gemini') return 'Gemini';
     if (key === 'grok') return 'Grok';
+    if (key === 'perplexity') return 'Perplexity';
     return key;
 }
 

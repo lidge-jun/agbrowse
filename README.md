@@ -14,7 +14,7 @@
 Standalone Chrome/CDP browser automation and web-ai CLI for AI agents. It turns
 browser work into small, inspectable terminal commands: observe the page,
 act by stable references, collect screenshots/console/network evidence, and run
-ChatGPT, Gemini, or Grok web UI sessions without paying an MCP token tax.
+ChatGPT, Gemini, Grok, or Perplexity web UI sessions without paying an MCP token tax.
 
 `agbrowse` is a serverless extraction of the cli-jaw / 30_browser browser
 workflow. It gives an agent a small CLI surface for:
@@ -24,7 +24,7 @@ workflow. It gives an agent a small CLI surface for:
 - console/network/DOM diagnostics
 - adaptive reading for one candidate URL via `agbrowse fetch`
 - structured web-ai prompt rendering
-- live ChatGPT, Gemini, and Grok web UI execution
+- live ChatGPT, Gemini, Grok, and Perplexity web UI execution
 - file upload and context-package upload for implemented providers
 - ChatGPT code-mode zip generation and later artifact re-extraction
 
@@ -170,7 +170,7 @@ agbrowse extract "https://example.com/products" --schema products.json --escalat
 - **Browser automation for agents**: navigate, snapshot, click refs, type,
   capture screenshots, inspect console/network, and keep the active CDP target
   stable across commands.
-- **Web-AI execution**: submit and poll ChatGPT, Gemini, and Grok sessions with
+- **Web-AI execution**: submit and poll ChatGPT, Gemini, Grok, and Perplexity sessions with
   provider-specific model selection and fail-closed capability checks.
 - **ChatGPT code artifacts**: ask ChatGPT to build a small project, package it
   as `/mnt/data/*.zip`, retrieve the zip headlessly, and re-extract it later
@@ -280,7 +280,7 @@ Ready surfaces:
 
 Beta surfaces:
 
-- ChatGPT, Gemini, and Grok live web-ai send/poll/query flows
+- ChatGPT, Gemini, Grok, and Perplexity live web-ai send/poll/query flows
 - provider model and reasoning-effort selection
 - provider source/citation quality checks
 - ChatGPT code mode (`web-ai code`) and later artifact extraction
@@ -1010,6 +1010,32 @@ Model aliases:
 - `expert`, `thinking`, `think`
 - `grok-4.3`, `grok43`, `grok-43`, `beta`
 - `heavy`
+
+### Perplexity
+
+```bash
+agbrowse web-ai query \
+  --vendor perplexity \
+  --url https://www.perplexity.ai/ \
+  --model gpt-5.6-terra \
+  --effort on \
+  --inline-only \
+  --prompt "Reply exactly PERPLEXITY_OK"
+```
+
+Perplexity is a first-class send/poll/query/status/stop/session provider. The
+default URL is `https://www.perplexity.ai`; bare and `www` hosts share one
+provider identity, while recoverable conversation URLs must match the strict
+`/search/<uuid>` grammar. Model selection is fail closed. `--effort` is binary
+(`on`/`off`, with `heavy`/`normal` compatibility aliases), requires an explicit
+model, and is currently fixture-backed for GPT-5.6 Terra only. Locked rows such
+as GPT-5.6 Sol fail with `provider.model-entitlement`.
+
+Completed answers persist `answerArtifact.citations`. Citation extraction may
+legitimately return `[]` with the `citations-unavailable` warning when the live
+Sources pane cannot be associated and closed through an authenticated observed
+mechanism. Spaces, Focus, Deep Research, login automation, and subscription
+changes are intentionally unsupported.
 
 ## File Upload
 

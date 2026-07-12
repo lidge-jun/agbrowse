@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { closeTab, isTabAlive } from '../skills/browser/tab-manager.mjs';
 import { isPidAlive } from '../skills/browser/profile-lock.mjs';
 import { activeCommandTargetIds } from './active-command-store.mjs';
+import { canonicalProviderOrigin } from './provider-url-identity.mjs';
 
 /**
  * @typedef {{
@@ -121,7 +122,7 @@ export function buildLeaseKey({ owner = 'web-ai', vendor = 'chatgpt', sessionTyp
         owner,
         vendor,
         sessionType,
-        origin || originFromUrl(url),
+        canonicalLeaseOrigin(vendor, origin || url),
         browserProfileKey || String(port || process.env.CDP_PORT || '9222'),
     ].join(':');
 }
@@ -130,9 +131,23 @@ export function buildLeaseKey({ owner = 'web-ai', vendor = 'chatgpt', sessionTyp
  * @param {string|null|undefined} url
  * @returns {string}
  */
-export function originFromUrl(url) {
+export function originFromUrl(url, vendor = '') {
+    return canonicalLeaseOrigin(vendor, url);
+}
+
+/**
+ * Canonicalize provider lease identity without changing existing provider origins.
+ * @param {string} vendor
+ * @param {string|null|undefined} originOrUrl
+ * @returns {string}
+ */
+export function canonicalLeaseOrigin(vendor, originOrUrl) {
+    if (vendor === 'perplexity') {
+        const canonical = canonicalProviderOrigin('perplexity', originOrUrl);
+        if (canonical) return canonical;
+    }
     try {
-        return new URL(/** @type {string} */ (url)).origin;
+        return new URL(/** @type {string} */ (originOrUrl)).origin;
     } catch {
         return 'unknown-origin';
     }
@@ -429,7 +444,7 @@ export async function poolStats() {
  * @returns {Lease}
  */
 function normalizeLease(input = {}) {
-    const origin = input.origin || originFromUrl(input.url);
+    const origin = canonicalLeaseOrigin(input.vendor || 'chatgpt', input.origin || input.url);
     /** @type {Lease} */
     const lease = {
         owner: input.owner || 'web-ai',
@@ -458,7 +473,7 @@ function normalizeLease(input = {}) {
  * @param {Partial<Lease>} lease
  */
 function scopedTargetKey(lease) {
-    return [lease.owner || '', lease.vendor || '', lease.sessionType || '', lease.origin || '', lease.browserProfileKey || '', lease.targetId || ''].join(':');
+    return [lease.owner || '', lease.vendor || '', lease.sessionType || '', canonicalLeaseOrigin(lease.vendor || '', lease.origin || lease.url), lease.browserProfileKey || '', lease.targetId || ''].join(':');
 }
 
 /**

@@ -6,7 +6,7 @@ aliases: [agbrowse commands, agbrowse CLI 표면, web-ai commands]
 
 # agbrowse Command Surface
 
-`agbrowse`의 command surface는 세 층으로 나뉜다. root command는 Chrome과 일반 브라우저 primitive를 다룬다. `web-ai` subcommand는 ChatGPT, Gemini, Grok 웹 UI를 provider workflow로 다룬다. `runway` subcommand는 Runway Apps/Custom media task-runner surface를 read-only preflight로 다룬다. 이 구분을 유지해야 agent가 관찰, 행동, 검증 순서를 잃지 않는다.
+`agbrowse`의 command surface는 세 층으로 나뉜다. root command는 Chrome과 일반 브라우저 primitive를 다룬다. `web-ai` subcommand는 ChatGPT, Gemini, Grok, Perplexity 웹 UI를 provider workflow로 다룬다. `runway` subcommand는 Runway Apps/Custom media task-runner surface를 read-only preflight로 다룬다. 이 구분을 유지해야 agent가 관찰, 행동, 검증 순서를 잃지 않는다.
 
 명령어를 사용할 때 기본 루프는 항상 같다. 먼저 `status`, `tabs`, `snapshot`으로 현재 상태를 본다. 그 다음 `click`, `type`, `press`, `web-ai send`처럼 필요한 최소 mutation만 실행한다. 마지막으로 다시 `snapshot`, `poll`, `console`, `network`, `trace`로 결과를 확인한다.
 
@@ -355,3 +355,14 @@ MCP timeout도 explicit timeout → stored session deadline remainder → tier d
 - 2026-05-13: Oracle parity closeout — `project-sources`, generated images, batch follow-ups, Deep Research, live upload cap, and MCP deferred advanced fields를 CLI/help/docs 계약에 맞췄다.
 - 2026-05-06: Phase 9.1 multi-tab의 `new-tab`, `tab-close` 명령을 root command 표에 추가해 README와 일치시켰다.
 - 2026-05-05: root CLI, web-ai, MCP tool, provider alias, failure envelope, drift 검사 기준을 source-of-truth 문서로 추가했다.
+
+
+## Perplexity first-class provider
+
+`web-ai status|send|poll|query|stop|watch|sessions resume|sessions reattach` accepts
+`--vendor perplexity`. The default root is `https://www.perplexity.ai`; stored
+conversation URLs are accepted only for bare/`www` HTTPS `/search/<uuid>` URLs.
+Model and binary Thinking changes are fail closed, and answer artifacts persist
+ordered citations or an explicit `citations-unavailable` warning with `[]`.
+Spaces, Focus, Deep Research, login automation, and subscription mutation are
+out of scope.

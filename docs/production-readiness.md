@@ -32,7 +32,7 @@ state, and browser profile state.
 
 | Surface | Required caution |
 | --- | --- |
-| ChatGPT/Gemini/Grok `send`, `poll`, `query` | Provider UI can change without notice |
+| ChatGPT/Gemini/Grok/Perplexity `send`, `poll`, `query` | Provider UI can change without notice |
 | Model and reasoning-effort selection | Provider menus can be hidden or renamed |
 | Provider source/citation behavior | Models may place citations in source drawers or omit inline sources |
 | Context-package upload | Provider upload UI and file limits can change |

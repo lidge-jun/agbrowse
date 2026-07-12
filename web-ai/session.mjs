@@ -31,6 +31,8 @@ import { normalizeGeminiModelChoice, isGeminiDeepThinkChoice } from './gemini-mo
  *   constraints?: string,
  *   attachmentPolicy?: string,
  *   model?: string,
+ *   reasoningEffort?: string,
+ *   effort?: string,
  *   filePath?: string,
  *   timeout?: number|string,
  *   deadline?: string|number,
@@ -369,7 +371,7 @@ export function incrementRecoveryCount(sessionId) {
 }
 
 /** @type {Record<string, number>} */
-const VENDOR_DEFAULT_TIMEOUT_SEC = { chatgpt: 1200, gemini: 1200, grok: 600 };
+const VENDOR_DEFAULT_TIMEOUT_SEC = { chatgpt: 1200, gemini: 1200, grok: 600, perplexity: 1200 };
 
 /**
  * @param {WebAiEnvelope} [input]
@@ -397,6 +399,7 @@ export const TIER_DEFAULT_TIMEOUT_SEC = Object.freeze({
     thinking: 600,
     'chatgpt-pro': 5400,
     'grok-heavy': 3600,
+    'perplexity-thinking': 3600,
     'deep-research': 3600,
 });
 
@@ -424,9 +427,10 @@ export function tierDefaultTimeoutSec(tier, vendor = 'chatgpt') {
  * @param {string} vendor
  * @param {unknown} model
  * @param {unknown} [research]
+ * @param {unknown} [effort]
  * @returns {string|null}
  */
-export function deriveTimeoutTier(vendor, model, research) {
+export function deriveTimeoutTier(vendor, model, research, effort) {
     if (vendor === 'gemini') {
         if (isGeminiDeepThinkChoice(model)) return 'deep-research';
         const m = normalizeGeminiModelChoice(model);
@@ -440,6 +444,11 @@ export function deriveTimeoutTier(vendor, model, research) {
         if (m === 'fast') return 'instant';
         return m ? 'thinking' : null;
     }
+    if (vendor === 'perplexity') {
+        return String(effort || '').trim().toLowerCase() === 'on'
+            ? 'perplexity-thinking'
+            : null;
+    }
     // chatgpt (default vendor)
     if (String(research || '').trim().toLowerCase() === 'deep') return 'deep-research';
     const m = normalizeChatGptModelChoice(model);
@@ -448,12 +457,12 @@ export function deriveTimeoutTier(vendor, model, research) {
 
 /**
  * Tier-aware default poll timeout (seconds), applied when no explicit --timeout is given.
- * @param {{ model?: unknown, research?: unknown }} [input]
+ * @param {{ model?: unknown, research?: unknown, reasoningEffort?: unknown, effort?: unknown }} [input]
  * @param {string} [vendor]
  * @returns {number}
  */
 export function resolveTimeoutDefaultSec(input = {}, vendor = 'chatgpt') {
-    const tier = deriveTimeoutTier(vendor, input.model, input.research);
+    const tier = deriveTimeoutTier(vendor, input.model, input.research, input.reasoningEffort ?? input.effort);
     return tierDefaultTimeoutSec(tier, vendor);
 }
 
@@ -486,6 +495,7 @@ export function resolveTimeoutBudgetSec(
     return resolveTimeoutDefaultSec({
         model: input.model ?? summary.model,
         research: input.research ?? session?.researchMode ?? summary.research,
+        reasoningEffort: input.reasoningEffort ?? input.effort ?? summary.reasoningEffort,
     }, session?.vendor || vendor);
 }
 
@@ -498,6 +508,7 @@ export function summarizeEnvelope(input = {}, contextPack = null) {
     /** @type {Record<string, unknown>} */
     const summary = {};
     if (input.model) summary.model = input.model;
+    if (input.reasoningEffort || input.effort) summary.reasoningEffort = input.reasoningEffort || input.effort;
     if (input.attachmentPolicy) summary.attachmentPolicy = input.attachmentPolicy;
     if (input.filePath) summary.filePath = input.filePath;
     if (contextPack?.files?.length) summary.fileCount = contextPack.files.length;

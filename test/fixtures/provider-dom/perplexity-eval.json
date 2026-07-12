@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    { "vendor": "perplexity", "variant": "baseline", "htmlPath": "perplexity-baseline.html", "requiredIntents": ["composer.fill", "upload.open", "send.click", "copy.click"] },
+    { "vendor": "perplexity", "variant": "cosmetic-churn", "htmlPath": "perplexity-cosmetic-churn.html", "requiredIntents": ["composer.fill", "send.click", "copy.click"] },
+    { "vendor": "perplexity", "variant": "structural-churn", "htmlPath": "perplexity-structural-churn.html", "requiredIntents": ["composer.fill", "send.click"] }
+  ]
+}

@@ -47,6 +47,7 @@
     "test:contract-drift": "vitest run test/unit/web-ai-contract-audit.test.mjs",
     "test:eval": "vitest run test/unit/web-ai-eval*.test.mjs test/unit/web-ai-dom-scrubber.test.mjs",
     "test:eval-fixtures": "node scripts/run-web-ai-eval.mjs --vendor chatgpt --fixtures test/fixtures/provider-dom --json",
+    "test:eval-perplexity": "node scripts/run-web-ai-eval.mjs --config test/fixtures/provider-dom/perplexity-eval.json --json",
     "test:eval-gpt56": "node scripts/run-web-ai-eval.mjs --config test/fixtures/provider-dom/chatgpt-gpt56-eval.json --concurrency 2 --json",
     "docs:drift": "bash structure/check-doc-drift.sh",
     "docs:counts": "bash structure/verify-counts.sh",

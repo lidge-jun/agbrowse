@@ -1,13 +1,14 @@
 ---
 name: web-ai
 description: >-
-  Ask AI web UIs (ChatGPT Chat and Work, Gemini, Grok) via standalone agbrowse browser automation.
+  Ask AI web UIs (ChatGPT Chat and Work, Gemini, Grok, Perplexity) via standalone agbrowse browser automation.
   Chat model-family/tier selection, Work Power submission, reasoning-effort control, session resume, file/context upload, polling, copy-markdown fallback, and response extraction.
   NOT for: generic page navigation or screenshots (use browser skill).
   Triggers: web-ai, agbrowse, ChatGPT, ChatGPT Work, work send, GPT, GPT-5.6, GPT-5.6 Sol, GPT Pro, GPT Thinking, GPT Instant, Extra High, GPT Heavy,
   Gemini, Gemini Pro, Gemini Thinking, Gemini DeepThink, deep think, deepthink,
   Grok, Grok Heavy, Grok Expert, Grok Fast, grok-4.3,
-  챗지피티, 제미나이, 그록, 딥씽크, GPT한테, AI한테, AI 물어봐, AI한테 물어봐, work 보내,
+  Perplexity, Perplexity Sonar, GPT-5.6 Terra, Thinking on, Thinking off,
+  챗지피티, 제미나이, 그록, 퍼플렉시티, 딥씽크, GPT한테, AI한테, AI 물어봐, AI한테 물어봐, work 보내,
   xhigh 모드, thinking 모드, pro 모드, expert 모드, reasoning effort,
   ask chatgpt, ask gemini, ask grok, query AI, AI 리뷰, AI 검증, AI 조사, work send,
   GPT한테 리뷰, GPT로 검증, 그록한테 물어봐, 제미나이로 분석,
@@ -72,14 +73,14 @@ hint). Scope a single probe with `--probe <capabilityId>`.
 Capability IDs per vendor (hyphenated, aligned with cli-jaw registry shape
 but implementation details may differ per vendor):
 
-| Capability | ChatGPT | Gemini | Grok |
-| --- | :---: | :---: | :---: |
-| `*-active-tab-verification` | ✓ | ✓ | ✓ |
-| `*-composer-visible` | ✓ | ✓ | ✓ |
-| `*-model-alias-selectable` | ✓ | ✓ | ✓ |
-| `*-upload-surface-visible` | ✓ | ✓ | ✓ |
-| `*-copy-button-present` | ✓ | ✓ | ✓ |
-| `*-response-streaming` | ✓ | ✓ | ✓ |
+| Capability | ChatGPT | Gemini | Grok | Perplexity |
+| --- | :---: | :---: | :---: | :---: |
+| `*-active-tab-verification` | ✓ | ✓ | ✓ | ✓ |
+| `*-composer-visible` | ✓ | ✓ | ✓ | ✓ |
+| `*-model-alias-selectable` | ✓ | ✓ | ✓ | ✓ |
+| `*-upload-surface-visible` | ✓ | ✓ | ✓ | ✓ |
+| `*-copy-button-present` | ✓ | ✓ | ✓ | ✓ |
+| `*-response-streaming` | ✓ | ✓ | ✓ | ✓ |
 
 Unsupported vendors or unsupported model aliases must fail before browser
 mutation.
@@ -115,6 +116,7 @@ the original submit unless the caller explicitly overrides it.
 | --- | ---: | --- |
 | `chatgpt-pro` | 5400 | 90 minutes |
 | `grok-heavy` | 3600 | 60 minutes |
+| `perplexity-thinking` | 3600 | 60 minutes |
 | `deep-research` | 3600 | 60 minutes |
 
 | Vendor fallback when the tier is unknown | Default `--timeout` | Roughly |
@@ -122,6 +124,7 @@ the original submit unless the caller explicitly overrides it.
 | ChatGPT | 1200 | 20 minutes |
 | Gemini | 1200 | 20 minutes |
 | Grok | 600 | 10 minutes |
+| Perplexity | 1200 | 20 minutes |
 
 Do not equate ChatGPT's UI-side reasoning budget with the agbrowse poll deadline.
 The roughly 40-minute Pro budget is a user report and was not present in the
@@ -326,6 +329,25 @@ agbrowse web-ai query \
   --inline-only \
   --prompt "Reply exactly GROK_OK"
 ```
+
+Perplexity:
+
+```bash
+agbrowse web-ai query \
+  --vendor perplexity \
+  --url https://www.perplexity.ai/ \
+  --model gpt-5.6-terra \
+  --effort on \
+  --inline-only \
+  --prompt "Reply exactly PERPLEXITY_OK"
+```
+
+Perplexity `--effort` is binary and requires `--model`. Use `on`/`off`;
+`heavy` canonicalizes to `on` and `normal` to `off`. Locked model rows fail
+closed. Citations are persisted losslessly when available; `[]` plus
+`citations-unavailable` is the explicit degraded result when Sources pane
+association/closing is not safely observable. Do not automate Spaces, Focus,
+Deep Research, login, or subscription changes.
 
 ## Where instructions go — `--system` vs `--context` vs `--file`
 

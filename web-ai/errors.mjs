@@ -154,3 +154,76 @@ export function toErrorJson(err) {
     if (!out.name) out.name = 'WebAiError';
     return out;
 }
+
+
+/** @param {string} vendor @param {string|null|undefined} model @param {Record<string, unknown>} [evidence] */
+export function modelMismatchError(vendor, model, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.model-mismatch',
+        stage: 'provider-select-mode',
+        retryHint: 'model-fallback',
+        message: model ? `unsupported ${vendor} model: ${model}` : `invalid ${vendor} model selection request`,
+        mutationAllowed: false,
+        evidence: { model: model ?? null, ...evidence },
+    });
+}
+
+/** @param {string} vendor @param {string} model @param {Record<string, unknown>} [evidence] */
+export function modelEntitlementError(vendor, model, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.model-entitlement',
+        stage: 'provider-select-mode',
+        retryHint: 'choose-unlocked-model',
+        message: `${vendor} model is locked: ${model}`,
+        mutationAllowed: false,
+        evidence: { model, ...evidence },
+    });
+}
+
+/** @param {string} vendor @param {string|null|undefined} model @param {string|null|undefined} effort @param {Record<string, unknown>} [evidence] */
+export function modeUnavailableError(vendor, model, effort, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.mode-unavailable',
+        stage: 'provider-select-mode',
+        retryHint: 'omit-effort-or-change-model',
+        message: `${vendor} Thinking control is unavailable${model ? ` for ${model}` : ''}`,
+        mutationAllowed: false,
+        evidence: { model: model ?? null, effort: effort ?? null, ...evidence },
+    });
+}
+
+/** @param {string} vendor @param {string} effort @param {Record<string, unknown>} [evidence] */
+export function invalidEffortError(vendor, effort, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.invalid-effort',
+        stage: 'provider-input-validation',
+        retryHint: 'use-on-off-effort-aliases',
+        message: `unsupported ${vendor} effort: ${effort}`,
+        mutationAllowed: false,
+        evidence: { effort, ...evidence },
+    });
+}
+
+/** @param {string} vendor @param {string} primaryName @param {unknown} primaryValue @param {unknown} aliasValue @param {Record<string, unknown>} [evidence] */
+export function optionConflictError(vendor, primaryName, primaryValue, aliasValue, evidence = {}) {
+    return providerError(vendor, {
+        errorCode: 'provider.option-conflict',
+        stage: 'provider-input-validation',
+        retryHint: 'remove-conflicting-option',
+        message: `conflicting ${vendor} options: --${primaryName}`,
+        mutationAllowed: false,
+        evidence: { primaryName, primaryValue, aliasValue, ...evidence },
+    });
+}
+
+/** @param {string} requestedProvider @param {string} sessionVendor @param {string|null|undefined} sessionId */
+export function sessionVendorMismatchError(requestedProvider, sessionVendor, sessionId) {
+    return providerError(requestedProvider, {
+        errorCode: 'provider.session-vendor-mismatch',
+        stage: 'session-resolve',
+        retryHint: 'use-matching-provider-or-session',
+        message: `requested provider ${requestedProvider} does not match session vendor ${sessionVendor}`,
+        mutationAllowed: false,
+        evidence: { requestedProvider, sessionVendor, sessionId: sessionId ?? null },
+    });
+}

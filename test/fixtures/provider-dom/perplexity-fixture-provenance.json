@@ -1,0 +1,336 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+  "sourceDocuments": [
+    "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+    "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+  ],
+  "note": "Sanitized deterministic fixtures derived from reviewed authenticated observation documents. They are not represented as fresh live captures.",
+  "overlay": {
+    "kind": "not-observed",
+    "selector": null
+  },
+  "modelCapabilities": {
+    "gpt-5.6-terra": {
+      "supportsThinking": true
+    },
+    "default": {
+      "supportsThinking": null
+    }
+  },
+  "entries": [
+    {
+      "file": "perplexity-baseline.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "a3df5c26cb3f6b3fade571af2759ad974d22beedd1f2ab6ba9764147f6f9772c",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-cosmetic-churn.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "86025d296058b1ee4fd129ca7413aef36ed8e3bf812922762b335268076418b6",
+      "transform": "cosmetic-churn",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-structural-churn.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "87f3cd565555b33e5a594611ab443c4ec9170e8b51a7c2ee671bb0e5bec92ddc",
+      "transform": "structural-churn",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-breaking.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "494fba7a01d949edfaaed4aa0ff5da15d4a63d59a653e34bbb64f190f8a114dc",
+      "transform": "breaking",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-model-picker-en.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "e893d6f147dce92d69ce1072c12126da3ebf4c6c84663aec4a791405d09ba510",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-model-picker-ko.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "2fc1634513ffc27f091820d90c65f15caf5c6eca799fb8a611ea267529cb05aa",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-model-picker-close.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "56871f8c6644c1cadb0e73e2095b33b7f9f95ff9f376230b9989b052e895191d",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-model-picker-locked.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "94fc8405149d066a885e45d091cad5392f96d9d5aa9b3e9966a1b79f425f5967",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-model-picker-duplicate-switch.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "7b3bd877b462b0605d44d23c4ee1a8d405f3319c18d622c806aa2bb2e4e0433f",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-thinking-on.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "7e5ecccde61654d0be567c0f9e66c9e4b8cb580700be35359a4a0552195c9aff",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-thinking-off.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "e893d6f147dce92d69ce1072c12126da3ebf4c6c84663aec4a791405d09ba510",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-thinking-adjacent-decoys.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "5f1f0c5b5d68cd0cc0db8cd1b3bc1b5192f440895f2614267c05405a2fefa87f",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-thinking-detached-reopen.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "206efc33f50c42b9789c97d50847df21981830bc8a837272aa06d01e5863349c",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-streaming.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "e619723b0befe713321ae81a238958a1b3bbefe574a437d2621f01094b7b4d7f",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-complete-citations.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "2adef59636910016375d33d291ce80b34036263cbe802a6904f034c32e910b64",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-copy-decoys.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "81cf2673108c9da6cc8c002ffbb42b0c630d3dc70d8490aa1f6254022f394c46",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-attachment-preview.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "28a466c607497eddd4d6e6539cc7a4b8ea7e2d267aa5e48fc5282ec19cb0fd2a",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-late-citation.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "d4c915420dbb7f565ee1756e5d4156c0a908bc731ecd34c48afbd93c9e89118f",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-sources-pane-open.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "4719a5c5d99ea61c7bde0c45ee06e433cf072b15f2d55431dfd04c16ef6c23ac",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-sources-pane-stale.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "95c68dc0f055c36dc736c08fbc45c824e90a9116e673333340a3e2afac0d3c83",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-sources-pane-two-visible.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "5c2cca5af484f858caaf24e665107dd538c907b702cdd2a959ad0cf4c977deed",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-sources-pane-fingerprint-replacement.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "dadcd8fb86b48ed4027b10d7659f9f4f42dde5c81fc7019e721a95089efee53d",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-sources-pane-close.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "aba76feaea698fc7a726741f3b86a730c6a4e9c4a27f4f0fd1f41bc684b6451e",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    },
+    {
+      "file": "perplexity-new-thread.html",
+      "kind": "derived",
+      "derivedFrom": [
+        "docs/superpowers/specs/2026-07-11-perplexity-live-dom-observation.md",
+        "docs/superpowers/specs/2026-07-11-perplexity-web-ai-design.md"
+      ],
+      "parentSha256": null,
+      "sha256": "17f1b325e418be1047c9dc9eef75012073bf9d74e7b53ef9c02d473eb00ec488",
+      "transform": "sanitized-reviewed-observation",
+      "generatedBy": "scripts/derive-perplexity-adversarial-fixtures.mjs",
+      "retainedScreenshot": false
+    }
+  ]
+}

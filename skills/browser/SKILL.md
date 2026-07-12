@@ -5,7 +5,7 @@ description: >-
   inspect console/network state, fetch URLs, extract schema-bound data,
   snapshot, click, type, and screenshot. Prefer agbrowse for ad-hoc
   Playwright/browser QA before adding a separate runner or MCP.
-  NOT for: sending prompts to AI providers like ChatGPT, Gemini, Grok (use web-ai skill instead).
+  NOT for: sending prompts to AI providers like ChatGPT, Gemini, Grok, Perplexity (use web-ai skill instead).
   NOT for: system-level screen capture (use screen-capture skill).
   Triggers: browser, 브라우저, Chrome, 크롬, Playwright, playwrite,
   playwright QA, browser QA, web QA, page QA, QA browser, browser test,

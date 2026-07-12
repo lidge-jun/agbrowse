@@ -6,6 +6,7 @@ import { closeTab, listManagedTabs } from './tab-manager.mjs';
 import { listSessions } from '../../web-ai/session.mjs';
 import { listLeases } from '../../web-ai/tab-lease-store.mjs';
 import { activeCommandTargetIds } from '../../web-ai/active-command-store.mjs';
+import { isProviderOriginUrl } from '../../web-ai/provider-url-identity.mjs';
 
 /** @typedef {import('./tab-manager.mjs').ManagedTabRow} ManagedTabRow */
 /** @typedef {import('../../web-ai/tab-lease-store.mjs').Lease} Lease */
@@ -23,6 +24,7 @@ const PROVIDER_ORIGINS = {
     chatgpt: 'https://chatgpt.com',
     gemini: 'https://gemini.google.com',
     grok: 'https://grok.com',
+    perplexity: 'https://www.perplexity.ai',
 };
 
 /** @type {Set<string>} targetIds that should never auto-close */
@@ -157,7 +159,9 @@ export function selectProviderTabsForCleanup({
     if (!origin) return [];
     const keepCount = Math.max(0, Number.isFinite(Number(keep)) ? Number(keep) : 1);
     return (tabs || [])
-        .filter(tab => tab?.targetId && providerOriginFromUrl(tab.url) === origin)
+        .filter(tab => tab?.targetId && (vendor === 'perplexity'
+            ? isProviderOriginUrl('perplexity', tab.url)
+            : providerOriginFromUrl(tab.url) === origin))
         .filter(tab =>
             !pinnedTargetIds.has(tab.targetId) &&
             !activeSessionTargetIds.has(tab.targetId) &&

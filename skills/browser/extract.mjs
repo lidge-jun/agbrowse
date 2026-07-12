@@ -27,7 +27,7 @@
  *   --source <mode>        auto | table | jsonld (default: auto)
  *   --json                 Machine-readable JSON envelope
  *   --escalate-web-ai      Tier 2 web-ai fallback on Tier 1 failure
- *   --vendor <name>        Tier 2 vendor (chatgpt | gemini | grok, default: grok)
+ *   --vendor <name>        Tier 2 vendor (chatgpt | gemini | grok | perplexity, default: grok)
  *   --timeout <ms>         Fetch timeout
  */
 
@@ -580,7 +580,7 @@ Options:
   --json               JSON envelope output (agbrowse-extract-v1)
   --escalate-web-ai    On Tier 1 failure, escalate to a logged-in web-ai
                        session (uses your existing provider subscription).
-  --vendor <name>      Tier 2 vendor: chatgpt | gemini | grok (default: grok)
+  --vendor <name>      Tier 2 vendor: chatgpt | gemini | grok | perplexity (default: grok)
   --timeout <ms>       Fetch timeout
 
 Fail-closed: when nothing on the page satisfies the schema, exits 1 with an

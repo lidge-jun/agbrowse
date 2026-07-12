@@ -64,7 +64,7 @@ const GATES = {
     'tests': {
         description: 'unit + MCP + source-audit + trace-policy tests pass',
         check() {
-            const suites = ['test:unit', 'test:mcp', 'test:source-audit', 'test:trace-policy'];
+            const suites = ['test:unit', 'test:mcp', 'test:source-audit', 'test:trace-policy', 'test:eval-perplexity'];
             for (const suite of suites) {
                 const r = run('npm', ['run', suite, '--silent']);
                 if (r.status !== 0) {

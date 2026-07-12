@@ -149,10 +149,10 @@ export async function runSessionsCommand(args, values, deps, input) {
         if (resolved.mismatch) {
             // 35.1 new-tab recovery: when navigation is authorized, open the saved
             // ChatGPT conversation in a fresh tab (32.3-guarded) instead of failing.
-            if (input.navigate === true && session.vendor === 'chatgpt') {
-                const reopened = await openConversationInNewTab(deps, { conversationUrl: session.conversationUrl });
+            if (input.navigate === true && ['chatgpt', 'perplexity'].includes(session.vendor || '')) {
+                const reopened = await openConversationInNewTab(deps, { vendor: session.vendor || undefined, conversationUrl: session.conversationUrl });
                 if (reopened.opened) {
-                    updateSession(id, { targetId: reopened.targetId });
+                    updateSession(id, { targetId: reopened.targetId, conversationUrl: reopened.conversationUrl });
                     return {
                         ok: true,
                         status: 'reattached',

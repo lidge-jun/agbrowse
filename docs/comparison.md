@@ -14,7 +14,7 @@ planner, CAPTCHA bypass system, or official provider API.
 | Area | agbrowse current state | Claim allowed |
 | --- | --- | --- |
 | Local CDP control | Ready for local Chrome profile workflows | Yes |
-| Web-ai provider UI flows | Beta for ChatGPT/Gemini/Grok | Yes, with beta label |
+| Web-ai provider UI flows | Beta for ChatGPT/Gemini/Grok/Perplexity | Yes, with beta label |
 | Offline DOM churn eval | Ready | Yes |
 | Trace/policy/source audit | Ready in agbrowse | Yes |
 | MCP bridge | Narrow ready surface only | Only listed tools |

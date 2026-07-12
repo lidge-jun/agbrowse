@@ -15,6 +15,9 @@ import {
     GEMINI_DEEP_THINK_OBSERVATION,
     GEMINI_IMAGE_GENERATION_OBSERVATION,
     GEMINI_MODEL_PICKER_OBSERVATION,
+    PERPLEXITY_MODEL_PICKER_OBSERVATION,
+    PERPLEXITY_UPLOAD_OBSERVATION,
+    PERPLEXITY_RESPONSE_OBSERVATION,
 } from './capability-observation-presets.mjs';
 import { OBSERVED_TOOL_CAPABILITY_ENTRIES } from './capability-observed-tool-entries.mjs';
 import { WebAiError } from './errors.mjs';
@@ -418,6 +421,37 @@ const REGISTRY = [
         requiredOfficialDocs: [],
         browserGate: 'absent',
         cliJawPortGate: 'absent',
+    },
+
+    {
+        id: 'perplexity-active-tab-verification', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'verify perplexity.ai before browser mutation', browserMutationAllowed: false, failClosedStage: 'status',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'sessionReattach', observation: PERPLEXITY_RESPONSE_OBSERVATION,
+    },
+    {
+        id: 'perplexity-composer-visible', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'resolve #ask-input as the unique visible composer', browserMutationAllowed: false, failClosedStage: 'composer-prereq',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'modelSelection', observation: PERPLEXITY_MODEL_PICKER_OBSERVATION,
+    },
+    {
+        id: 'perplexity-model-alias-selectable', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'select one observed menuitemradio and verify aria-checked', browserMutationAllowed: true, failClosedStage: 'provider-select-mode',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'modelSelection', observation: PERPLEXITY_MODEL_PICKER_OBSERVATION,
+    },
+    {
+        id: 'perplexity-upload-surface-visible', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'open Add files or tools and verify attachment preview', browserMutationAllowed: true, failClosedStage: 'attachment-preflight',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'attachments', observation: PERPLEXITY_UPLOAD_OBSERVATION,
+    },
+    {
+        id: 'perplexity-copy-button-present', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'resolve Copy in the committed answer footer', browserMutationAllowed: false, failClosedStage: 'poll',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'copyOrExport', observation: PERPLEXITY_RESPONSE_OBSERVATION,
+    },
+    {
+        id: 'perplexity-response-streaming', vendor: 'perplexity', status: 'planned', ownerPrd: 'perplexity-web-ai-v1',
+        commandBehavior: 'classify Stop response (Esc) as streaming', browserMutationAllowed: false, failClosedStage: 'poll',
+        requiredOfficialDocs: [], browserGate: 'partial', cliJawPortGate: 'absent', family: 'responseCapture', observation: PERPLEXITY_RESPONSE_OBSERVATION,
     },
     ...OBSERVED_TOOL_CAPABILITY_ENTRIES,
 ];

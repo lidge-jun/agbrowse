@@ -63,3 +63,25 @@ describe('web-ai copy markdown helper', () => {
         expect(preferCopiedText('dom answer', { ok: true, text: 'copied answer' })).toBe('copied answer');
     });
 });
+
+it('scopes Perplexity copy interception to a resolver-selected committed response root', async () => {
+    const { PERPLEXITY_COPY_SELECTORS } = await import('../../web-ai/copy-markdown.mjs');
+    const handle = { dispose: async () => {} };
+    let payload = null;
+    const page = {
+        evaluate: async (_fn, arg) => {
+            payload = arg;
+            return { ok: true, text: 'perplexity markdown' };
+        },
+    };
+    const committedRoot = { elementHandle: async () => handle };
+
+    await expect(captureCopiedResponseText(page, PERPLEXITY_COPY_SELECTORS, { committedRoot })).resolves.toEqual({
+        ok: true,
+        text: 'perplexity markdown',
+    });
+
+    expect(payload.committedRoot).toBe(handle);
+    expect(PERPLEXITY_COPY_SELECTORS.turnSelectors.every((selector) => !selector.includes(':has-text'))).toBe(true);
+    expect(PERPLEXITY_COPY_SELECTORS.copyButtonNames).toEqual(['Copy']);
+});

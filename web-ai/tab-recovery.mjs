@@ -2,6 +2,13 @@
 import { createTab, isTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
 import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
+import { WebAiError } from './errors.mjs';
+import {
+    isSafeChatGptConversationUrl as sharedSafeChatGptConversationUrl,
+    isSafePerplexityConversationUrl,
+    isSafeProviderConversationUrl,
+    providerUrlsCompatible,
+} from './provider-url-identity.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
 
 /** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
@@ -20,7 +27,26 @@ import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
  */
 
 /**
- * Recover a session's tab
+ * @param {string|null|undefined} vendor
+ * @param {string|null|undefined} targetUrl
+ * @returns {void}
+ */
+function assertSafeStoredConversationUrl(vendor, targetUrl) {
+    if (!['chatgpt', 'perplexity'].includes(String(vendor || ''))) return;
+    if (isSafeProviderConversationUrl(String(vendor), targetUrl)) return;
+    throw new WebAiError({
+        errorCode: 'cdp.target-mismatch',
+        stage: 'target-resolution',
+        vendor: String(vendor),
+        retryHint: 'pass-session',
+        message: 'refusing unsafe stored conversation URL',
+        mutationAllowed: false,
+        evidence: { targetUrl },
+    });
+}
+
+/**
+ * Recover a session's tab.
  * @param {RecoverDeps} deps
  * @param {WebAiSession} session
  * @returns {Promise<RecoverResult>}
@@ -30,6 +56,7 @@ export async function recoverSessionTab(deps, session) {
 
     const port = deps.getPort();
     const targetUrl = session.conversationUrl || session.originalUrl || 'about:blank';
+    if (targetUrl !== 'about:blank') assertSafeStoredConversationUrl(session.vendor, targetUrl);
     const isRunningWork = _isWorkSession(session) && session.status !== 'complete';
 
     // Work-session guard (04 section 6, round-2): a running Work session with a
@@ -72,11 +99,14 @@ export async function recoverSessionTab(deps, session) {
                         targetId: session.targetId
                     };
                 }
-                if (currentUrl !== targetUrl) {
+                if (!urlsCompatible(targetUrl, currentUrl, session.vendor || '')) {
+                    assertSafeStoredConversationUrl(session.vendor, targetUrl);
                     await page.goto(targetUrl, { waitUntil: 'load', timeout: 30_000 });
+                } else if (currentUrl !== targetUrl) {
+                    await updateSession(session.sessionId, { conversationUrl: currentUrl });
                 }
                 const finalUrl = page.url();
-                await waitForConversationReady(page, finalUrl);
+                await waitForConversationReady(page, finalUrl, session.vendor || undefined);
                 if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
                     await updateSession(session.sessionId, { conversationUrl: finalUrl });
                 }
@@ -85,7 +115,8 @@ export async function recoverSessionTab(deps, session) {
                     strategy: 'existing-tab',
                     targetId: session.targetId
                 };
-            } catch {
+            } catch (error) {
+                if (error instanceof WebAiError && error.errorCode === 'cdp.target-mismatch') throw error;
                 // CDP can report the target as alive while Playwright has already
                 // closed the page object. Fall through to a fresh tab recovery.
             }
@@ -93,6 +124,7 @@ export async function recoverSessionTab(deps, session) {
     }
 
     // 2. Create new tab
+    if (targetUrl !== 'about:blank') assertSafeStoredConversationUrl(session.vendor, targetUrl);
     const newTab = await createTab(port, targetUrl);
     let recoveredConversationUrl = session.conversationUrl || targetUrl;
     if (targetUrl !== 'about:blank') {
@@ -100,7 +132,7 @@ export async function recoverSessionTab(deps, session) {
         if (newPage) {
             await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
             const finalUrl = /** @type {any} */ (newPage).url();
-            await waitForConversationReady(newPage, finalUrl);
+            await waitForConversationReady(newPage, finalUrl, session.vendor || undefined);
             if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
                 recoveredConversationUrl = finalUrl;
             }
@@ -326,17 +358,7 @@ export function isWorkSessionWithBareOrigin(session) {
  * @returns {boolean}
  */
 export function isSafeChatGptConversationUrl(url) {
-    if (typeof url !== 'string' || url === '') return false;
-    if (url.includes('..') || url.includes('\\') || url.includes('\0')) return false;
-    let u;
-    try {
-        u = new URL(url);
-    } catch {
-        return false;
-    }
-    if (u.protocol !== 'https:') return false;
-    if (u.hostname !== 'chatgpt.com' && u.hostname !== 'chat.openai.com') return false;
-    return /\/c\/[A-Za-z0-9_-]+/.test(u.pathname);
+    return sharedSafeChatGptConversationUrl(url);
 }
 
 /**
@@ -345,11 +367,11 @@ export function isSafeChatGptConversationUrl(url) {
  * (master plan 36 §2). The 32.3 guard runs FIRST, so an unsafe target never
  * opens a tab. On URL mismatch the stray tab is closed. Never throws.
  * @param {{ getPort: () => number }} deps
- * @param {{ conversationUrl?: string|null }} [opts]
+ * @param {{ vendor?: string, conversationUrl?: string|null }} [opts]
  * @returns {Promise<{ opened: true, page: any, targetId: string, conversationUrl: string } | { opened: false, reason: string, targetId?: string|null }>}
  */
-export async function openConversationInNewTab(deps, { conversationUrl } = {}) {
-    if (!isSafeChatGptConversationUrl(conversationUrl)) {
+export async function openConversationInNewTab(deps, { vendor = 'chatgpt', conversationUrl } = {}) {
+    if (!isSafeProviderConversationUrl(vendor, conversationUrl)) {
         return { opened: false, reason: 'unsafe-conversation-url' };
     }
     const safeUrl = /** @type {string} */ (conversationUrl);
@@ -359,13 +381,16 @@ export async function openConversationInNewTab(deps, { conversationUrl } = {}) {
         const newTab = await createTab(port, safeUrl);
         targetId = newTab.targetId;
         const newPage = await waitForPageByTargetId(port, targetId).catch(() => null);
-        if (!newPage) return { opened: false, reason: 'page-unavailable', targetId };
-        await waitForConversationReady(newPage, newPage.url()).catch(() => undefined);
-        if (!urlsCompatible(safeUrl, newPage.url())) {
+        if (!newPage) {
+            await closeTab(port, targetId).catch(() => undefined);
+            return { opened: false, reason: 'page-unavailable', targetId };
+        }
+        await waitForConversationReady(newPage, newPage.url(), vendor);
+        if (!urlsCompatible(safeUrl, newPage.url(), vendor)) {
             await closeTab(port, targetId).catch(() => undefined);
             return { opened: false, reason: 'conversation-mismatch' };
         }
-        return { opened: true, page: newPage, targetId, conversationUrl: safeUrl };
+        return { opened: true, page: newPage, targetId, conversationUrl: newPage.url() };
     } catch (err) {
         if (targetId) await closeTab(port, targetId).catch(() => undefined);
         return { opened: false, reason: `new-tab-failed:${/** @type {any} */ (err)?.message || 'unknown'}` };
@@ -376,19 +401,8 @@ export async function openConversationInNewTab(deps, { conversationUrl } = {}) {
  * @param {string|null|undefined} storedUrl
  * @param {string|null|undefined} liveUrl
  */
-export function urlsCompatible(storedUrl, liveUrl) {
-    if (!storedUrl || !liveUrl) return false;
-    if (storedUrl === liveUrl) return true;
-    try {
-        const a = new URL(storedUrl);
-        const b = new URL(liveUrl);
-        if (a.hostname !== b.hostname) return false;
-        const aPath = a.pathname.replace(/\/+$/, '') || '/';
-        const bPath = b.pathname.replace(/\/+$/, '') || '/';
-        return aPath === bPath || aPath === '/' || bPath.startsWith(`${aPath}/`);
-    } catch {
-        return false;
-    }
+export function urlsCompatible(storedUrl, liveUrl, vendor = '') {
+    return providerUrlsCompatible(storedUrl, liveUrl, vendor);
 }
 
 /**
@@ -478,7 +492,7 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
             };
         }
         if (!allowNavigate) {
-            const drifted = !urlsCompatible(current.conversationUrl, liveUrl);
+            const drifted = !urlsCompatible(current.conversationUrl, liveUrl, current.vendor || '');
             if (drifted) {
                 return {
                     mismatch: true,
@@ -511,7 +525,7 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
             // 32.3 fail-closed: never navigate a ChatGPT session to a non-concrete
             // target (provider root / foreign host / non-/c/ path) — that would
             // open a new chat or the wrong thread instead of recovering this one.
-            if (current.vendor === 'chatgpt' && !isSafeChatGptConversationUrl(current.conversationUrl)) {
+            if (['chatgpt', 'perplexity'].includes(current.vendor || '') && !isSafeProviderConversationUrl(current.vendor || '', current.conversationUrl)) {
                 return {
                     mismatch: true,
                     page: null,
@@ -519,14 +533,15 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
                     session: current,
                     recovered: false,
                     strategy: 'existing-tab',
-                    warnings: [`refusing to navigate to unsafe ChatGPT target ${current.conversationUrl}; not a concrete /c/<id> conversation`],
+                    warnings: [`refusing to navigate to unsafe ${current.vendor} target ${current.conversationUrl}; not a concrete conversation`],
                     url: liveUrl,
                     conversationUrl: current.conversationUrl,
                 };
             }
+            assertSafeStoredConversationUrl(current.vendor, current.conversationUrl);
             await page.goto(current.conversationUrl, { waitUntil: 'load', timeout: 30_000 });
             const finalUrl = page.url();
-            await waitForConversationReady(page, finalUrl);
+            await waitForConversationReady(page, finalUrl, current.vendor || undefined);
             if (finalUrl !== current.conversationUrl && isProviderUrl(finalUrl)) {
                 updateSession(sessionId, { conversationUrl: finalUrl });
                 const updated = /** @type {WebAiSession} */ (getSession(sessionId));
@@ -603,3 +618,5 @@ function shouldPreferCurrentProviderUrl(savedUrl, currentUrl) {
         return false;
     }
 }
+
+export { isSafePerplexityConversationUrl, isSafeProviderConversationUrl };

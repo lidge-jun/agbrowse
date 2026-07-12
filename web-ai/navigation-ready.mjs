@@ -1,4 +1,5 @@
 // @ts-check
+import { isProviderOriginUrl, normalizeProviderPath, perplexityConversationId } from './provider-url-identity.mjs';
 const CONVERSATION_URL_PATTERN = /\/c\/[a-f0-9-]+/;
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
 
@@ -6,13 +7,19 @@ const PROVIDER_HOSTS = new Set([
     'chatgpt.com', 'chat.openai.com',
     'gemini.google.com',
     'grok.com',
+    'perplexity.ai',
 ]);
 
 /**
  * @param {any} page
  * @param {string|null|undefined} url
+ * @param {string|null|undefined} [vendor]
  */
-export async function waitForConversationReady(page, url) {
+export async function waitForConversationReady(page, url, vendor) {
+    if (vendor === 'perplexity') {
+        await page.locator('#ask-input').first().waitFor({ state: 'visible', timeout: 10_000 });
+        return;
+    }
     const finalUrl = page.url();
     const checkUrl = finalUrl || url;
     if (CONVERSATION_URL_PATTERN.test(checkUrl || '')) {
@@ -54,12 +61,13 @@ export async function waitForPageUrl(page, options = {}) {
  *
  * @param {any} page
  * @param {string|null|undefined} requestedUrl
- * @param {{ urlTimeoutMs?: number, probeTimeoutMs?: number }} [options]
+ * @param {{ urlTimeoutMs?: number, probeTimeoutMs?: number, vendor?: string }} [options]
  * @returns {Promise<boolean>}
  */
 export async function isProviderPageDriveable(page, requestedUrl, options = {}) {
+    const vendor = options.vendor || inferVendor(requestedUrl);
     const currentUrl = await waitForPageUrl(page, { timeoutMs: options.urlTimeoutMs || 2_000 });
-    if (shouldNavigateToRequestedProviderUrl(currentUrl, requestedUrl)) return false;
+    if (shouldNavigateToRequestedProviderUrl(currentUrl, requestedUrl, vendor)) return false;
     if (typeof page?.title !== 'function') return true;
     return withTimeout(
         page.title().then(() => true).catch(() => false),
@@ -85,9 +93,15 @@ export function isProviderUrl(url) {
  * @param {string|null|undefined} requestedUrl
  * @returns {boolean}
  */
-export function shouldNavigateToRequestedProviderUrl(currentUrl, requestedUrl) {
+export function shouldNavigateToRequestedProviderUrl(currentUrl, requestedUrl, vendor = inferVendor(requestedUrl)) {
     if (!requestedUrl) return false;
     if (!currentUrl || currentUrl === 'about:blank') return true;
+    if (vendor === 'perplexity' && isProviderOriginUrl(vendor, currentUrl) && isProviderOriginUrl(vendor, requestedUrl)) {
+        const currentId = perplexityConversationId(currentUrl);
+        const requestedId = perplexityConversationId(requestedUrl);
+        if (currentId || requestedId) return currentId !== requestedId;
+        return normalizeProviderPath(new URL(currentUrl).pathname) !== normalizeProviderPath(new URL(requestedUrl).pathname);
+    }
     try {
         const current = new URL(currentUrl);
         const requested = new URL(requestedUrl);
@@ -102,12 +116,17 @@ export function shouldNavigateToRequestedProviderUrl(currentUrl, requestedUrl) {
     }
 }
 
-/**
- * @param {string} pathname
- * @returns {string}
- */
-function normalizeProviderPath(pathname) {
-    return pathname === '' ? '/' : pathname;
+/** @param {string|null|undefined} value */
+function inferVendor(value) {
+    if (!value) return '';
+    try {
+        const host = new URL(value).hostname.replace(/^www\./, '');
+        if (host === 'perplexity.ai') return 'perplexity';
+        if (host === 'chatgpt.com' || host === 'chat.openai.com') return 'chatgpt';
+        if (host === 'gemini.google.com') return 'gemini';
+        if (host === 'grok.com') return 'grok';
+    } catch { /* invalid */ }
+    return '';
 }
 
 /**

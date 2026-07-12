@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSafeChatGptConversationUrl } from '../../web-ai/tab-recovery.mjs';
+import { isSafeChatGptConversationUrl, isSafePerplexityConversationUrl } from '../../web-ai/tab-recovery.mjs';
 
 describe('isSafeChatGptConversationUrl (32.3 session guard)', () => {
     it('accepts a concrete ChatGPT conversation URL', () => {
@@ -48,11 +48,20 @@ describe('isSafeChatGptConversationUrl (32.3 session guard)', () => {
     });
 });
 
+describe('provider conversation URL guards', () => {
+    it('accepts only strict Perplexity /search/<uuid> URLs', () => {
+        expect(isSafePerplexityConversationUrl('https://www.perplexity.ai/search/123e4567-e89b-12d3-a456-426614174000')).toBe(true);
+        expect(isSafePerplexityConversationUrl('https://perplexity.ai/search/123e4567-e89b-12d3-a456-426614174000/')).toBe(true);
+        expect(isSafePerplexityConversationUrl('https://www.perplexity.ai/search/not-a-uuid')).toBe(false);
+        expect(isSafePerplexityConversationUrl('https://www.perplexity.ai/')).toBe(false);
+    });
+});
+
 describe('resolveSessionPage wiring (source-string contract)', () => {
     const src = readFileSync(join(process.cwd(), 'web-ai/tab-recovery.mjs'), 'utf8');
 
-    it('fails closed on an unsafe ChatGPT navigate target', () => {
-        expect(src).toContain("current.vendor === 'chatgpt' && !isSafeChatGptConversationUrl(current.conversationUrl)");
-        expect(src).toContain('refusing to navigate to unsafe ChatGPT target');
+    it('fails closed on unsafe provider navigate targets', () => {
+        expect(src).toContain('assertSafeStoredConversationUrl(current.vendor, current.conversationUrl');
+        expect(src).toContain("errorCode: 'cdp.target-mismatch'");
     });
 });

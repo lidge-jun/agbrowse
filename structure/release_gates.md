@@ -19,7 +19,7 @@ aliases: [agbrowse release gates, agbrowse 릴리즈 게이트, production readi
 | 라벨 | 의미 | 현재 기준 |
 | --- | --- | --- |
 | `ready` | deterministic tests와 docs가 모두 뒷받침한다 | CLI primitive, session store, offline eval fixture, policy/trace schema |
-| `beta` | 구현은 있으나 live provider UI와 계정 상태에 영향받는다 | ChatGPT/Gemini/Grok live send/poll/query, ChatGPT code mode/code-extract, Project Sources |
+| `beta` | 구현은 있으나 live provider UI와 계정 상태에 영향받는다 | ChatGPT/Gemini/Grok/Perplexity live send/poll/query, ChatGPT code mode/code-extract, Project Sources |
 | `experimental` | optional adapter, benchmark score, hosted/cloud claim 전 단계다 | external CDP는 deferred, benchmark score는 deferred, broader MCP production claim은 deferred |
 
 ## Public Claim Gate

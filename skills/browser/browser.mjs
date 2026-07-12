@@ -3239,7 +3239,7 @@ try {
 
       Installs:
         browser       Chrome/CDP browser control skill
-        web-ai        ChatGPT, Gemini, and Grok browser web-ai workflow skill
+        web-ai        ChatGPT, Gemini, Grok, and Perplexity browser web-ai workflow skill
         search        Standalone deep search and URL evidence verification skill
         vision-click  Screenshot-to-coordinate click helper skill
 
@@ -3257,7 +3257,7 @@ try {
       returns verdict no_mappable_structure instead of silent partial data.
     extract --from-file <page.html> --schema <file.json>
       Extract from local HTML (offline, no fetch).
-    extract <url> --schema <file.json> --escalate-web-ai [--vendor grok|chatgpt|gemini]
+    extract <url> --schema <file.json> --escalate-web-ai [--vendor grok|chatgpt|gemini|perplexity]
       Tier 2 opt-in: on Tier 1 failure, ask a logged-in web-ai vendor and
       validate its JSON with the same schema validator.
 
@@ -3390,14 +3390,15 @@ try {
 	    web-ai claim-audit     Scan repo docs for forbidden hosted/cloud claims
 
       Common flags:
-        --vendor <chatgpt|gemini|grok>
+        --vendor <chatgpt|gemini|grok|perplexity>
         --surface <chat>               Chat commands reject an active Work surface
         --family <alias>               ChatGPT: gpt-5.6-sol | gpt-5.5 | gpt-5.4 |
                                        gpt-5.3 | o3; omit to leave unchanged
         --model <alias>                ChatGPT tiers: pro/thinking/instant
                                        Gemini:  flash-lite/flash/pro + tool deepthink
                                        Grok:    heavy/expert/thinking/fast/auto
-        --effort <alias>               ChatGPT only; requires --model
+                                       Perplexity: best/sonar-2/gpt-5.6-terra/...
+        --effort <alias>               ChatGPT or Perplexity; requires --model
                                        Thinking canonical: medium/high/xhigh
                                        Legacy normalization: see web-ai skill
         --reasoning-effort <alias>     Alias for --effort
@@ -3407,9 +3408,9 @@ try {
         --allow-copy-markdown-fallback Capture provider Copy button output
         --allow-grok-context-pack      Override Grok hard-gate (prefer inline)
         --timeout <sec>                Long tier defaults: chatgpt-pro=5400 ·
-                                       grok-heavy=3600 · deep-research=3600;
-                                       unknown tier falls back
-                                       to 1200 ChatGPT/Gemini · 600 Grok
+                                       grok-heavy=3600 · perplexity-thinking=3600 ·
+                                       deep-research=3600; unknown tier falls back
+                                       to 1200 ChatGPT/Gemini/Perplexity · 600 Grok
         --session <id>                 Resume a previous session; surviving
                                        shell exit + OS sleep
         --deadline <iso>               Override session deadline

@@ -16,6 +16,9 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('--context-from-files');
         expect(result.stdout).toContain('--effort <alias>');
         expect(result.stdout).toContain('ChatGPT: instant, thinking, pro');
+        expect(result.stdout).toContain('chatgpt | gemini | grok | perplexity');
+        expect(result.stdout).toContain('Perplexity Thinking: on, off');
+        expect(result.stdout).toContain('perplexity-thinking');
         expect(result.stdout).toContain('Tab lease policy:');
         expect(result.stdout).toContain('leaseClosedTabs');
         expect(result.stdout).toContain('mcp-server');
@@ -120,6 +123,13 @@ describe('web-ai CLI contract', () => {
 
     it('supports Grok render without a running browser', async () => {
         const result = await execBrowser(['web-ai', 'render', '--vendor', 'grok', '--prompt', 'hello']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('[USER]');
+        expect(result.stdout).toContain('## Question');
+    });
+
+    it('supports Perplexity render without a running browser', async () => {
+        const result = await execBrowser(['web-ai', 'render', '--vendor', 'perplexity', '--prompt', 'hello']);
         expect(result.code).toBe(0);
         expect(result.stdout).toContain('[USER]');
         expect(result.stdout).toContain('## Question');
