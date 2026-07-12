@@ -26,6 +26,18 @@ describe('Perplexity model request contract', () => {
     expect(PERPLEXITY_MODEL_CATALOG['claude-opus-4.8'].locked).toBe(true);
   });
 
+  it('marks Sonar 2 as not Thinking-capable and rejects Thinking before browser access', () => {
+    expect(PERPLEXITY_MODEL_CATALOG['sonar-2'].supportsThinking).toBe(false);
+    for (const effort of ['on', 'off']) {
+      expect(() => validatePerplexitySelectionRequest('sonar-2', effort)).toThrow(
+        expect.objectContaining({
+          errorCode: 'provider.mode-unavailable',
+          mutationAllowed: false,
+        }),
+      );
+    }
+  });
+
   it('normalizes effort aliases to the observed binary Thinking state', () => {
     expect(normalizePerplexityEffort('heavy')).toBe('on');
     expect(normalizePerplexityEffort('extended')).toBe('on');
@@ -56,8 +68,11 @@ describe('Perplexity model request contract', () => {
     });
   });
 
-  it('marks every observed model as Thinking-capable and records Thinking-only models', () => {
-    expect(Object.values(PERPLEXITY_MODEL_CATALOG).every((entry) => entry.supportsThinking === true)).toBe(true);
+  it('records Thinking capability separately from Thinking-only models', () => {
+    expect(PERPLEXITY_MODEL_CATALOG['sonar-2'].supportsThinking).toBe(false);
+    expect(Object.values(PERPLEXITY_MODEL_CATALOG)
+      .filter((entry) => entry.alias !== 'sonar-2')
+      .every((entry) => entry.supportsThinking === true)).toBe(true);
     expect(PERPLEXITY_MODEL_CATALOG['glm-5.2'].thinkingOnly).toBe(true);
     expect(PERPLEXITY_MODEL_CATALOG['nemotron-3-ultra'].thinkingOnly).toBe(true);
     expect(PERPLEXITY_MODEL_CATALOG['claude-sonnet-5'].thinkingOnly).toBeFalsy();

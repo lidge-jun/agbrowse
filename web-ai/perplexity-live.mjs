@@ -658,16 +658,15 @@ export async function openPerplexitySourcesPane(page, committedRoot) {
     }
 
     const pane = toggle.locator('xpath=..');
-    const links = pane.locator('a[href], [data-source-url]');
-    const linkCount = await waitForSourceLinks(links, 5_000);
-    if (linkCount < 1) {
+    const expandedAfter = await toggle.getAttribute('aria-expanded');
+    if (expandedAfter !== 'true') {
         throw providerError('perplexity', {
             errorCode: 'provider.response-resolution',
             stage: 'sources-open',
             retryHint: 'poll',
-            message: 'Perplexity sources pane opened without source links',
+            message: 'Perplexity sources pane did not remain open',
             mutationAllowed: true,
-            evidence: { expandedBefore, linkCount },
+            evidence: { expandedBefore, expandedAfter },
         });
     }
     return pane;
@@ -682,17 +681,6 @@ async function waitForVisibleSourceToggles(toggles, timeoutMs) {
         await new Promise(resolve => setTimeout(resolve, 50));
     }
     return visibleIndices(toggles);
-}
-
-/** @param {Locator} links @param {number} timeoutMs */
-async function waitForSourceLinks(links, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        const visible = await visibleIndices(links);
-        if (visible.length > 0) return visible.length;
-        await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    return (await visibleIndices(links)).length;
 }
 
 /** @param {Page} _page */
@@ -728,6 +716,25 @@ async function insertPerplexityPrompt(composer, text) {
     }
 }
 
+/**
+ * File previews render asynchronously after the chooser accepts a path.
+ * @param {Page} page
+ * @param {string} fileName
+ * @param {number} [timeoutMs]
+ */
+export async function waitForPerplexityAttachmentPreview(page, fileName, timeoutMs = 5_000) {
+    const preview = typeof page.getByText === 'function'
+        ? page.getByText(fileName, { exact: true })
+        : page.locator(`text=${JSON.stringify(fileName)}`);
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const visible = await visibleIndices(preview);
+        if (visible.length > 0) return visible.length;
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return (await visibleIndices(preview)).length;
+}
+
 /** @param {Page} page @param {Input} input @param {any} contextPack */
 async function attachAndVerifyPerplexityFile(page, input, contextPack) {
     const uploadPath = input.filePath || input.filePaths?.[0] || contextPack?.attachments?.[0]?.path;
@@ -746,15 +753,12 @@ async function attachAndVerifyPerplexityFile(page, input, contextPack) {
         });
     }
     await inputs.nth(0).setInputFiles(uploadPath);
-    const preview = typeof page.getByText === 'function'
-        ? page.getByText(info.basename, { exact: true })
-        : page.locator(`text=${JSON.stringify(info.basename)}`);
-    const visible = await visibleIndices(preview);
-    if (visible.length !== 1) {
+    const visibleCount = await waitForPerplexityAttachmentPreview(page, info.basename);
+    if (visibleCount !== 1) {
         throw providerError('perplexity', {
             errorCode: 'provider.attachment-evidence-missing', stage: 'attachment-verify', retryHint: 're-upload',
             message: 'Perplexity attachment preview not observed', mutationAllowed: true,
-            evidence: { fileName: info.basename, visibleCount: visible.length },
+            evidence: { fileName: info.basename, visibleCount },
         });
     }
     return { path: uploadPath, fileName: info.basename };

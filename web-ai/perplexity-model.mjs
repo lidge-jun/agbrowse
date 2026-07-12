@@ -13,11 +13,12 @@ import {
 /**
  * Canonical catalog derived from the checked-in authenticated observation.
  * `supportsThinking` is true only for models whose picker control was observed
- * in the checked-in English/Korean evidence.
+ * in the checked-in English/Korean evidence. Sonar 2 is intentionally false:
+ * its row is selectable, but it has no Thinking control.
  */
 export const PERPLEXITY_MODEL_CATALOG = Object.freeze({
     best: Object.freeze({ alias: 'best', label: 'Best', locked: false, supportsThinking: true }),
-    'sonar-2': Object.freeze({ alias: 'sonar-2', label: 'Sonar 2', locked: false, supportsThinking: true }),
+    'sonar-2': Object.freeze({ alias: 'sonar-2', label: 'Sonar 2', locked: false, supportsThinking: false }),
     'gpt-5.6-terra': Object.freeze({ alias: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', locked: false, supportsThinking: true }),
     'gemini-3.1-pro': Object.freeze({ alias: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', locked: false, supportsThinking: true }),
     'claude-sonnet-5': Object.freeze({ alias: 'claude-sonnet-5', label: 'Claude Sonnet 5', locked: false, supportsThinking: true }),
@@ -79,6 +80,11 @@ export function validatePerplexitySelectionRequest(model, effort) {
     }
     if (hasEffort && !requestedThinking) {
         throw invalidEffortError('perplexity', String(effort), { model: requestedModel });
+    }
+    if (requestedModel && requestedThinking !== null && !getCatalogEntry(requestedModel)?.supportsThinking) {
+        throw modeUnavailableError('perplexity', requestedModel, requestedThinking, {
+            reason: 'thinking-control-unavailable',
+        });
     }
     if (requestedModel && requestedThinking === 'off' && getCatalogEntry(requestedModel)?.thinkingOnly) {
         throw modeUnavailableError('perplexity', requestedModel, requestedThinking, {

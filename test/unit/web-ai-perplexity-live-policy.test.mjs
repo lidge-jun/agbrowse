@@ -3,9 +3,11 @@ import {
   PERPLEXITY_CITATION_GRACE_MS,
   evaluatePerplexityCompletion,
   extractPerplexityCitations,
+  openPerplexitySourcesPane,
   openFreshPerplexityThread,
   probePerplexityStreamingState,
   resolveLatestPerplexityResponseRoot,
+  waitForPerplexityAttachmentPreview,
   validatePerplexityUnsupportedFeatures,
 } from '../../web-ai/perplexity-live.mjs';
 
@@ -149,6 +151,48 @@ describe('Perplexity streaming and fresh-thread guards', () => {
       citations: [expect.objectContaining({ url: 'https://example.test/source' })],
     });
     expect(closeCalls).toBe(0);
+  });
+
+  it('accepts an opened sources pane with no URL citations for file-only answers', async () => {
+    const links = {
+      count: async () => 0,
+      nth: () => links,
+      isVisible: async () => false,
+    };
+    const pane = { locator: () => links };
+    const toggle = {
+      isVisible: async () => true,
+      getAttribute: async (name) => name === 'aria-expanded' ? 'true' : null,
+      click: async () => undefined,
+      locator: () => pane,
+    };
+    const toggles = {
+      count: async () => 1,
+      nth: () => toggle,
+    };
+    const page = {
+      locator: () => ({ filter: () => toggles }),
+    };
+
+    await expect(openPerplexitySourcesPane(page, {})).resolves.toBe(pane);
+  });
+
+  it('waits for a delayed attachment preview before declaring upload evidence missing', async () => {
+    let polls = 0;
+    const preview = {
+      count: async () => 1,
+      nth: () => preview,
+      isVisible: async () => {
+        polls += 1;
+        return polls >= 3;
+      },
+    };
+    const page = {
+      getByText: () => preview,
+    };
+
+    await expect(waitForPerplexityAttachmentPreview(page, 'code-check.js', 200)).resolves.toBe(1);
+    expect(polls).toBeGreaterThanOrEqual(3);
   });
 
   it('navigates an existing conversation to the exact root and verifies a clean composer', async () => {
