@@ -12,26 +12,27 @@ import {
 
 /**
  * Canonical catalog derived from the checked-in authenticated observation.
- * `supportsThinking` is intentionally nullable except for the selected Terra
- * fixture that proved the adjacent control.
+ * `supportsThinking` is true only for models whose picker control was observed
+ * in the checked-in English/Korean evidence.
  */
 export const PERPLEXITY_MODEL_CATALOG = Object.freeze({
-    best: Object.freeze({ alias: 'best', label: 'Best', locked: false, supportsThinking: null }),
-    'sonar-2': Object.freeze({ alias: 'sonar-2', label: 'Sonar 2', locked: false, supportsThinking: null }),
+    best: Object.freeze({ alias: 'best', label: 'Best', locked: false, supportsThinking: true }),
+    'sonar-2': Object.freeze({ alias: 'sonar-2', label: 'Sonar 2', locked: false, supportsThinking: true }),
     'gpt-5.6-terra': Object.freeze({ alias: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', locked: false, supportsThinking: true }),
-    'gemini-3.1-pro': Object.freeze({ alias: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', locked: false, supportsThinking: null }),
-    'claude-sonnet-5': Object.freeze({ alias: 'claude-sonnet-5', label: 'Claude Sonnet 5', locked: false, supportsThinking: null }),
-    'glm-5.2': Object.freeze({ alias: 'glm-5.2', label: 'GLM 5.2', locked: false, supportsThinking: null }),
-    'kimi-k2.6': Object.freeze({ alias: 'kimi-k2.6', label: 'Kimi K2.6', locked: false, supportsThinking: null }),
-    'nemotron-3-ultra': Object.freeze({ alias: 'nemotron-3-ultra', label: 'Nemotron 3 Ultra', locked: false, supportsThinking: null }),
-    'gpt-5.6-sol': Object.freeze({ alias: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', locked: true, supportsThinking: null }),
-    'claude-opus-4.8': Object.freeze({ alias: 'claude-opus-4.8', label: 'Claude Opus 4.8', locked: true, supportsThinking: null }),
+    'gemini-3.1-pro': Object.freeze({ alias: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', locked: false, supportsThinking: true }),
+    'claude-sonnet-5': Object.freeze({ alias: 'claude-sonnet-5', label: 'Claude Sonnet 5', locked: false, supportsThinking: true }),
+    'glm-5.2': Object.freeze({ alias: 'glm-5.2', label: 'GLM 5.2', locked: false, supportsThinking: true, thinkingOnly: true }),
+    'kimi-k2.6': Object.freeze({ alias: 'kimi-k2.6', label: 'Kimi K2.6', locked: false, supportsThinking: true }),
+    'nemotron-3-ultra': Object.freeze({ alias: 'nemotron-3-ultra', label: 'Nemotron 3 Ultra', locked: false, supportsThinking: true, thinkingOnly: true }),
+    'gpt-5.6-sol': Object.freeze({ alias: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', locked: true, supportsThinking: true }),
+    'claude-opus-4.8': Object.freeze({ alias: 'claude-opus-4.8', label: 'Claude Opus 4.8', locked: true, supportsThinking: true }),
 });
 
 const MODEL_ALIASES = buildModelAliases();
 const THINKING_ON = new Set(['on', 'extended', 'high', 'xhigh', 'heavy']);
 const THINKING_OFF = new Set(['off', 'low', 'light', 'standard', 'normal', 'default']);
-const MODEL_LABEL_RE = /^(?:Model|Best|Sonar 2|GPT-5\.6 Terra|Gemini 3\.1 Pro|Claude Sonnet 5|GLM 5\.2|Kimi K2\.6|Nemotron 3 Ultra|GPT-5\.6 Sol|Claude Opus 4\.8)$/i;
+const MODEL_LABEL_RE = /^(?:Model|Best|Sonar 2|GPT-5\.6 Terra|Gemini 3\.1 Pro|Claude Sonnet 5|GLM[- ]5\.2|Kimi[- ]K2\.6|Nemotron[- ]3 Ultra|GPT-5\.6 Sol|Claude Opus 4\.8)(?:\s+(?:Thinking|사고))?$/i;
+const THINKING_LABEL_RE = /^(?:Thinking|사고)$/i;
 
 /**
  * @param {string} alias
@@ -79,6 +80,11 @@ export function validatePerplexitySelectionRequest(model, effort) {
     if (hasEffort && !requestedThinking) {
         throw invalidEffortError('perplexity', String(effort), { model: requestedModel });
     }
+    if (requestedModel && requestedThinking === 'off' && getCatalogEntry(requestedModel)?.thinkingOnly) {
+        throw modeUnavailableError('perplexity', requestedModel, requestedThinking, {
+            reason: 'thinking-only-model',
+        });
+    }
     return { requestedModel, requestedThinking };
 }
 
@@ -107,6 +113,7 @@ export async function selectPerplexityModel(page, { requestedModel, requestedThi
         const control = await resolveAdjacentThinkingControl(resolved.row, requestedModel);
         const desired = requestedThinking === 'on';
         if (control.checked !== desired) {
+            await assertActionable(control.switch, requestedModel);
             await control.switch.click({ timeout: 5_000 });
             resolved = await reopenAndResolveSelectedModelRow(page, requestedModel);
         }
@@ -305,15 +312,14 @@ async function resolveAdjacentThinkingControl(row, requestedModel) {
     }
     const role = await sibling.getAttribute('role');
     const text = String(await sibling.innerText().catch(() => '')).trim();
-    if (role !== 'menuitemcheckbox' || !/^Thinking$/i.test(text.replace(/\s+/g, ' '))) {
+    if (role !== 'menuitemcheckbox' || !THINKING_LABEL_RE.test(text.replace(/\s+/g, ' '))) {
         throw modeUnavailableError('perplexity', requestedModel, null, { reason: 'thinking-sibling-mismatch', role, text });
     }
-    const switches = sibling.locator(':scope > button[role="switch"]');
+    const switches = sibling.locator('[role="switch"]');
     if (await switches.count() !== 1) {
         throw modeUnavailableError('perplexity', requestedModel, null, { reason: 'thinking-switch-not-unique', count: await switches.count() });
     }
     const switchLocator = switches.nth(0);
-    await assertActionable(switchLocator, requestedModel);
     return { switch: switchLocator, checked: await readChecked(switchLocator, 'thinking-switch', requestedModel) };
 }
 

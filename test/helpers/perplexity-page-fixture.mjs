@@ -33,6 +33,10 @@ const LABELS = {
  *   selectedModel?: string,
  *   thinking?: 'on'|'off',
  *   thinkingAvailable?: boolean,
+ *   thinkingModel?: string,
+ *   thinkingLabel?: string,
+ *   thinkingDisabled?: boolean,
+ *   triggerLabel?: string,
  *   duplicateSwitch?: boolean,
  *   menuOpen?: boolean,
  *   triggerClose?: boolean,
@@ -44,6 +48,10 @@ export function createPerplexityModelPageFixture(options = {}) {
     selectedModel: options.selectedModel || 'best',
     thinking: options.thinking || 'off',
     thinkingAvailable: options.thinkingAvailable !== false,
+    thinkingModel: options.thinkingModel || 'gpt-5.6-terra',
+    thinkingLabel: options.thinkingLabel || 'Thinking',
+    thinkingDisabled: options.thinkingDisabled === true,
+    triggerLabel: options.triggerLabel || null,
     duplicateSwitch: options.duplicateSwitch === true,
     menuOpen: options.menuOpen === true,
     triggerClose: options.triggerClose !== false,
@@ -53,6 +61,10 @@ export function createPerplexityModelPageFixture(options = {}) {
   };
   /** @type {string[]} */
   const actions = [];
+
+  const currentTriggerLabel = () => state.triggerLabel || (
+    state.selectedModel === 'best' ? 'Model' : LABELS[state.selectedModel]
+  );
 
   const assertFresh = (generation) => {
     if (generation !== state.generation) {
@@ -73,11 +85,11 @@ export function createPerplexityModelPageFixture(options = {}) {
     first: () => triggerLocator(),
     isVisible: async () => true,
     getAttribute: async (name) => name === 'aria-label'
-      ? (state.selectedModel === 'best' ? 'Model' : LABELS[state.selectedModel])
+      ? currentTriggerLabel()
       : null,
-    innerText: async () => state.selectedModel === 'best' ? 'Model' : LABELS[state.selectedModel],
+    innerText: async () => currentTriggerLabel(),
     click: async () => {
-      actions.push(`trigger:${state.selectedModel === 'best' ? 'Model' : LABELS[state.selectedModel]}`);
+      actions.push(`trigger:${currentTriggerLabel()}`);
       if (state.menuOpen && !state.triggerClose) return;
       state.menuOpen = !state.menuOpen;
       state.menuState = state.menuOpen ? 'open' : 'closed';
@@ -92,7 +104,8 @@ export function createPerplexityModelPageFixture(options = {}) {
     isVisible: async () => { assertFresh(generation); return true; },
     getAttribute: async (name) => {
       assertFresh(generation);
-      if (name === 'disabled' || name === 'aria-disabled') return null;
+      if (name === 'disabled') return state.thinkingDisabled ? '' : null;
+      if (name === 'aria-disabled') return state.thinkingDisabled ? 'true' : null;
       if (name === 'aria-checked') return index === 0 ? String(state.thinking === 'on') : 'false';
       if (name === 'data-state') return (index === 0 ? state.thinking === 'on' : false) ? 'checked' : 'unchecked';
       return null;
@@ -110,20 +123,23 @@ export function createPerplexityModelPageFixture(options = {}) {
   const siblingLocator = (generation, alias) => ({
     count: async () => {
       assertFresh(generation);
-      return alias === 'gpt-5.6-terra' && state.thinkingAvailable ? 1 : 0;
+      return alias === state.thinkingModel && state.thinkingAvailable ? 1 : 0;
     },
     nth: () => siblingLocator(generation, alias),
     first: () => siblingLocator(generation, alias),
     isVisible: async () => {
       assertFresh(generation);
-      return alias === 'gpt-5.6-terra' && state.thinkingAvailable;
+      return alias === state.thinkingModel && state.thinkingAvailable;
     },
     getAttribute: async (name) => {
       assertFresh(generation);
       return name === 'role' ? 'menuitemcheckbox' : null;
     },
-    innerText: async () => { assertFresh(generation); return 'Thinking'; },
-    locator: (selector) => selector === ':scope > button[role="switch"]'
+    innerText: async () => { assertFresh(generation); return state.thinkingLabel; },
+    locator: (selector) => (
+      selector === ':scope > button[role="switch"]'
+      || selector === '[role="switch"]'
+    )
       ? switchLocator(generation, 0)
       : empty(generation),
   });
@@ -201,7 +217,11 @@ export function createPerplexityModelPageFixture(options = {}) {
       ? menuCollection()
       : selector === '[role="menu"][data-state="open"]' ? menuCollection('open')
         : selector === '[role="menu"][data-state="closed"]' ? menuCollection('closed') : empty(),
-    getByRole: (role) => role === 'button' ? triggerLocator() : empty(),
+    getByRole: (role, options = {}) => {
+      if (role !== 'button') return empty();
+      if (options.name instanceof RegExp && !options.name.test(currentTriggerLabel())) return empty();
+      return triggerLocator();
+    },
     keyboard: {
       press: async (key) => {
         if (key !== 'Escape') throw new Error(`unsupported key ${key}`);

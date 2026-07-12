@@ -59,9 +59,14 @@ const PERPLEXITY_HOSTS = new Set(['perplexity.ai', 'www.perplexity.ai']);
 const COMPOSER_SELECTOR = '#ask-input';
 const COMMITTED_RESPONSE_ROOT_XPATH = [
     'xpath=ancestor::*[',
-    './/button[normalize-space(.)="Copy"]',
-    ' and .//button[contains(translate(normalize-space(.), "SOURCES", "sources"), "sources")]',
-    ' and (.//button[normalize-space(.)="Share"] or .//button[normalize-space(.)="Rewrite Session"])',
+    './/button[(normalize-space(.)="Copy" or @aria-label="Copy")]',
+    ' and .//button[',
+    'contains(translate(normalize-space(.), "SOURCES", "sources"), "sources")',
+    ' or contains(translate(@aria-label, "SOURCES", "sources"), "sources")',
+    ']',
+    ' and (.//button[normalize-space(.)="Share" or @aria-label="Share"]',
+    ' or .//button[normalize-space(.)="Rewrite Session" or @aria-label="Rewrite Session"])',
+    ' and (.//p or .//*[@data-answer-text])',
     '][1]',
 ].join('');
 const USER_TURN_SELECTORS = [
@@ -554,7 +559,12 @@ export async function resolveCommittedPerplexityResponse(page, baseline) {
             message: 'Perplexity committed response root is not visible', mutationAllowed: false,
         });
     }
-    const text = cleanPerplexityAnswer(await locator.innerText().catch(() => ''));
+    const answerNodes = locator.locator('[data-answer-text], p');
+    const answerIndices = await visibleIndices(answerNodes);
+    const rawText = answerIndices.length > 0
+        ? (await Promise.all(answerIndices.map(index => answerNodes.nth(index).innerText().catch(() => '')))).join('\n\n')
+        : await locator.innerText().catch(() => '');
+    const text = cleanPerplexityAnswer(rawText);
     const userCount = await countUserTurns(page);
     const promptCommitObserved = userCount > Number(baseline.userCount || 0) || responseCount > assistantBaseline;
     const turnId = await locator.getAttribute('data-turn-id').catch(() => null)
@@ -769,10 +779,7 @@ async function resolveResponseRoots(page) {
     // role. Resolve from the exact completed footer instead: one Copy control,
     // one <n> sources control, and Share or Rewrite Session, then choose the
     // nearest ancestor containing that footer and answer text.
-    const allButtons = page.locator('button');
-    const copyButtons = typeof /** @type {any} */ (allButtons).filter === 'function'
-        ? /** @type {any} */ (allButtons).filter({ hasText: /^Copy$/i })
-        : page.locator('button:has-text("Copy")');
+    const copyButtons = page.locator('button[aria-label="Copy"], button:not([aria-label]):has-text("Copy")');
     if (typeof /** @type {any} */ (copyButtons).locator !== 'function') {
         return page.locator('[data-agbrowse-perplexity-response="committed"]');
     }

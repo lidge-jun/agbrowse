@@ -55,13 +55,36 @@ describe('Perplexity model request contract', () => {
       requestedThinking: 'on',
     });
   });
+
+  it('marks every observed model as Thinking-capable and records Thinking-only models', () => {
+    expect(Object.values(PERPLEXITY_MODEL_CATALOG).every((entry) => entry.supportsThinking === true)).toBe(true);
+    expect(PERPLEXITY_MODEL_CATALOG['glm-5.2'].thinkingOnly).toBe(true);
+    expect(PERPLEXITY_MODEL_CATALOG['nemotron-3-ultra'].thinkingOnly).toBe(true);
+    expect(PERPLEXITY_MODEL_CATALOG['claude-sonnet-5'].thinkingOnly).toBeFalsy();
+  });
+
+  it.each(['glm-5.2', 'nemotron-3-ultra'])('rejects Thinking OFF for %s before browser access', (model) => {
+    expect(() => validatePerplexitySelectionRequest(model, 'off')).toThrow(
+      expect.objectContaining({
+        errorCode: 'provider.mode-unavailable',
+        mutationAllowed: false,
+        evidence: expect.objectContaining({ reason: 'thinking-only-model' }),
+      }),
+    );
+  });
 });
 
 it('keeps reviewed English and Korean picker fixtures at observed Thinking OFF by default', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const name of ['perplexity-model-picker-en.html', 'perplexity-model-picker-ko.html']) {
+  for (const [name, label] of [
+    ['perplexity-model-picker-en.html', 'Thinking'],
+    ['perplexity-model-picker-ko.html', '사고'],
+  ]) {
     const html = await readFile(new URL(`../fixtures/provider-dom/${name}`, import.meta.url), 'utf8');
-    expect(html).toContain('role="switch" aria-label="Thinking" aria-checked="false"');
+    expect(html).toContain(`role="switch" aria-label="${label}" aria-checked="false"`);
+    expect((html.match(/role="menuitemcheckbox"/g) || []).length).toBe(8);
+    expect(html).toContain('data-thinking-owner="glm-5.2" aria-checked="true" aria-disabled="true"');
+    expect(html).toContain('data-thinking-owner="nemotron-3-ultra" aria-checked="true" aria-disabled="true"');
   }
 });
 
@@ -95,6 +118,83 @@ it('verifies the picker closed state while its live menu exit node remains mount
     'trigger:Claude Sonnet 5',
     'keyboard:Escape',
   ]);
+});
+
+it.each([
+  ['English', 'Thinking'],
+  ['Korean', '사고'],
+])('recognizes the %s Claude Sonnet 5 Thinking switch and can enable it', async (_locale, thinkingLabel) => {
+  expect(PERPLEXITY_MODEL_CATALOG['claude-sonnet-5'].supportsThinking).toBe(true);
+  const fixture = createPerplexityModelPageFixture({
+    selectedModel: 'claude-sonnet-5',
+    thinking: 'off',
+    thinkingModel: 'claude-sonnet-5',
+    thinkingLabel,
+    menuOpen: true,
+  });
+
+  await expect(selectPerplexityModel(fixture.page, {
+    requestedModel: 'claude-sonnet-5',
+    requestedThinking: 'on',
+  })).resolves.toMatchObject({
+    resolvedModel: 'claude-sonnet-5',
+    thinking: 'on',
+    verified: true,
+  });
+  expect(fixture.actions).toEqual(['thinking:on']);
+});
+
+it('reads an already-on disabled Thinking-only switch without treating status as unavailable', async () => {
+  const fixture = createPerplexityModelPageFixture({
+    selectedModel: 'glm-5.2',
+    thinking: 'on',
+    thinkingModel: 'glm-5.2',
+    thinkingDisabled: true,
+    menuOpen: true,
+  });
+
+  await expect(inspectPerplexityModels(fixture.page)).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        alias: 'glm-5.2',
+        selected: true,
+        supportsThinking: true,
+        thinkingControlPresent: true,
+      }),
+    ]),
+  );
+  expect(fixture.actions).toEqual(['keyboard:Escape']);
+});
+
+it('accepts the live hyphenated GLM trigger label', async () => {
+  const fixture = createPerplexityModelPageFixture({
+    selectedModel: 'glm-5.2',
+    thinking: 'on',
+    thinkingModel: 'glm-5.2',
+    thinkingDisabled: true,
+    triggerLabel: 'GLM-5.2',
+  });
+
+  await expect(selectPerplexityModel(fixture.page, {
+    requestedModel: 'glm-5.2',
+    requestedThinking: 'on',
+  })).resolves.toMatchObject({ resolvedModel: 'glm-5.2', thinking: 'on', verified: true });
+  expect(fixture.actions).toEqual(['trigger:GLM-5.2']);
+});
+
+it('accepts a trigger label with the active English Thinking suffix', async () => {
+  const fixture = createPerplexityModelPageFixture({
+    selectedModel: 'claude-sonnet-5',
+    thinking: 'on',
+    thinkingModel: 'claude-sonnet-5',
+    triggerLabel: 'Claude Sonnet 5 Thinking',
+  });
+
+  await expect(selectPerplexityModel(fixture.page, {
+    requestedModel: 'claude-sonnet-5',
+    requestedThinking: 'on',
+  })).resolves.toMatchObject({ resolvedModel: 'claude-sonnet-5', thinking: 'on', verified: true });
+  expect(fixture.actions).toEqual(['trigger:Claude Sonnet 5 Thinking']);
 });
 
 

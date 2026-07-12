@@ -100,10 +100,14 @@ describe('Perplexity streaming and fresh-thread guards', () => {
       count: async () => 2,
       nth: (index) => index === 1 ? latest : { isVisible: async () => true },
     };
+    const emptyRoots = {
+      count: async () => 0,
+      nth: () => emptyRoots,
+    };
     const page = {
-      locator: () => ({
-        filter: () => ({ locator: () => roots }),
-      }),
+      locator: (selector) => selector === 'button[aria-label="Copy"], button:not([aria-label]):has-text("Copy")'
+        ? { locator: () => roots }
+        : { filter: () => ({ locator: () => emptyRoots }) },
     };
     await expect(resolveLatestPerplexityResponseRoot(page)).resolves.toBe(latest);
   });
