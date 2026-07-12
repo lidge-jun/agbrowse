@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PERPLEXITY_CITATION_GRACE_MS,
   evaluatePerplexityCompletion,
+  extractPerplexityCitations,
   openFreshPerplexityThread,
   probePerplexityStreamingState,
   resolveLatestPerplexityResponseRoot,
@@ -110,6 +111,44 @@ describe('Perplexity streaming and fresh-thread guards', () => {
         : { filter: () => ({ locator: () => emptyRoots }) },
     };
     await expect(resolveLatestPerplexityResponseRoot(page)).resolves.toBe(latest);
+  });
+
+  it('does not close an already-open sources pane after citation extraction', async () => {
+    let closeCalls = 0;
+    const sourceButton = {
+      isVisible: async () => true,
+      innerText: async () => '15 sources',
+    };
+    const sourceButtons = {
+      count: async () => 1,
+      nth: () => sourceButton,
+    };
+    const committed = {
+      locator: {
+        locator: (selector) => selector === 'button'
+          ? { filter: () => sourceButtons }
+          : sourceButtons,
+      },
+    };
+    const pane = {
+      locator: () => ({
+        evaluateAll: async () => [{ url: 'https://example.test/source', title: 'Source', index: null }],
+      }),
+    };
+
+    await expect(extractPerplexityCitations({}, committed, {
+      baseUrl: 'https://www.perplexity.ai/search/example',
+      paneAdapter: {
+        openAndResolve: async () => ({
+          pane,
+          close: async () => { closeCalls += 1; return true; },
+        }),
+      },
+    })).resolves.toMatchObject({
+      state: 'present',
+      citations: [expect.objectContaining({ url: 'https://example.test/source' })],
+    });
+    expect(closeCalls).toBe(0);
   });
 
   it('navigates an existing conversation to the exact root and verifies a clean composer', async () => {

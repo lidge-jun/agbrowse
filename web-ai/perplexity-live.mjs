@@ -79,6 +79,8 @@ const COPY_SELECTOR = 'button[aria-label="Copy"], button:has-text("Copy")';
 const SUBMIT_SELECTOR = 'button[aria-label="Submit"]';
 const ADD_FILES_BUTTON_NAME = 'Add files or tools';
 const UPLOAD_MENU_ITEM_NAME = 'Upload files or images';
+const SOURCE_COUNT_RE = /^\s*\d+\s*(?:sources?|소스|개\s*출처|출처)\s*$/i;
+const SOURCE_TOGGLE_RE = /^\s*(?:Sources|소스)(?:\s+\d+)?\s*$/i;
 
 export const perplexityCapabilities = [
     defineCapability('perplexity-active-tab-verification', async (/** @type {Deps} */ deps) => probeHostMatches(await deps.getPage(), PERPLEXITY_HOSTS)),
@@ -592,34 +594,105 @@ export async function probePerplexityStreamingState(page, committedRoot = null) 
 }
 
 /**
- * Citation extraction is fail-closed until an authenticated close mechanism is
- * present in fixture provenance. The checked-in observation explicitly lacks it,
- * so runtime does not click the Sources control speculatively.
+ * Citation extraction opens the associated Sources accordion only when needed
+ * and deliberately leaves it open after reading the source links.
  * @param {Page} page
  * @param {{locator:Locator,text:string,responseCount:number}} committed
- * @param {{baseUrl:string, paneAdapter?:{openAndResolve:(page:Page,root:Locator)=>Promise<{pane:Locator,close:()=>Promise<boolean>}>}}} options
+ * @param {{baseUrl:string, paneAdapter?:{openAndResolve:(page:Page,root:Locator)=>Promise<{pane:Locator}>}}} options
  */
 export async function extractPerplexityCitations(page, committed, options) {
-    const sourceButtons = committed.locator.locator('button').filter({ hasText: /^\d+\s+sources$/i });
+    const sourceButtons = committed.locator.locator('button').filter({ hasText: SOURCE_COUNT_RE });
     const visible = await visibleIndices(sourceButtons);
     if (visible.length === 0) return { state: 'unavailable', citations: [], evidence: { reason: 'sources-control-missing' } };
     if (visible.length !== 1) return { state: 'unknown', citations: [], evidence: { reason: 'sources-control-ambiguous', count: visible.length } };
     const label = String(await sourceButtons.nth(visible[0]).innerText().catch(() => '')).trim();
-    const count = Number(label.match(/^(\d+)/)?.[1]);
+    const count = Number(label.match(/\d+/)?.[0]);
     if (count === 0) return { state: 'none-confirmed', citations: [], evidence: { sourceCount: 0 } };
-    if (!options.paneAdapter) {
-        return { state: 'unavailable', citations: [], evidence: { reason: 'sources-pane-close-mechanism-not-observed', sourceCount: count } };
-    }
     try {
-        const { pane, close } = await options.paneAdapter.openAndResolve(page, committed.locator);
+        const { pane } = options.paneAdapter
+            ? await options.paneAdapter.openAndResolve(page, committed.locator)
+            : { pane: await openPerplexitySourcesPane(page, committed.locator) };
         const citations = await readPerplexityCitationCandidates(pane, options.baseUrl);
-        const closed = await close();
-        if (!closed) return { state: 'unknown', citations: [], evidence: { reason: 'sources-pane-close-unverified' } };
         if (citations.length === 0) return { state: 'unavailable', citations: [], evidence: { reason: 'citations-normalized-empty' } };
         return { state: 'present', citations: normalizePerplexityCitations(citations, options.baseUrl), evidence: { sourceCount: citations.length } };
     } catch (error) {
         return { state: 'unknown', citations: [], evidence: { reason: 'sources-pane-error', message: String(/** @type {any} */ (error)?.message || error) } };
     }
+}
+
+/**
+ * Resolve the visible Perplexity sources accordion. It is safe to open a
+ * collapsed pane, but the extraction contract intentionally leaves it open.
+ * @param {Page} page
+ * @param {Locator} committedRoot
+ */
+export async function openPerplexitySourcesPane(page, committedRoot) {
+    let toggles = page.locator('button[aria-expanded]').filter({ hasText: SOURCE_TOGGLE_RE });
+    let visible = await visibleIndices(toggles);
+
+    if (visible.length === 0) {
+        const footerSources = committedRoot.locator('button').filter({ hasText: SOURCE_COUNT_RE });
+        const footerVisible = await visibleIndices(footerSources);
+        if (footerVisible.length === 1) {
+            await footerSources.nth(footerVisible[0]).click({ timeout: 5_000 });
+            toggles = page.locator('button[aria-expanded]').filter({ hasText: SOURCE_TOGGLE_RE });
+            visible = await waitForVisibleSourceToggles(toggles, 5_000);
+        }
+    }
+
+    if (visible.length !== 1) {
+        throw providerError('perplexity', {
+            errorCode: 'provider.response-resolution',
+            stage: 'sources-open',
+            retryHint: 're-snapshot',
+            message: 'Perplexity sources toggle is not unique',
+            mutationAllowed: false,
+            evidence: { visibleCount: visible.length },
+        });
+    }
+
+    const toggle = toggles.nth(visible[0]);
+    const expandedBefore = await toggle.getAttribute('aria-expanded');
+    if (expandedBefore !== 'true') {
+        await toggle.click({ timeout: 5_000 });
+    }
+
+    const pane = toggle.locator('xpath=..');
+    const links = pane.locator('a[href], [data-source-url]');
+    const linkCount = await waitForSourceLinks(links, 5_000);
+    if (linkCount < 1) {
+        throw providerError('perplexity', {
+            errorCode: 'provider.response-resolution',
+            stage: 'sources-open',
+            retryHint: 'poll',
+            message: 'Perplexity sources pane opened without source links',
+            mutationAllowed: true,
+            evidence: { expandedBefore, linkCount },
+        });
+    }
+    return pane;
+}
+
+/** @param {Locator} toggles @param {number} timeoutMs */
+async function waitForVisibleSourceToggles(toggles, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const visible = await visibleIndices(toggles);
+        if (visible.length !== 0) return visible;
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return visibleIndices(toggles);
+}
+
+/** @param {Locator} links @param {number} timeoutMs */
+async function waitForSourceLinks(links, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const visible = await visibleIndices(links);
+        if (visible.length > 0) return visible.length;
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return (await visibleIndices(links)).length;
 }
 
 /** @param {Page} _page */
