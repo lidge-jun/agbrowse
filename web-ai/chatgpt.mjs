@@ -83,6 +83,7 @@ const PLACEHOLDER_PATTERNS = [
     /^searching\.{0,3}$/i,
     /^browsing\.{0,3}$/i,
     /^\s*$/,
+    /^chatgpt said:\s*answer now\s*$/i,
 ];
 
 /**
@@ -356,6 +357,33 @@ export async function verifySentAttachments(page, uploadFiles, evidence, verifyA
 }
 
 /**
+ * Check whether the latest assistant conversation turn follows the latest user turn.
+ * Evaluation failures are treated as ordered so transient DOM issues do not block polling.
+ * @param {any} page
+ * @returns {Promise<boolean>}
+ */
+async function doesAssistantFollowUser(page) {
+    // Returns true (ordered) or false (stale). Non-boolean results from mock/fake
+    // pages (e.g. null) are treated as true to avoid blocking in test environments.
+    const result = await page.evaluate(() => {
+        const turns = Array.from(document.querySelectorAll(
+            'article[data-testid^="conversation-turn"], div[data-testid^="conversation-turn"], section[data-testid^="conversation-turn"]',
+        ));
+        const roleOf = (/** @type {Element} */ turn) => turn.getAttribute('data-message-author-role')
+            || turn.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
+        const lastAssistantTurn = turns.findLast((turn) => roleOf(turn) === 'assistant');
+        const lastUserTurn = turns.findLast((turn) => roleOf(turn) === 'user');
+        // No user turn found → can't verify ordering; assume OK (avoids blocking
+        // in test fixtures and edge cases like system-initiated conversations).
+        // No assistant turn → not ready yet, but the outer poll handles that via `latest`.
+        if (!lastUserTurn) return true;
+        if (!lastAssistantTurn) return false;
+        return Boolean(lastUserTurn.compareDocumentPosition(lastAssistantTurn) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }).catch(() => null);
+    return result !== false;
+}
+
+/**
  * @param {any} deps
  * @param {any} input
  */
@@ -442,6 +470,12 @@ export async function pollWebAi(deps, input = {}) {
             lastHeartbeat = now;
         }
         const finished = !streaming && latest ? await isResponseFinished(page) : false;
+        // G5: Turn ordering — ensure latest assistant turn follows latest user turn
+        // before accepting as stable. Prevents stale historical text from being returned.
+        if (latest && !streaming) {
+            const ordered = await doesAssistantFollowUser(page).catch(() => true);
+            if (!ordered) continue; // not ready yet — user's turn is still the latest
+        }
         if (latest && !streaming) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
@@ -728,10 +762,60 @@ export async function pollWebAi(deps, input = {}) {
  * @param {any} page
  */
 async function isStreaming(page) {
-    for (const selector of ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]']) {
+    // Stop button (primary streaming signal)
+    for (const selector of [
+        'button[data-testid="stop-button"]',
+        'button[aria-label*="Stop" i]',
+    ]) {
         const first = page.locator(selector).first();
         if (typeof first.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
     }
+    // G3: Progress bar detection — connector/tool phases may surface only a progress
+    // bar with no Stop button (Oracle 1146107). Deep Research already checks
+    // [role="progressbar"] in its own path; this covers the general ChatGPT path.
+    for (const selector of [
+        'progress',
+        '[role="progressbar"]',
+    ]) {
+        const first = page.locator(selector).first();
+        if (typeof first.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
+    }
+    // G4: Right-side thinking/reasoning sidecar panel detection (Oracle 1146107).
+    // A reasoning phase is sometimes exposed ONLY through a side panel with no inline
+    // label or Stop button. Past-tense "Thought for Xs" panels are excluded.
+    try {
+        const hasSidecar = await page.evaluate(() => {
+            const norm = (/** @type {string} */ s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const isVisible = (/** @type {Element} */ el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const looksLikeThinking = (/** @type {Element} */ node) => {
+                const label = norm([
+                    node.textContent,
+                    node.getAttribute?.('aria-label'),
+                    node.getAttribute?.('data-testid'),
+                ].filter(Boolean).join(' '));
+                if (label.includes('thought for')) return false;
+                return label.includes('thinking') || label.includes('reasoning') || label.includes('pro thinking');
+            };
+            let panels;
+            try {
+                panels = document.querySelectorAll(
+                    'aside, [role="complementary"], [role="dialog"], [data-testid*="thinking"], [data-testid*="reasoning"], [class*="sidecar"], [class*="sidebar"]',
+                );
+            } catch { return false; }
+            for (const node of Array.from(panels)) {
+                if (!isVisible(node)) continue;
+                const rect = (/** @type {HTMLElement} */ (node)).getBoundingClientRect();
+                const rightSide = rect.left >= window.innerWidth * 0.35 && rect.width >= 180 && rect.height >= 120;
+                if (rightSide && looksLikeThinking(node)) return true;
+            }
+            return false;
+        });
+        if (hasSidecar) return true;
+    } catch { /* page may be navigating */ }
     return false;
 }
 

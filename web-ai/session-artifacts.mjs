@@ -1,4 +1,5 @@
 // @ts-check
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -15,12 +16,19 @@ const BROWSER_AGENT_HOME = process.env.BROWSER_AGENT_HOME || join(homedir(), '.b
  * @property {number} [sizeBytes]
  * @property {string} [sourceUrl]
  * @property {string} [screenshotPath]
+ * @property {string} sha256
+ * @property {{ type: string, ok: boolean }} [validation]
  * @property {string} savedAt
  */
 
 /**
  * @typedef {{ ok: true, descriptor: ArtifactDescriptor } | { ok: false, stage: string, error: string }} ArtifactSaveResult
  */
+
+/** @param {string|Buffer} data */
+function computeSha256(data) {
+    return createHash('sha256').update(data).digest('hex');
+}
 
 /**
  * Sanitize a path segment to prevent directory traversal.
@@ -70,6 +78,8 @@ export function saveTranscript(sessionId, markdown) {
         path: filename,
         mimeType: 'text/markdown',
         sizeBytes: Buffer.byteLength(markdown, 'utf8'),
+        sha256: computeSha256(markdown),
+        validation: { type: 'text', ok: markdown.trim().length > 0 },
         savedAt: new Date().toISOString(),
     };
 }
@@ -114,6 +124,8 @@ export function saveReport(sessionId, { text, sources }) {
         path: filename,
         mimeType: 'text/markdown',
         sizeBytes: Buffer.byteLength(content, 'utf8'),
+        sha256: computeSha256(content),
+        validation: { type: 'text', ok: content.trim().length > 0 },
         savedAt: new Date().toISOString(),
     };
 }
@@ -156,6 +168,8 @@ export function saveImageArtifact(sessionId, { filename, buffer, mimeType, sourc
         mimeType,
         sizeBytes: buffer.length,
         sourceUrl: sourceUrl || undefined,
+        sha256: computeSha256(buffer),
+        validation: { type: 'image', ok: buffer.length > 0 },
         savedAt: new Date().toISOString(),
     };
 }
@@ -215,6 +229,8 @@ export function saveFileArtifact(sessionId, { filename, buffer, mimeType, source
         mimeType,
         sizeBytes: buffer.length,
         sourceUrl: sourceUrl || undefined,
+        sha256: computeSha256(buffer),
+        validation: { type: buffer.length > 0 ? 'generic' : 'empty', ok: buffer.length > 0 },
         savedAt: new Date().toISOString(),
     };
 }
@@ -251,13 +267,16 @@ export function saveDiagnosticsArtifact(sessionId, { context, domJson, screensho
     ensureDir(dir);
     const stem = `diagnostics-${sanitizeSegment(context || 'failure')}`;
     const jsonPath = `${stem}.json`;
-    writeFileSync(join(dir, jsonPath), JSON.stringify(domJson ?? {}, null, 2));
+    const content = JSON.stringify(domJson ?? {}, null, 2);
+    writeFileSync(join(dir, jsonPath), content);
     /** @type {ArtifactDescriptor} */
     const descriptor = {
         kind: 'diagnostics',
         label: context || 'failure',
         path: jsonPath,
         mimeType: 'application/json',
+        sha256: computeSha256(content),
+        validation: { type: 'text', ok: content.trim().length > 0 },
         savedAt: new Date().toISOString(),
     };
     if (screenshotBuffer) {

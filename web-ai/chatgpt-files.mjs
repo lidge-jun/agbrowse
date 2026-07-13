@@ -2,6 +2,24 @@
 import { trySaveFileArtifact, appendArtifactRecord } from './session-artifacts.mjs';
 
 /**
+ * Redact sensitive parts of a URL for safe diagnostic output.
+ * Strips query strings, fragments, credentials, and opaque file IDs.
+ * @param {string|URL} url
+ * @returns {string}
+ */
+function safeDiagnosticUrl(url) {
+    try {
+        const u = typeof url === 'string' ? new URL(url) : url;
+        // Strip opaque file IDs from ChatGPT file endpoint paths (e.g. /files/file_abc123/...)
+        const safePath = u.pathname.replace(/\/(file[_-])[a-zA-Z0-9]+/g, '/$1[id]');
+        return `${u.protocol}//${u.host}${safePath}`;
+    } catch {
+        // sandbox:/mnt/data/... or malformed — strip after any ? or #
+        return String(url || '').split(/[?#]/)[0].replace(/\/(file[_-])[a-zA-Z0-9]+/g, '/$1[id]') || '[invalid-url]';
+    }
+}
+
+/**
  * Generic ChatGPT downloadable-file artifact capture.
  *
  * Separate from code-mode ZIP retrieval (`code-artifact.mjs`, which is
@@ -225,9 +243,9 @@ export function dedupeDownloadCandidates(candidates) {
  */
 export function sanitizeDownloadFilename(name) {
     if (typeof name !== 'string') return '';
-    const base = (name.split(/[\\/]/).pop() || '').replace(/\0/g, '');
+    const base = (name.split(/[\\/]/).pop() || '').replace(/\0/g, '').replace(/\.crdownload$/i, '');
     const cleaned = base.replace(/[<>:"|?*]/g, '_').replace(/^\.+/, '').trim();
-    return cleaned === '' || cleaned === '.' ? '' : cleaned;
+    return cleaned === '' || cleaned === '.' || cleaned === '..' ? '' : cleaned;
 }
 
 /**
@@ -341,7 +359,7 @@ async function getChatGptCookieHeader(cdpSession) {
  * @param {string} url
  * @param {string} cookieHeader
  * @param {number} timeoutMs
- * @returns {Promise<{ buffer: Buffer, mimeType: string, contentDisposition: string|null } | { timedOut: true } | { failed: true }>}
+ * @returns {Promise<{ buffer: Buffer, mimeType: string, contentDisposition: string|null } | { timedOut: true } | { failed: true, status?: number, reason: 'http-error'|'timeout'|'fetch-error' }>}
  */
 async function fetchDownload(url, cookieHeader, timeoutMs) {
     const controller = new AbortController();
@@ -352,14 +370,14 @@ async function fetchDownload(url, cookieHeader, timeoutMs) {
             redirect: 'follow',
             signal: controller.signal,
         });
-        if (!resp.ok) return { failed: true };
+        if (!resp.ok) return { failed: true, status: resp.status, reason: 'http-error' };
         const contentDisposition = resp.headers.get('content-disposition');
         const mimeType = (resp.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
         const buffer = Buffer.from(await resp.arrayBuffer());
         return { buffer, mimeType, contentDisposition };
     } catch (err) {
         if (/** @type {any} */ (err)?.name === 'AbortError') return { timedOut: true };
-        return { failed: true };
+        return { failed: true, reason: /** @type {any} */ (err)?.name === 'AbortError' ? 'timeout' : 'fetch-error' };
     } finally {
         clearTimeout(timer);
     }
@@ -393,17 +411,17 @@ export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
     for (let i = 0; i < candidates.length; i += 1) {
         const c = candidates[i];
         if (attributionStopped) {
-            warnings.push(`file-artifact-skipped-after-timeout:${c.sourceUrl}`);
+            warnings.push(`file-artifact-skipped-after-timeout:${safeDiagnosticUrl(c.sourceUrl)}`);
             continue;
         }
         const got = await fetchDownload(c.sourceUrl, cookieHeader, perDownloadTimeoutMs);
         if ('timedOut' in got) {
             attributionStopped = true;
-            warnings.push(`file-artifact-timeout:${c.sourceUrl}`);
+            warnings.push(`file-artifact-timeout:${safeDiagnosticUrl(c.sourceUrl)}`);
             continue;
         }
         if ('failed' in got) {
-            warnings.push(`file-artifact-fetch-failed:${c.sourceUrl}`);
+            warnings.push(`file-artifact-fetch-failed:${safeDiagnosticUrl(c.sourceUrl)}`);
             continue;
         }
         const filename = resolveDownloadFilename({

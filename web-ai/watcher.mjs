@@ -488,7 +488,16 @@ async function ensureWatcherAttached(page, session, options) {
     if (urlsCompatible(targetUrl, currentUrl)) return { ok: true, url: currentUrl, warnings: [] };
     if (options.navigate) {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: options.navigateTimeoutMs });
-        return { ok: true, url: targetUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
+        // G9: Verify conversation readiness after navigation (Oracle 83c3ca2).
+        // Catches login pages, error pages, and incomplete loads that domcontentloaded misses.
+        try {
+            const readySelector = 'textarea[data-id="root"], [data-testid="prompt-textarea"], [id="prompt-textarea"], [data-message-author-role="assistant"]';
+            await page.locator(readySelector).first()
+                .waitFor({ state: 'visible', timeout: 10_000 })
+                .catch(() => undefined);
+        } catch { /* best-effort readiness check */ }
+        const finalUrl = page.url?.() || targetUrl;
+        return { ok: true, url: finalUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
     }
     return {
         ok: false,

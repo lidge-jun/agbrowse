@@ -94,35 +94,41 @@ export async function recoverSessionTab(deps, session) {
 
     // 2. Create new tab
     const newTab = await createTab(port, targetUrl);
-    let recoveredConversationUrl = session.conversationUrl || targetUrl;
-    if (targetUrl !== 'about:blank') {
-        const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
-        if (newPage) {
-            await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
-            const finalUrl = /** @type {any} */ (newPage).url();
-            await waitForConversationReady(newPage, finalUrl);
-            if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
-                recoveredConversationUrl = finalUrl;
+    try {
+        let recoveredConversationUrl = session.conversationUrl || targetUrl;
+        if (targetUrl !== 'about:blank') {
+            const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
+            if (newPage) {
+                await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
+                const finalUrl = /** @type {any} */ (newPage).url();
+                await waitForConversationReady(newPage, finalUrl);
+                if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
+                    recoveredConversationUrl = finalUrl;
+                }
             }
         }
+
+        // 3. Update session binding
+        await updateSession(session.sessionId, {
+            targetId: newTab.targetId,
+            conversationUrl: recoveredConversationUrl,
+            tabState: {
+                ...session.tabState,
+                recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
+                lastActiveAt: new Date().toISOString(),
+            }
+        });
+
+        return {
+            recovered: true,
+            strategy: 'new-tab',
+            targetId: newTab.targetId
+        };
+    } catch (err) {
+        // G8: Clean up the newly created target on failure (Oracle 83c3ca2)
+        await closeTab(port, newTab.targetId).catch(() => undefined);
+        throw err;
     }
-
-    // 3. Update session binding
-    await updateSession(session.sessionId, {
-        targetId: newTab.targetId,
-        conversationUrl: recoveredConversationUrl,
-        tabState: {
-            ...session.tabState,
-            recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
-            lastActiveAt: new Date().toISOString(),
-        }
-    });
-
-    return {
-        recovered: true,
-        strategy: 'new-tab',
-        targetId: newTab.targetId
-    };
 }
 
 /**
@@ -359,7 +365,10 @@ export async function openConversationInNewTab(deps, { conversationUrl } = {}) {
         const newTab = await createTab(port, safeUrl);
         targetId = newTab.targetId;
         const newPage = await waitForPageByTargetId(port, targetId).catch(() => null);
-        if (!newPage) return { opened: false, reason: 'page-unavailable', targetId };
+        if (!newPage) {
+            await closeTab(port, targetId).catch(() => undefined); // G8: close orphaned target
+            return { opened: false, reason: 'page-unavailable', targetId };
+        }
         await waitForConversationReady(newPage, newPage.url()).catch(() => undefined);
         if (!urlsCompatible(safeUrl, newPage.url())) {
             await closeTab(port, targetId).catch(() => undefined);
