@@ -1090,6 +1090,19 @@ Upload transport writes one `web-ai-context-package-<id>.zip` archive. The
 archive contains `CONTEXT_PACKAGE.md` plus the selected source files; do not
 create a temporary `.txt` or `.md` file yourself for source context.
 
+Context files use `--context-transform raw` by default. Omitting the option and
+passing `raw` are equivalent: selected file content is rendered and archived
+without transformation, and Repomix is not required or loaded. Use
+`--context-transform repomix` only when lossy structural compression is
+acceptable. It compresses the already-selected files before rendering and
+budget calculation, so function bodies and implementation details may be
+omitted from both inline context and uploaded source entries.
+
+Repomix must be installed in the target project and compatible with the active
+Node.js runtime. agbrowse resolves the package from the command's working
+directory; it does not bundle, install, or download Repomix and does not read a
+project `repomix.config.*` file.
+
 > Use ChatGPT or Gemini for context packaging. Grok context packages **fail
 > closed** by default — `web-ai send/query --vendor grok` with
 > `--context-from-files` / `--context-file` / `--context-transport upload`
@@ -1106,6 +1119,9 @@ agbrowse web-ai context-dry-run \
   --context-from-files "web-ai/*.mjs" \
   --json
 ```
+
+Add `--context-transform repomix` to a dry run or live context command only
+after installing a compatible Repomix version in that target project.
 
 Live upload:
 
