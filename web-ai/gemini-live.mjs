@@ -78,6 +78,16 @@ const GEMINI_UPLOAD_ITEM_SELECTOR = [
     'button:has-text("파일 업로드")',
     '[data-test-id="local-images-files-uploader-button"]',
 ].join(', ');
+const GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR = [
+    'input-area-v2 button[aria-label^="Remove file" i]',
+    'input-area-v2 button[aria-label^="close " i]',
+    'input-area-v2 .gem-attachment-close-button button',
+].join(', ');
+const GEMINI_COMPOSER_UPLOAD_PROGRESS_SELECTOR = [
+    'input-area-v2 [role="progressbar"]:visible',
+    'input-area-v2 [aria-label*="uploading" i]:visible',
+    'input-area-v2 [aria-label*="processing" i]:visible',
+].join(', ');
 
 export const geminiCapabilities = [
     defineCapability('gemini-active-tab-verification', async (/** @type {any} */ deps) => probeHostMatches(await deps.getPage(), GEMINI_HOSTS)),
@@ -128,6 +138,29 @@ export async function geminiStatusWebAi(deps, input = {}) {
  * @param {any} input
  */
 export async function geminiSendWebAi(deps, input = {}) {
+    const repomixMode = String(input.contextTransform || '').trim().toLowerCase() === 'repomix'
+        || input.preparedContextPack?.contextTransform === 'repomix';
+    let envelope = repomixMode ? normalizeEnvelope({ ...input, vendor: 'gemini' }) : null;
+    let contextPack = repomixMode
+        ? input.preparedContextPack || await prepareContextForBrowser({ ...input, vendor: 'gemini' })
+        : null;
+    let contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    /** @type {any[]} */
+    let contextUploadAttachments = repomixMode ? contextAttachments : [];
+    let strictRepomixUpload = repomixMode && contextUploadAttachments.length > 0;
+    /** @type {string[]} */
+    let uploadPaths = [];
+    /** @type {any[]} */
+    let uploadFiles = [];
+    if (repomixMode) {
+        assertGeminiContextFileCombination(contextAttachments, input);
+        uploadPaths = input.filePath
+            ? [input.filePath]
+            : contextUploadAttachments.map((/** @type {any} */ attachment) => attachment.path);
+        uploadFiles = preflightGeminiUploadFiles(uploadPaths, input);
+        assertGeminiUploadPresent(envelope, uploadPaths);
+    }
+
     const page = await deps.getPage();
     if (input.url) {
         await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -140,25 +173,19 @@ export async function geminiSendWebAi(deps, input = {}) {
         message: `active tab is not gemini.google.com (${page.url()})`,
         evidence: { url: page.url() },
     });
-    const envelope = normalizeEnvelope({ ...input, vendor: 'gemini' });
-    const contextPack = await prepareContextForBrowser({ ...input, vendor: 'gemini' });
-    if (contextPack?.attachments?.[0] && input.filePath) {
-        throw new WebAiError({
-            errorCode: 'provider.attachment-preflight',
-            stage: 'attachment-preflight',
-            vendor: 'gemini',
-            retryHint: 'inline-only-or-file',
-            message: 'context package upload and --file upload cannot be combined yet',
-        });
-    }
-    if (envelope.attachmentPolicy !== 'inline-only' && !input.filePath && !contextPack?.attachments?.[0]) {
-        throw new WebAiError({
-            errorCode: 'provider.attachment-preflight',
-            stage: 'attachment-preflight',
-            vendor: 'gemini',
-            retryHint: 'inline-only-or-file',
-            message: 'gemini upload requested without a file or context package attachment',
-        });
+
+    if (!repomixMode) {
+        // Preserve raw context preparation and file validation ordering.
+        envelope = normalizeEnvelope({ ...input, vendor: 'gemini' });
+        contextPack = await prepareContextForBrowser({ ...input, vendor: 'gemini' });
+        contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+        assertGeminiContextFileCombination(contextAttachments, input);
+        contextUploadAttachments = contextAttachments.slice(0, 1);
+        uploadPaths = input.filePath
+            ? [input.filePath]
+            : contextUploadAttachments.map((/** @type {any} */ attachment) => attachment.path);
+        assertGeminiUploadPresent(envelope, uploadPaths);
+        strictRepomixUpload = false;
     }
     const rendered = contextPack
         ? contextPack.transport === 'inline'
@@ -200,7 +227,7 @@ export async function geminiSendWebAi(deps, input = {}) {
 
     const turnsBefore = await countResponses(page);
     await dismissBlockingOverlays(page, warnings);
-    await clearGeminiComposerAttachments(page, warnings);
+    await clearGeminiComposerAttachments(page, warnings, { repomixMode });
     await page.locator(inputSel).first().click({ timeout: 5_000 });
     await page.evaluate((/** @type {{selector:string,text:string}} */ {selector, text}) => {
         const el = document.querySelector(selector);
@@ -213,11 +240,12 @@ export async function geminiSendWebAi(deps, input = {}) {
             target.dispatchEvent(new InputEvent('input', { data: text, bubbles: true }));
         }
     }, { selector: inputSel, text: rendered.composerText });
-    const uploadPath = input.filePath || contextPack?.attachments?.[0]?.path;
-    if (uploadPath) {
-        const uploaded = await attachGeminiLocalFileLive(page, fileInfoFromPath(uploadPath), {
+    if (!repomixMode) uploadFiles = uploadPaths.map(fileInfoFromPath);
+    for (const uploadFile of uploadFiles) {
+        const uploaded = await attachGeminiLocalFileLive(page, uploadFile, {
             maxUploadBytes: input.maxUploadFileSize,
             attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
+            requireChipCountIncrease: strictRepomixUpload,
         });
         if (!uploaded.ok) throw new WebAiError({
             errorCode: 'provider.attachment-evidence-missing',
@@ -229,6 +257,21 @@ export async function geminiSendWebAi(deps, input = {}) {
         });
         usedFallbacks.push(...uploaded.usedFallbacks);
         warnings.push(...(/** @type {any[]} */ (uploaded.warnings)));
+    }
+    if (strictRepomixUpload) {
+        const attachmentCount = await waitForGeminiRepomixAttachmentCount(page, uploadFiles.length);
+        if (attachmentCount.ok !== true) throw new WebAiError({
+            errorCode: 'provider.attachment-evidence-missing',
+            stage: 'attachment-verify',
+            vendor: 'gemini',
+            retryHint: 're-upload',
+            message: attachmentCount.error,
+            mutationAllowed: true,
+            evidence: {
+                expectedCount: attachmentCount.expectedCount,
+                observedCount: attachmentCount.observedCount,
+            },
+        });
     }
 
     const sendSel = await findFirstSelector(page, SEND_SELECTORS, 5_000);
@@ -242,16 +285,32 @@ export async function geminiSendWebAi(deps, input = {}) {
         mutationAllowed: true,
     });
     await page.locator(sendSel).first().click({ timeout: 5_000 });
-    if (uploadPath) {
-        const sentAttachment = await verifyGeminiSentTurnAttachment(page, fileInfoFromPath(uploadPath));
-        if (!sentAttachment.ok) throw new WebAiError({
-            errorCode: 'provider.attachment-evidence-missing',
-            stage: 'attachment-verify',
-            vendor: 'gemini',
-            retryHint: 're-upload',
-            message: sentAttachment.error,
-            mutationAllowed: true,
-        });
+    // Repomix already passed an exact composer-scoped count before submit;
+    // post-submit preview counts can include attachments from older turns.
+    if (!repomixMode) {
+        for (const uploadPath of uploadPaths) {
+            const sentAttachment = await verifyGeminiSentTurnAttachment(page, fileInfoFromPath(uploadPath));
+            if (!sentAttachment.ok) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: sentAttachment.error,
+                mutationAllowed: true,
+            });
+        }
+    } else if (!strictRepomixUpload) {
+        for (const uploadFile of uploadFiles) {
+            const sentAttachment = await verifyGeminiSentTurnAttachment(page, uploadFile);
+            if (!sentAttachment.ok) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: sentAttachment.error,
+                mutationAllowed: true,
+            });
+        }
     }
 
     const baseline = saveBaseline({
@@ -290,9 +349,72 @@ export async function geminiSendWebAi(deps, input = {}) {
         contextPack: contextPack ? summarizeContextPack(contextPack) : undefined,
         warnings: [
             ...warnings,
-            ...(contextPack?.attachments?.[0] ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
+            ...(repomixMode
+                ? contextUploadAttachments.map((/** @type {any} */ attachment) => `context package attached: ${attachment.displayPath || attachment.path}`)
+                : (contextPack?.attachments?.[0] ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : [])),
         ],
     };
+}
+
+/** @param {any[]} contextAttachments @param {any} input */
+function assertGeminiContextFileCombination(contextAttachments, input) {
+    if (!contextAttachments.length || !input.filePath) return;
+    throw new WebAiError({
+        errorCode: 'provider.attachment-preflight',
+        stage: 'attachment-preflight',
+        vendor: 'gemini',
+        retryHint: 'inline-only-or-file',
+        message: 'context package upload and --file upload cannot be combined yet',
+    });
+}
+
+/** @param {any} envelope @param {string[]} uploadPaths */
+function assertGeminiUploadPresent(envelope, uploadPaths) {
+    if (envelope.attachmentPolicy === 'inline-only' || uploadPaths.length > 0) return;
+    throw new WebAiError({
+        errorCode: 'provider.attachment-preflight',
+        stage: 'attachment-preflight',
+        vendor: 'gemini',
+        retryHint: 'inline-only-or-file',
+        message: 'gemini upload requested without a file or context package attachment',
+    });
+}
+
+/**
+ * @param {string[]} uploadPaths
+ * @param {any} input
+ */
+function preflightGeminiUploadFiles(uploadPaths, input) {
+    return uploadPaths.map((uploadPath) => {
+        let file;
+        try {
+            file = fileInfoFromPath(uploadPath);
+        } catch (cause) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: `attachment preflight failed for ${uploadPath}: ${String((/** @type {any} */ (cause))?.message || cause)}`,
+                mutationAllowed: false,
+                cause,
+            });
+        }
+        const preflight = preflightAttachment(file, {
+            maxUploadBytes: input.maxUploadFileSize,
+        });
+        if (preflight.ok !== true) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: `${file.basename}: ${preflight.rejectedReason || 'preflight rejected'}`,
+                mutationAllowed: false,
+            });
+        }
+        return file;
+    });
 }
 
 /**
@@ -307,7 +429,7 @@ function fileInfoFromPath(filePath) {
 /**
  * @param {any} page
  * @param {any} file
- * @param {{ maxUploadBytes?: number|string|null, attachmentUploadTimeoutMs?: number|string|null }} [options]
+ * @param {{ maxUploadBytes?: number|string|null, attachmentUploadTimeoutMs?: number|string|null, requireChipCountIncrease?: boolean }} [options]
  */
 async function attachGeminiLocalFileLive(page, file, options = {}) {
     /** @type {any[]} */
@@ -316,13 +438,16 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
     const preflight = preflightAttachment(file, {
         maxUploadBytes: options.maxUploadBytes,
     });
-    if (!preflight.ok) {
+    if (options.requireChipCountIncrease === true ? preflight.ok !== true : !preflight.ok) {
         return { ok: false, error: preflight.rejectedReason || 'preflight rejected', usedFallbacks };
     }
     warnings.push(...preflight.softWarnings);
     const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
     const uploadButton = await findFirstSelector(page, GEMINI_UPLOAD_SELECTORS, 5_000);
     if (!uploadButton) return { ok: false, error: 'gemini upload file menu button not visible', usedFallbacks };
+    const chipCountBefore = options.requireChipCountIncrease === true
+        ? await countGeminiComposerAttachmentChips(page)
+        : 0;
     try {
         await page.keyboard.press('Escape').catch(() => undefined);
         await page.locator(uploadButton).first().click({ timeout: 5_000, force: true });
@@ -336,7 +461,9 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
         usedFallbacks.push(`gemini-filechooser-failed:${(/** @type {any} */ (e)).message}`);
         return { ok: false, error: `gemini file chooser upload failed: ${(/** @type {any} */ (e)).message}`, usedFallbacks };
     }
-    const accepted = await waitForGeminiAttachmentAccepted(page, file);
+    const accepted = await waitForGeminiAttachmentAccepted(page, file, chipCountBefore, {
+        requireChipCountIncrease: options.requireChipCountIncrease === true,
+    });
     if (!accepted.ok) return { ok: false, error: accepted.error, usedFallbacks };
     return { ok: true, usedFallbacks, warnings };
 }
@@ -344,12 +471,25 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
 /**
  * @param {any} page
  * @param {any} expectedFile
+ * @param {number} chipCountBefore
+ * @param {{requireChipCountIncrease?:boolean}} [options]
  */
-async function waitForGeminiAttachmentAccepted(page, expectedFile) {
+async function waitForGeminiAttachmentAccepted(page, expectedFile, chipCountBefore, options = {}) {
     const deadline = Date.now() + 45_000;
+    if (options.requireChipCountIncrease !== true) {
+        while (Date.now() < deadline) {
+            if (await hasGeminiAttachmentEvidence(page, expectedFile)) return { ok: true };
+            const busy = await page.locator('[role="progressbar"], [aria-label*="uploading" i], [aria-label*="processing" i]').count().catch(() => 0);
+            await page.waitForTimeout(busy === 0 ? 500 : 1_000).catch(() => undefined);
+        }
+        return { ok: false, error: 'gemini attachment never showed visible chip' };
+    }
     while (Date.now() < deadline) {
-        if (await hasGeminiAttachmentEvidence(page, expectedFile)) return { ok: true };
-        const busy = await page.locator('[role="progressbar"], [aria-label*="uploading" i], [aria-label*="processing" i]').count().catch(() => 0);
+        const [chipCount, busy] = await Promise.all([
+            countGeminiComposerAttachmentChips(page),
+            countGeminiComposerUploadProgress(page),
+        ]);
+        if (isGeminiRepomixAttachmentIncrementReady({ busy, chipCount }, chipCountBefore)) return { ok: true };
         await page.waitForTimeout(busy === 0 ? 500 : 1_000).catch(() => undefined);
     }
     return { ok: false, error: 'gemini attachment never showed visible chip' };
@@ -358,9 +498,13 @@ async function waitForGeminiAttachmentAccepted(page, expectedFile) {
 /**
  * @param {any} page
  * @param {any} warnings
+ * @param {{repomixMode?:boolean}} [options]
  */
-async function clearGeminiComposerAttachments(page, warnings) {
-    const removeButtons = await page.locator('button[aria-label^="Remove file"]').all().catch(() => []);
+async function clearGeminiComposerAttachments(page, warnings, options = {}) {
+    const selector = options.repomixMode === true
+        ? GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR
+        : 'button[aria-label^="Remove file"]';
+    const removeButtons = await page.locator(selector).all().catch(() => []);
     for (const button of removeButtons) {
         try {
             await button.click({ timeout: 2_000 });
@@ -399,6 +543,57 @@ async function hasGeminiAttachmentEvidence(page, expectedFile) {
         'button[aria-label^="Remove file"]',
     ].join(',')).count().catch(() => 0);
     return chipCount > 0;
+}
+
+/** @param {any} page */
+async function countGeminiComposerAttachmentChips(page) {
+    return page.locator(GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR).count().catch(() => 0);
+}
+
+/** @param {any} page */
+async function countGeminiComposerUploadProgress(page) {
+    return page.locator(GEMINI_COMPOSER_UPLOAD_PROGRESS_SELECTOR).count().catch(() => 0);
+}
+
+/**
+ * A Repomix part is accepted only when that upload adds a new visible chip.
+ * Filename text is deliberately ignored because the prompt itself may contain
+ * the configured artifact name.
+ * @param {{busy:number,chipCount:number}} evidence
+ * @param {number} chipCountBefore
+ */
+export function isGeminiRepomixAttachmentIncrementReady(evidence, chipCountBefore) {
+    return evidence.busy === 0 && evidence.chipCount > chipCountBefore;
+}
+
+/**
+ * Final pre-submit gate for Repomix uploads. Exact count rejects both missing
+ * parts and stale/unexpected composer attachments.
+ * @param {any} page
+ * @param {number} expectedCount
+ * @param {{timeoutMs?:number}} [options]
+ */
+export async function waitForGeminiRepomixAttachmentCount(page, expectedCount, options = {}) {
+    const deadline = Date.now() + Math.max(0, Number(options.timeoutMs ?? 8_000));
+    let observedCount = 0;
+    let busy = 0;
+    do {
+        [observedCount, busy] = await Promise.all([
+            countGeminiComposerAttachmentChips(page),
+            countGeminiComposerUploadProgress(page),
+        ]);
+        if (busy === 0 && observedCount === expectedCount) {
+            return { ok: true, expectedCount, observedCount };
+        }
+        if (Date.now() >= deadline) break;
+        await page.waitForTimeout(busy === 0 ? 250 : 500).catch(() => undefined);
+    } while (Date.now() <= deadline);
+    return {
+        ok: false,
+        expectedCount,
+        observedCount,
+        error: `Gemini accepted ${observedCount}/${expectedCount} expected attachments before submit`,
+    };
 }
 
 /**
@@ -791,13 +986,24 @@ async function hasCompletionSignal(page) {
  * @param {any} contextPack
  */
 function summarizeContextPack(contextPack) {
-    return {
-        files: contextPack.files.map((/** @type {any} */ file) => ({
+    const summary = {
+        files: (contextPack.files || []).map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
         })),
         excluded: contextPack.excluded,
         budget: contextPack.budget,
+    };
+    if (contextPack.contextTransform !== 'repomix') return summary;
+    return {
+        ...summary,
+        transport: contextPack.transport,
+        contextTransform: 'repomix',
+        attachments: (contextPack.attachments || []).map((/** @type {any} */ attachment) => ({
+            displayPath: attachment.displayPath,
+            sizeBytes: attachment.sizeBytes,
+        })),
+        ...(contextPack.repomix ? { repomix: contextPack.repomix } : {}),
     };
 }

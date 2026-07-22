@@ -29,10 +29,11 @@
  *     inlineCharLimit: number,
  *   },
  *   transport?: string,
- *   contextTransform: 'raw'|'repomix',
+ *   contextTransform?: 'repomix',
  *   files: ContextFileRow[],
  *   excluded: ContextFileRow[],
  *   attachments?: ContextAttachment[],
+ *   repomix?: Record<string, unknown>,
  *   warnings: string[],
  *   composerText?: string,
  *   attachmentText?: string,
@@ -73,7 +74,7 @@ export function toJsonResult(result, options = {}) {
         model: result.model,
         budget: result.budget,
         transport: result.transport,
-        contextTransform: result.contextTransform,
+        ...(result.contextTransform === 'repomix' ? { contextTransform: result.contextTransform } : {}),
         files: result.files.map(file => ({
             path: file.path,
             relativePath: file.relativePath,
@@ -82,6 +83,7 @@ export function toJsonResult(result, options = {}) {
             language: file.language,
         })),
         attachments: result.attachments || [],
+        ...(result.repomix ? { repomix: result.repomix } : {}),
         excluded: result.excluded,
         warnings: result.warnings,
     };
@@ -102,6 +104,10 @@ function renderSummary(result) {
 
     if (result.contextTransform === 'repomix') {
         lines.push('[context-dry-run] transform: repomix');
+        if (result.repomix) {
+            lines.push(`[context-dry-run] repomix: ${String(result.repomix.version || 'unknown')} (${String(result.repomix.source || 'unknown')})`);
+            lines.push(`[context-dry-run] config: ${String(result.repomix.configPath || 'built-in defaults')}`);
+        }
     }
 
     if (result.attachments?.length) {

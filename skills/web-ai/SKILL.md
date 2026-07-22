@@ -100,9 +100,10 @@ Grok context packages fail closed by default. If `web-ai send/query --vendor gro
 is invoked with `--context-from-files` / `--context-file` /
 `--context-transport upload` and `--allow-grok-context-pack` is not passed,
 the runtime throws with `stage: 'grok-context-pack-not-allowed'`. Pass
-`--allow-grok-context-pack` to override deliberately; the runtime still
-emits the `grok-context-pack-not-recommended` warning when the override is
-used.
+`--allow-grok-context-pack` to override deliberately for raw context only; the
+runtime still emits the `grok-context-pack-not-recommended` warning when the
+override is used. Repomix is supported only for ChatGPT and Gemini and is
+explicitly rejected for Grok.
 
 ## Polling Timeouts
 
@@ -647,25 +648,31 @@ and clear are intentionally unsupported.
 
 ## Context Package Upload
 
-Use ChatGPT or Gemini for context packaging. Do not pick `--vendor grok`
+Use ChatGPT or Gemini for context packaging. Repomix is explicitly rejected for
+Grok even when `--allow-grok-context-pack` is present. Do not pick `--vendor grok`
 here; Grok should use inline prompts plus optional single `--file` uploads
 only.
 
-Upload transport creates one `.zip` archive named
+Raw upload transport creates one `.zip` archive named
 `web-ai-context-package-<id>.zip`. The archive contains `CONTEXT_PACKAGE.md`
 plus the selected source files. Do not create a temporary `.txt`/`.md` file
 yourself for source context; use `--context-from-files` or `--context-file`.
 
 `--context-transform raw` is the default. Omission and explicit `raw` preserve
 the selected file content and do not require or load Repomix. The opt-in
-`--context-transform repomix` mode is lossy: it applies structural compression
-after agbrowse selects files and before rendering, budgeting, and archive
-creation, so function bodies or implementation details may be omitted.
+`--context-transform repomix` mode loads the effective project, global, or
+built-in Repomix config and uploads its output artifact directly. Split output
+parts retain Repomix order and filenames. Without file selectors it packs cwd;
+with selectors, those cwd-contained files are the upper bound while Repomix
+ignore, processors, patterns, and output settings still apply. Inline transport
+reads every generated part in order under the existing context budgets.
 
-For `repomix`, require a Repomix installation in the target project that is
-compatible with the active Node.js runtime. agbrowse resolves Repomix from the
-target working directory and never bundles, installs, or downloads it. Do not
-assume a user `repomix.config.*` file is loaded.
+agbrowse resolves a project-local package first, then the package behind the
+`repomix` executable on `PATH`, and never installs or downloads it. Output is
+written to agbrowse-managed staging with the configured basename;
+`copyToClipboard` and `stdout` are disabled so the upload artifact is written.
+Other output content settings are preserved. Opt-in trusts executable JS/TS config and
+`input.processors` with local CLI privileges, so review untrusted repositories.
 
 ```bash
 agbrowse web-ai query \
