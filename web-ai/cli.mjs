@@ -311,6 +311,7 @@ Failure envelope (when --json or AGBROWSE_JSON_ERRORS=1):
          watcher.session-missing | watcher.already-running |
          snapshot.unavailable | snapshot.ref-stale |
          context.over-budget | context.symlink-rejected |
+         context.transform-invalid | context.transform-failed |
          code-mode.vendor-unsupported | code-mode.prompt-missing |
          code-mode.output-conflict | code-mode.conversation-id-missing |
          code-extract.conversation-id-missing |

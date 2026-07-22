@@ -808,7 +808,8 @@ Initial code catalog (full list and PR2 call-site coverage live in
 - `capability.unsupported`
 - `session.target-ambiguous`: rerun `poll`/`stop` with `--session <id>`; for
   target drift, retry `poll --session <id> --navigate`
-- `context.over-budget`, `context.symlink-rejected`
+- `context.over-budget`, `context.symlink-rejected`,
+  `context.transform-invalid`, `context.transform-failed`
 - `grok.context-pack-not-allowed`
 - `internal.unhandled`
 

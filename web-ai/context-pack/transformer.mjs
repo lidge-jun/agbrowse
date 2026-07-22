@@ -23,7 +23,7 @@ export const CONTEXT_TRANSFORM_MODES = /** @type {const} */ (['raw', 'repomix'])
  * @returns {'raw'|'repomix'}
  */
 export function normalizeContextTransformMode(mode) {
-    const supplied = mode == null || String(mode).trim() === '' ? 'raw' : String(mode).trim();
+    const supplied = mode == null ? 'raw' : String(mode).trim();
     const normalized = supplied.toLowerCase();
     if (normalized === 'raw' || normalized === 'repomix') return normalized;
     throw new WebAiError({

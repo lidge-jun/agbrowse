@@ -149,6 +149,22 @@ describe('normalizeContextTransformMode', () => {
             expect(evidence).toContain('repomix');
         }
     });
+
+    it('rejects explicitly supplied empty values instead of treating them as omission', async () => {
+        for (const supplied of ['', '   ']) {
+            const error = await captureTransformFailure(Promise.resolve().then(() => (
+                normalizeContextTransformMode(supplied)
+            )));
+
+            expect(error).toBeInstanceOf(WebAiError);
+            expect(error.errorCode).toBe('context.transform-invalid');
+            expect(error.stage).toBe('context-transform');
+            expect(error.evidence).toMatchObject({
+                supplied,
+                supported: ['raw', 'repomix'],
+            });
+        }
+    });
 });
 
 describe('transformContextFiles raw mode', () => {
