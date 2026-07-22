@@ -3404,6 +3404,9 @@ try {
         --url <conversation-or-provider-url>
         --inline-only | --file <path> | --context-from-files <glob>
         --context-transport <upload|inline>
+        --context-transform <raw|repomix> Default raw; repomix is lossy and
+                                           requires a compatible project-local
+                                           Repomix install.
         --allow-copy-markdown-fallback Capture provider Copy button output
         --allow-grok-context-pack      Override Grok hard-gate (prefer inline)
         --timeout <sec>                Long tier defaults: chatgpt-pro=5400 ·

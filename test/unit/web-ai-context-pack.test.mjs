@@ -184,6 +184,14 @@ describe('web-ai context pack', () => {
         const omittedSummary = renderContextDryRunReport(omitted);
         const explicitSummary = renderContextDryRunReport(explicitRaw);
         expect(omittedSummary).toBe(explicitSummary);
+        expect(omittedSummary).toBe([
+            `[context-dry-run] 1 files, ~${omitted.budget.estimatedTokens} / ${omitted.budget.maxInputTokens} tokens (${omitted.budget.status})`,
+            `[context-dry-run] inline chars: ${omitted.budget.inlineChars} / ${omitted.budget.inlineCharLimit}`,
+            '[context-dry-run] transport: inline',
+            '',
+            'Included:',
+            `  - src/example.js — ~24 tokens, ${Buffer.byteLength(source, 'utf8')} bytes`,
+        ].join('\n'));
         expect(omittedSummary).not.toContain('[context-dry-run] transform:');
         expect(toJsonResult(omitted).contextTransform).toBe('raw');
         expect(toJsonResult(explicitRaw).contextTransform).toBe('raw');

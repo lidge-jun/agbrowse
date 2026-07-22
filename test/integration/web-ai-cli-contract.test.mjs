@@ -1,8 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { execBrowser } from '../helpers/exec-browser.mjs';
+
+const execFileAsync = promisify(execFile);
+const BROWSER_SCRIPT = fileURLToPath(new URL('../../skills/browser/browser.mjs', import.meta.url));
+
+async function execBrowserFromCwd(args, cwd, env = {}) {
+    try {
+        const result = await execFileAsync(process.execPath, [BROWSER_SCRIPT, ...args], {
+            cwd,
+            env: {
+                ...process.env,
+                AGBROWSE_UPDATE_CHECK: '0',
+                ...env,
+            },
+            timeout: 45_000,
+            maxBuffer: 1024 * 1024,
+        });
+        return { code: 0, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+    } catch (error) {
+        return {
+            code: error.status ?? (typeof error.code === 'number' ? error.code : 1),
+            stdout: String(error.stdout || '').trim(),
+            stderr: String(error.stderr || '').trim(),
+        };
+    }
+}
 
 describe('web-ai CLI contract', () => {
     it('shows detailed web-ai help without requiring a prompt', async () => {
@@ -30,6 +58,8 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('--max-upload-file-size <bytes>');
         expect(result.stdout).toContain('--attachment-upload-timeout-ms <ms>');
         expect(result.stdout).toContain('--max-context-file-size <bytes>');
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('(default: raw)');
         expect(result.stdout).toContain('out.png, out-2.png, out-3.png');
         expect(result.stdout).toContain('query --session <id> sends a new prompt');
         expect(result.stdout).toContain('--session "$SID"');
@@ -45,9 +75,18 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('subcommand, not a --code flag');
         expect(result.stdout).toContain('--output-zip <path>');
         expect(result.stdout).toContain('--multi-zip');
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('Default: raw');
         expect(result.stdout).toContain('PLAN.md or 00_plan.md');
         expect(result.stdout).toContain('turn_plan.update_turn_plan');
         expect(result.stdout).toContain('MACHINE: /mnt/data/result.zip');
+    });
+
+    it('shows the context transform option in root help', async () => {
+        const result = await execBrowser(['--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('Default raw');
     });
 
     it('shows command-specific code extraction help without a browser', async () => {
@@ -305,9 +344,108 @@ describe('web-ai CLI contract', () => {
         const parsed = JSON.parse(result.stdout);
         expect(parsed.status).toBe('dry-run');
         expect(parsed.transport).toBe('upload');
+        expect(parsed.contextTransform).toBe('raw');
         expect(parsed.attachments).toHaveLength(1);
         expect(parsed.files[0].relativePath).toBe('web-ai/question.mjs');
         expect(parsed.composerText).toBeUndefined();
+    });
+
+    it('normalizes omitted context transform to byte-identical explicit raw JSON', async () => {
+        const args = [
+            'web-ai',
+            'context-dry-run',
+            '--vendor',
+            'chatgpt',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'web-ai/question.mjs',
+            '--context-transport',
+            'inline',
+            '--json',
+        ];
+        const omitted = await execBrowser(args);
+        const explicitRaw = await execBrowser([...args, '--context-transform', 'raw']);
+
+        expect(omitted.code).toBe(0);
+        expect(explicitRaw.code).toBe(0);
+        expect(explicitRaw.stdout).toBe(omitted.stdout);
+        expect(JSON.parse(omitted.stdout).contextTransform).toBe('raw');
+    });
+
+    it('rejects an invalid context transform before context processing with structured JSON', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'context-dry-run',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'does-not-exist.mjs',
+            '--context-transform',
+            'brotli',
+            '--json',
+        ]);
+
+        expect(result.code).not.toBe(0);
+        const parsed = JSON.parse(result.stderr);
+        expect(parsed.error.errorCode).toBe('context.transform-invalid');
+        expect(parsed.error.stage).toBe('context-transform');
+        const evidence = JSON.stringify(parsed.error.evidence);
+        expect(evidence).toContain('brotli');
+        expect(evidence).toContain('raw');
+        expect(evidence).toContain('repomix');
+        expect(evidence).not.toContain('does-not-exist.mjs');
+    });
+
+    it('adds a human summary transform line only for repomix', async () => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'agbrowse-context-transform-cli-'));
+        const browserHome = join(projectDir, '.browser-home');
+        try {
+            writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ name: 'fixture-project', private: true }));
+            writeFileSync(join(projectDir, 'sample.js'), 'export function sample() { return 1; }\n');
+            const repomixDir = join(projectDir, 'node_modules', 'repomix');
+            mkdirSync(repomixDir, { recursive: true });
+            writeFileSync(join(repomixDir, 'package.json'), JSON.stringify({
+                name: 'repomix',
+                version: '0.0.0-test',
+                type: 'module',
+                exports: './index.mjs',
+            }));
+            writeFileSync(join(repomixDir, 'index.mjs'), [
+                'export function mergeConfigs(cwd, base, overrides) {',
+                '  return { ...base, ...overrides, cwd };',
+                '}',
+                'export function setLogLevel() {}',
+                'export async function processFiles(files) {',
+                '  return files.map((file) => ({ ...file, content: `// compressed\\n${file.content}` }));',
+                '}',
+                '',
+            ].join('\n'));
+
+            const args = [
+                'web-ai',
+                'context-dry-run',
+                '--prompt',
+                'review context',
+                '--context-from-files',
+                'sample.js',
+                '--context-transport',
+                'inline',
+            ];
+            const raw = await execBrowserFromCwd(args, projectDir, { BROWSER_AGENT_HOME: browserHome });
+            const repomix = await execBrowserFromCwd(
+                [...args, '--context-transform', 'repomix'],
+                projectDir,
+                { BROWSER_AGENT_HOME: browserHome },
+            );
+
+            expect(raw.code).toBe(0);
+            expect(raw.stdout).not.toContain('[context-dry-run] transform:');
+            expect(repomix.code).toBe(0);
+            expect(repomix.stdout).toContain('[context-dry-run] transform: repomix');
+        } finally {
+            rmSync(projectDir, { recursive: true, force: true });
+        }
     });
 
     it('supports context render with full composer text', async () => {
