@@ -29,6 +29,7 @@
  *     inlineCharLimit: number,
  *   },
  *   transport?: string,
+ *   contextTransform: 'raw'|'repomix',
  *   files: ContextFileRow[],
  *   excluded: ContextFileRow[],
  *   attachments?: ContextAttachment[],
@@ -72,6 +73,7 @@ export function toJsonResult(result, options = {}) {
         model: result.model,
         budget: result.budget,
         transport: result.transport,
+        contextTransform: result.contextTransform,
         files: result.files.map(file => ({
             path: file.path,
             relativePath: file.relativePath,
@@ -97,6 +99,10 @@ function renderSummary(result) {
         `[context-dry-run] inline chars: ${result.budget.inlineChars} / ${result.budget.inlineCharLimit}`,
         `[context-dry-run] transport: ${result.transport || 'upload'}`,
     ];
+
+    if (result.contextTransform === 'repomix') {
+        lines.push('[context-dry-run] transform: repomix');
+    }
 
     if (result.attachments?.length) {
         lines.push('');

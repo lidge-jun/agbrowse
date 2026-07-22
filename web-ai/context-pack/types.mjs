@@ -2,6 +2,7 @@
 /**
  * @typedef {'summary'|'json'|'full'} ContextDryRunMode
  * @typedef {'inline'|'upload'|'auto'|'none'} ContextTransportMode
+ * @typedef {'raw'|'repomix'} ContextTransformMode
  *
  * @typedef {Object} ContextPackInput
  * @property {string} [vendor]
@@ -14,6 +15,7 @@
  * @property {number} [maxFileSize]
  * @property {boolean} [filesReport]
  * @property {ContextTransportMode} [contextTransport]
+ * @property {ContextTransformMode} [contextTransform]
  * @property {boolean} [inlineOnly]
  * @property {boolean} [strict]
  *
@@ -45,6 +47,7 @@
  * @property {string} [model]
  * @property {ContextBudgetReport} budget
  * @property {ContextTransportMode} transport
+ * @property {ContextTransformMode} contextTransform
  * @property {SelectedContextFile[]} files
  * @property {ExcludedContextFile[]} excluded
  * @property {string} composerText

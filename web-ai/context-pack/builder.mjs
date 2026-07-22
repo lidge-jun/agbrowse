@@ -9,6 +9,7 @@ import archiver from 'archiver';
 import { DEFAULT_INLINE_CHAR_LIMIT } from './constants.mjs';
 import { buildContextPack } from './file-selector.mjs';
 import { buildContextRenderResult } from './renderer.mjs';
+import { normalizeContextTransformMode, transformContextFiles } from './transformer.mjs';
 import { WebAiError } from '../errors.mjs';
 
 /**
@@ -24,6 +25,7 @@ import { WebAiError } from '../errors.mjs';
  *   vendor?: string,
  *   model?: string,
  *   contextTransport?: string,
+ *   contextTransform?: unknown,
  *   inlineOnly?: boolean,
  *   maxInput?: number,
  * }} BuilderInput
@@ -33,8 +35,7 @@ const PACKAGE_DIR = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.bro
 
 /** @param {BuilderInput} [input] */
 export async function buildContextPackageResult(input = {}) {
-    const selected = await buildContextPack(input);
-    const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
+    const result = await selectTransformAndRender(input);
     if (result.budget.estimatedTokens > result.budget.maxInputTokens) {
         result.ok = false;
     }
@@ -58,8 +59,7 @@ export async function buildInlineContextOrFail(input = {}) {
 /** @param {BuilderInput} [input] */
 export async function prepareContextForBrowser(input = {}) {
     if (!hasContextPackaging(input)) return null;
-    const selected = await buildContextPack({ ...input, strict: true });
-    const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
+    const result = await selectTransformAndRender({ ...input, strict: true });
     if (result.budget.estimatedTokens > result.budget.maxInputTokens) {
         throw overBudgetError(result.budget);
     }
@@ -70,7 +70,7 @@ export async function prepareContextForBrowser(input = {}) {
         }
         return result;
     }
-    if (!selected.files.length) throw new WebAiError({
+    if (!result.files.length) throw new WebAiError({
         errorCode: 'context.over-budget',
         stage: 'context-preflight',
         retryHint: 'reduce-files',
@@ -78,7 +78,7 @@ export async function prepareContextForBrowser(input = {}) {
     });
     await fs.mkdir(PACKAGE_DIR, { recursive: true });
     const filePath = join(PACKAGE_DIR, `web-ai-context-package-${randomUUID()}.zip`);
-    await zipContextFiles(selected.files, result.attachmentText, filePath);
+    await zipContextFiles(result.files, result.attachmentText, filePath);
     const stat = await fs.stat(filePath);
     result.attachments = [{
         path: filePath,
@@ -86,6 +86,22 @@ export async function prepareContextForBrowser(input = {}) {
         sizeBytes: stat.size,
     }];
     return result;
+}
+
+/** @param {BuilderInput} input */
+async function selectTransformAndRender(input) {
+    const contextTransform = normalizeContextTransformMode(input.contextTransform);
+    const selected = await buildContextPack(input);
+    const files = await transformContextFiles(selected.files, {
+        mode: contextTransform,
+        cwd: input.cwd || process.cwd(),
+    });
+    return buildContextRenderResult(
+        { ...input, contextTransform },
+        files,
+        selected.excluded,
+        selected.warnings,
+    );
 }
 
 /**
