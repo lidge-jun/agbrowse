@@ -1100,10 +1100,13 @@ global, or built-in configuration and uploads the generated output file
 directly; ChatGPT and Gemini upload every `output.splitOutput` part in Repomix
 order.
 Without `--context-from-files` or `--context-file`, Repomix packs the current
-working directory. With either selector, agbrowse limits the upper bound to the
-selected cwd-contained files while Repomix's ignore, processor, pattern, and
-other output settings still apply. Inline transport reads the generated parts
-in order and applies the existing context budgets.
+working directory. With either selector, the selected cwd-contained source
+files are the upper bound passed to Repomix; this selector-safe path requires
+Repomix 1.0.0 or newer. Repomix's ignore, processor, pattern, and other output
+settings still apply. Configured instruction text, Git diff/log sections, and
+processor output may therefore add non-source content to the artifact. Inline
+transport reads the generated parts in order and applies the existing context
+budgets.
 
 agbrowse first resolves a project-local Repomix package, then the package behind
 the `repomix` executable on `PATH`; it never installs or downloads Repomix. The
@@ -1117,14 +1120,15 @@ the current Node.js runtime.
 > TypeScript config and configured `input.processors` with the same privileges
 > as a local Repomix CLI run. Review untrusted repositories before using it.
 
-> Use ChatGPT or Gemini for context packaging. Grok context packages **fail
-> closed** by default — `web-ai send/query --vendor grok` with
+> Use ChatGPT or Gemini for provider-bound context packaging. Grok context
+> packages **fail closed** by default — `web-ai send/query --vendor grok` with
 > `--context-from-files` / `--context-file` / `--context-transport upload`
 > throws with `stage: 'grok-context-pack-not-allowed'`. Pass
 > `--allow-grok-context-pack` to override deliberately for raw context only;
 > the runtime still emits `grok-context-pack-not-recommended` when the override
-> is used. Repomix is supported only for ChatGPT and Gemini and is explicitly
-> rejected for Grok.
+> is used. `web-ai render/send/query/code --vendor grok` explicitly rejects
+> Repomix. The provider-neutral `context-render` and `context-dry-run` utilities
+> only build or inspect the package and do not imply live Grok support.
 
 Dry run:
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-22T11:22:40.570Z",
+  "generated_at": "2026-07-22T14:01:27.998Z",
   "total_mjs": 358,
   "fan_in": {
     "web-ai/errors.mjs": 35,
@@ -56,6 +56,7 @@
     "web-ai/capability-types.mjs": 4,
     "web-ai/chatgpt-deep-research.mjs": 4,
     "web-ai/chatgpt-response-dom.mjs": 4,
+    "web-ai/code-mode-prompt.mjs": 4,
     "web-ai/context-pack/constants.mjs": 4,
     "web-ai/context-pack/renderer.mjs": 4,
     "web-ai/dom-hash.mjs": 4,
@@ -80,7 +81,6 @@
     "web-ai/chatgpt-archive.mjs": 3,
     "web-ai/chatgpt-upload-surface.mjs": 3,
     "web-ai/claim-audit.mjs": 3,
-    "web-ai/code-mode-prompt.mjs": 3,
     "web-ai/context-pack/transformer.mjs": 3,
     "web-ai/eval/scrub-dom.mjs": 3,
     "web-ai/extract-schema.mjs": 3,
@@ -382,7 +382,7 @@
     "test/unit/web-ai-code-artifact.test.mjs": 1,
     "test/unit/web-ai-code-dev-context.test.mjs": 2,
     "test/unit/web-ai-code-mode-prompt.test.mjs": 1,
-    "test/unit/web-ai-code-mode.test.mjs": 1,
+    "test/unit/web-ai-code-mode.test.mjs": 2,
     "test/unit/web-ai-composer.test.mjs": 1,
     "test/unit/web-ai-context-pack.test.mjs": 4,
     "test/unit/web-ai-context-transformer.test.mjs": 3,
@@ -1744,6 +1744,7 @@
       "web-ai/code-mode-prompt.mjs"
     ],
     "test/unit/web-ai-code-mode.test.mjs": [
+      "web-ai/code-mode-prompt.mjs",
       "web-ai/code-mode.mjs"
     ],
     "test/unit/web-ai-composer.test.mjs": [
