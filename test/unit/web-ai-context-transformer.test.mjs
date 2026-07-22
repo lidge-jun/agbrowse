@@ -95,6 +95,44 @@ describe('normalizeContextTransformMode', () => {
 });
 
 describe('buildRepomixArtifacts package and artifact contract', () => {
+    it('rejects Repomix v0.3.9 before config execution when explicit files are selected', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const selectedPath = join(cwd, 'selected.ts');
+        await writeFile(selectedPath, 'export const selected = true;\n');
+        const fake = await installProjectLocalFakeRepomix(cwd, { version: '0.3.9' });
+
+        const error = await captureFailure(buildRepomixArtifacts({
+            cwd,
+            stagingRoot,
+            explicitFiles: [selectedPath],
+        }));
+
+        expectTypedTransformFailure(error);
+        expect(error.message).toMatch(/explicit context selectors require Repomix >= 1\.0\.0.*0\.3\.9/i);
+        expect(error.evidence).toMatchObject({
+            explicitFileCount: 1,
+            repomix: { version: '0.3.9' },
+        });
+        expect(await readFakeRepomixEvents(fake.eventFile)).toEqual([]);
+    });
+
+    it('allows an API-compatible legacy Repomix for cwd packing without selectors', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const fake = await installProjectLocalFakeRepomix(cwd, {
+            version: '0.3.9',
+            outputs: [{ content: 'legacy cwd artifact\n' }],
+        });
+
+        const result = await buildRepomixArtifacts({ cwd, stagingRoot });
+
+        expect(result.repomix.version).toBe('0.3.9');
+        expect(result.artifacts[0].content).toBe('legacy cwd artifact\n');
+        expect((await readFakeRepomixEvents(fake.eventFile)).at(-1)).toMatchObject({
+            type: 'pack',
+            explicitFiles: null,
+        });
+    });
+
     it('prefers the project-local package, records provenance, and returns a single output directly', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
         const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-decoy-'));

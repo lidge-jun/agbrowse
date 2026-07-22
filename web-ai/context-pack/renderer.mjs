@@ -65,16 +65,28 @@ export function renderContextAttachmentText(files = [], contextTransform = 'raw'
     }
 
     for (const file of files) {
+        const fence = contextTransform === 'repomix'
+            ? contentSafeBacktickFence(file.content)
+            : '```';
         blocks.push(`### File: ${file.relativePath}`);
         blocks.push(`Size: ${file.sizeBytes} bytes`);
         blocks.push(`Estimated tokens: ${file.estimatedTokens}`);
         blocks.push('');
-        blocks.push(`\`\`\`${file.language || languageFromPath(file.relativePath)}`);
+        blocks.push(`${fence}${file.language || languageFromPath(file.relativePath)}`);
         blocks.push(file.content);
-        blocks.push('```');
+        blocks.push(fence);
         blocks.push('');
     }
     return blocks.join('\n').trim();
+}
+
+/** @param {string} content */
+function contentSafeBacktickFence(content) {
+    let longestRun = 0;
+    for (const match of String(content).matchAll(/`+/g)) {
+        longestRun = Math.max(longestRun, match[0].length);
+    }
+    return '`'.repeat(Math.max(3, longestRun + 1));
 }
 
 /**

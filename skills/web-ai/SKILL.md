@@ -102,8 +102,9 @@ is invoked with `--context-from-files` / `--context-file` /
 the runtime throws with `stage: 'grok-context-pack-not-allowed'`. Pass
 `--allow-grok-context-pack` to override deliberately for raw context only; the
 runtime still emits the `grok-context-pack-not-recommended` warning when the
-override is used. Repomix is supported only for ChatGPT and Gemini and is
-explicitly rejected for Grok.
+override is used. `web-ai render/send/query/code --vendor grok` explicitly
+rejects Repomix. The provider-neutral `context-render` and `context-dry-run`
+utilities only build or inspect the package and do not imply live Grok support.
 
 ## Polling Timeouts
 
@@ -648,10 +649,12 @@ and clear are intentionally unsupported.
 
 ## Context Package Upload
 
-Use ChatGPT or Gemini for context packaging. Repomix is explicitly rejected for
-Grok even when `--allow-grok-context-pack` is present. Do not pick `--vendor grok`
-here; Grok should use inline prompts plus optional single `--file` uploads
-only.
+Use ChatGPT or Gemini for provider-bound context packaging. Repomix is
+explicitly rejected by `web-ai render/send/query/code --vendor grok` even when
+`--allow-grok-context-pack` is present. Grok should use inline prompts plus
+optional single `--file` uploads. The provider-neutral `context-render` and
+`context-dry-run` utilities may still build or inspect a Repomix artifact with
+a vendor label; that does not enable a live Grok upload path.
 
 Raw upload transport creates one `.zip` archive named
 `web-ai-context-package-<id>.zip`. The archive contains `CONTEXT_PACKAGE.md`
@@ -663,9 +666,12 @@ the selected file content and do not require or load Repomix. The opt-in
 `--context-transform repomix` mode loads the effective project, global, or
 built-in Repomix config and uploads its output artifact directly. Split output
 parts retain Repomix order and filenames. Without file selectors it packs cwd;
-with selectors, those cwd-contained files are the upper bound while Repomix
-ignore, processors, patterns, and output settings still apply. Inline transport
-reads every generated part in order under the existing context budgets.
+with selectors, those cwd-contained source files are the upper bound passed to
+Repomix, and this selector-safe path requires Repomix 1.0.0 or newer. Repomix
+ignore, processors, patterns, and output settings still apply. Configured
+instruction text, Git diff/log sections, and processor output may therefore add
+non-source content to the artifact. Inline transport reads every generated part
+in order under the existing context budgets.
 
 agbrowse resolves a project-local package first, then the package behind the
 `repomix` executable on `PATH`, and never installs or downloads it. Output is

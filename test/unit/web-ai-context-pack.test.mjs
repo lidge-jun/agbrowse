@@ -247,6 +247,40 @@ throw new Error('raw mode must not evaluate Repomix config');
         }
     });
 
+    it('uses a Repomix-only fence longer than every backtick run in inline Markdown', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-fence-'));
+        const transformed = [
+            '# Packed context',
+            '```typescript',
+            'export const value = 1;',
+            '```',
+            'A literal ```` run.',
+        ].join('\n');
+        await installProjectLocalFakeRepomix(dir, {
+            fileConfig: { output: { filePath: 'packed.md', style: 'markdown' } },
+            outputs: [{ content: transformed }],
+        });
+
+        let result;
+        try {
+            result = await buildContextPackageResult({
+                cwd: dir,
+                prompt: 'review fenced context',
+                contextTransform: 'repomix',
+                contextTransport: 'inline',
+            });
+
+            expect(result.attachmentText).toContain(`\`\`\`\`\`markdown\n${transformed}\n\`\`\`\`\``);
+            expect(result.composerText).toContain('\n`````\n[USER REQUEST]\nreview fenced context');
+            expect(result.composerText).not.toContain(`\n\`\`\`markdown\n${transformed}`);
+        } finally {
+            if (result?.files[0]?.path) {
+                await rm(dirname(result.files[0].path), { recursive: true, force: true });
+            }
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('uses process.cwd by default and reads every split part in Repomix order before final budgeting', async () => {
         const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-cwd-'));
         const first = 'first artifact in Repomix order\n';

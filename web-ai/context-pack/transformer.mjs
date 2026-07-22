@@ -104,6 +104,7 @@ export async function buildRepomixArtifacts(options) {
             realCwd,
             options.explicitFiles ?? null,
         );
+        assertExplicitFileSupport(provenance, explicitFiles);
         const runnerResult = await runRepomixChild({
             cwd,
             stagingRoot,
@@ -149,6 +150,23 @@ export async function buildRepomixArtifacts(options) {
             cause,
         });
     }
+}
+
+/**
+ * Repomix added the public explicitFiles pack() argument in v1.0.0. Older
+ * versions silently ignore the extra positional argument and can pack cwd,
+ * so fail before config evaluation whenever agbrowse promised a selector cap.
+ * @param {RepomixProvenance} provenance
+ * @param {string[]|null} explicitFiles
+ */
+function assertExplicitFileSupport(provenance, explicitFiles) {
+    if (explicitFiles === null) return;
+    const majorMatch = /^(\d+)\./.exec(String(provenance.version).trim());
+    const major = majorMatch ? Number(majorMatch[1]) : null;
+    if (major !== null && major >= 1) return;
+    throw new TypeError(
+        `explicit context selectors require Repomix >= 1.0.0; installed ${provenance.version}`,
+    );
 }
 
 /**

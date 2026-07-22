@@ -24,14 +24,14 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/` | 55 | 16323 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
-| `skills/web-ai/` | 3 | 891 | bundled agent workflow skill |
-| `web-ai/` | 115 | 28860 | provider automation, sessions, MCP, eval, policy, trace |
-| `web-ai/context-pack/` | 10 | 1804 | file selection, token budget, context rendering |
+| `skills/web-ai/` | 3 | 897 | bundled agent workflow skill |
+| `web-ai/` | 115 | 28890 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/context-pack/` | 10 | 1834 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 142 | 18528 | deterministic module tests |
+| `test/unit/` | 142 | 18627 | deterministic module tests |
 | `test/integration/` | 21 | 3422 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
