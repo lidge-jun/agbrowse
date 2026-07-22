@@ -60,6 +60,8 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('--max-context-file-size <bytes>');
         expect(result.stdout).toContain('--context-transform <raw|repomix>');
         expect(result.stdout).toContain('(default: raw)');
+        expect(result.stdout).toContain('context.transform-invalid');
+        expect(result.stdout).toContain('context.transform-failed');
         expect(result.stdout).toContain('out.png, out-2.png, out-3.png');
         expect(result.stdout).toContain('query --session <id> sends a new prompt');
         expect(result.stdout).toContain('--session "$SID"');
@@ -395,6 +397,31 @@ describe('web-ai CLI contract', () => {
         expect(evidence).toContain('raw');
         expect(evidence).toContain('repomix');
         expect(evidence).not.toContain('does-not-exist.mjs');
+    });
+
+    it('rejects an explicitly empty context transform before context processing', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'context-dry-run',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'does-not-exist.mjs',
+            '--context-transform=',
+            '--json',
+        ]);
+
+        expect(result.code).not.toBe(0);
+        const parsed = JSON.parse(result.stderr);
+        expect(parsed.error).toMatchObject({
+            errorCode: 'context.transform-invalid',
+            stage: 'context-transform',
+            evidence: {
+                supplied: '',
+                supported: ['raw', 'repomix'],
+            },
+        });
+        expect(result.stderr).not.toContain('does-not-exist.mjs');
     });
 
     it('adds a human summary transform line only for repomix', async () => {

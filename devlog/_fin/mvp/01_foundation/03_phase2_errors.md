@@ -28,6 +28,8 @@ Phase 3 PR1 because they touch different files.
 | `provider.poll-timeout` | `poll` | `poll-or-resume` | true | required |
 | `context.over-budget` | `context-preflight` | `reduce-files` | false | optional |
 | `context.symlink-rejected` | `context-preflight` | `path-list` | false | optional |
+| `context.transform-invalid` | `context-transform` | `use-supported-transform` | false | optional |
+| `context.transform-failed` | `context-transform` | `install-compatible-repomix` | false | optional |
 | `grok.context-pack-not-allowed` | `grok-context-pack-not-allowed` | `inline-only-or-allow-flag` | false | required (`grok`) |
 | `internal.unhandled` | `internal` | `report` | false | optional |
 | `cdp.target-mismatch` | `session-target-verify` | `tab-switch` | false | required (cli-jaw `WrongTargetError`) |

@@ -790,7 +790,8 @@ Initial `errorCode` catalog:
   `provider.runtime-disabled`
 - `capability.unsupported`
 - `session.target-ambiguous`
-- `context.over-budget`, `context.symlink-rejected`
+- `context.over-budget`, `context.symlink-rejected`,
+  `context.transform-invalid`, `context.transform-failed`
 - `grok.context-pack-not-allowed`
 - `internal.unhandled`
 
