@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codeWebAi, extractCodeArtifacts, extractConversationId } from '../../web-ai/code-mode.mjs';
+import { buildCodeModePrompt } from '../../web-ai/code-mode-prompt.mjs';
 
 const FIXTURE_ZIP_B64 = 'UEsDBAoAAAAAAO41y1w9+YHGFAAAABQAAAAHABwAUExBTi5tZFVUCQADcNspanDbKWp1eAsAAQT1AQAABBQAAAAjIFBsYW4KLSBbIF0gdmVyaWZ5ClBLAwQKAAAAAADuNctcIDA6NgYAAAAGAAAACQAcAFJFQURNRS5tZFVUCQADcNspanDbKWp1eAsAAQT1AQAABBQAAABoZWxsbwpQSwMECgAAAAAA7jXLXAfu/XEPAAAADwAAAAgAHABzcmMvYS5qc1VUCQADcNspanDbKWp1eAsAAQT1AQAABBQAAABjb25zb2xlLmxvZygxKQpQSwECHgMKAAAAAADuNctcPfmBxhQAAAAUAAAABwAYAAAAAAABAAAApIEAAAAAUExBTi5tZFVUBQADcNspanV4CwABBPUBAAAEFAAAAFBLAQIeAwoAAAAAAO41y1wgMDo2BgAAAAYAAAAJABgAAAAAAAEAAACkgVUAAABSRUFETUUubWRVVAUAA3DbKWp1eAsAAQT1AQAABBQAAABQSwECHgMKAAAAAADuNctcB+79cQ8AAAAPAAAACAAYAAAAAAABAAAApIGeAAAAc3JjL2EuanNVVAUAA3DbKWp1eAsAAQT1AQAABBQAAABQSwUGAAAAAAMAAwDqAAAA7wAAAAAA';
 
@@ -154,6 +155,32 @@ describe('codeWebAi', () => {
         expect(sentInput.attachmentPolicy).toBe('upload');
         expect(sentInput.filePaths[0]).toMatch(/gpt-dev-agent-context\.zip$/);
         expect(sentInput.filePaths.slice(1)).toEqual(['/tmp/user.png', '/tmp/spec.txt']);
+    });
+
+    it('keeps Repomix CLI preparation aligned with the code-mode prompt contract', async () => {
+        const requirements = 'fullstack parity fixture';
+        let sentInput = null;
+        await codeWebAi({}, { vendor: 'chatgpt', prompt: requirements, multiZip: true }, {
+            queryWebAi: async (_deps, input) => {
+                sentInput = input;
+                return { ok: false, errorCode: 'test-stop' };
+            },
+            getSession: () => null,
+        });
+
+        expect(sentInput).toMatchObject({
+            prompt: buildCodeModePrompt(requirements, { multiZip: true }),
+            inlineOnly: false,
+        });
+
+        const cliSource = readFileSync(new URL('../../web-ai/cli.mjs', import.meta.url), 'utf8');
+        const precomputeBlock = cliSource.match(
+            /input\.preparedContextPack = await prepareContextForBrowser\(\{[\s\S]*?\n\s*\}\);/,
+        )?.[0] || '';
+        expect(precomputeBlock).toMatch(
+            /prompt:\s*command === 'code'\s*\?\s*buildCodeModePrompt\(input\.prompt, \{ multiZip: input\.multiZip === true \}\)\s*:\s*input\.prompt/,
+        );
+        expect(precomputeBlock).toContain("inlineOnly: command === 'code' ? false : input.inlineOnly");
     });
 
     it('skips the context zip on a continuation turn (existing conversation url)', async () => {

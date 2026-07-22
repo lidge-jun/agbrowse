@@ -33,6 +33,7 @@ import {
     attachLocalFileLive,
     attachLocalFilesLive,
     fileInfoFromPath,
+    preflightAttachment,
     sendButtonTimeoutMs,
     UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_SELECTORS,
     verifySentTurnAttachmentLive,
@@ -153,11 +154,134 @@ export async function statusWebAi(deps, input = {}) {
 }
 
 /**
+ * @param {string[]} uploadPaths
+ * @param {any} input
+ */
+function preflightChatGptUploadFiles(uploadPaths, input) {
+    return uploadPaths.map((uploadPath) => {
+        let file;
+        try {
+            file = fileInfoFromPath(uploadPath);
+        } catch (cause) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: `attachment preflight failed for ${uploadPath}: ${String((/** @type {any} */ (cause))?.message || cause)}`,
+                mutationAllowed: false,
+                cause,
+            });
+        }
+        const preflight = preflightAttachment(file, {
+            maxUploadBytes: input.maxUploadFileSize,
+        });
+        if (preflight.ok !== true) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: `${file.basename}: ${preflight.rejectedReason || 'preflight rejected'}`,
+                mutationAllowed: false,
+            });
+        }
+        return file;
+    });
+}
+
+const CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS = [
+    'form:has(textarea)',
+    'form:has([contenteditable="true"])',
+    'main form',
+];
+
+const CHATGPT_REPOMIX_ATTACHMENT_COUNT_SELECTORS = [
+    'button[aria-label*="Remove file" i]',
+    'button[aria-label*="Remove attachment" i]',
+    '.group\\/file-tile',
+    '[data-testid*="attachment" i]',
+].map(selector => CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS
+    .map(root => `${root} ${selector}`)
+    .join(', '));
+
+const CHATGPT_REPOMIX_UPLOAD_PROGRESS_SELECTORS = [
+    '[role="progressbar"]',
+    '[aria-label*="uploading" i]',
+    '[aria-label*="processing" i]',
+    '[data-testid*="upload-progress" i]',
+].map(selector => CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS
+    .map(root => `${root} ${selector}`)
+    .join(', '));
+
+/**
+ * Repomix may add several artifacts alongside existing user/code attachments.
+ * Count visible chips instead of matching basenames so duplicate names remain
+ * allowed without letting one accepted file stand in for several requested
+ * files. This strict gate is intentionally not used by the legacy raw path.
+ * @param {any} page
+ * @param {number} expectedCount
+ * @param {{timeoutMs?:number}} [options]
+ */
+export async function waitForChatGptRepomixAttachmentCount(page, expectedCount, options = {}) {
+    const deadline = Date.now() + Math.max(0, Number(options.timeoutMs ?? 8_000));
+    let observedCount = 0;
+    let progressCount = 0;
+    do {
+        const [attachmentCounts, progressCounts] = await Promise.all([
+            Promise.all(CHATGPT_REPOMIX_ATTACHMENT_COUNT_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
+            Promise.all(CHATGPT_REPOMIX_UPLOAD_PROGRESS_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
+        ]);
+        // Selectors are ordered from one-remove-button-per-chip to broader tile
+        // fallbacks. Use the first available surface so one chip matching
+        // several selectors is never double-counted.
+        observedCount = attachmentCounts.find(count => count > 0) || 0;
+        progressCount = progressCounts.reduce((total, count) => total + count, 0);
+        if (progressCount === 0 && observedCount === expectedCount) {
+            return { ok: true, expectedCount, observedCount };
+        }
+        if (Date.now() >= deadline) break;
+        await page.waitForTimeout(250).catch(() => undefined);
+    } while (Date.now() <= deadline);
+    return {
+        ok: false,
+        expectedCount,
+        observedCount,
+        error: `ChatGPT accepted ${observedCount}/${expectedCount} expected attachments before submit`,
+    };
+}
+
+/**
  * @param {any} deps
  * @param {any} input
  */
 export async function sendWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
+    const repomixMode = String(input.contextTransform || '').trim().toLowerCase() === 'repomix'
+        || input.preparedContextPack?.contextTransform === 'repomix';
+    let contextPack = repomixMode
+        ? input.preparedContextPack || await prepareContextForBrowser(input)
+        : null;
+    let contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    // input.filePaths preserves the caller's upload order. In code mode that
+    // order is the dev-agent context zip followed by caller-provided files.
+    const requestedPaths = Array.isArray(input.filePaths) && input.filePaths.length
+        ? input.filePaths
+        : (input.filePath ? [input.filePath] : []);
+    /** @type {string[]} */
+    let uploadPaths = [];
+    /** @type {any[]} */
+    let uploadFiles = [];
+    const strictRepomixUpload = repomixMode && contextAttachments.length > 0;
+    if (repomixMode) {
+        uploadPaths = [
+            ...requestedPaths,
+            ...contextAttachments.map((/** @type {any} */ attachment) => attachment.path),
+        ];
+        // Repomix/config/artifact failures must precede provider-page mutation.
+        uploadFiles = preflightChatGptUploadFiles(uploadPaths, input);
+    }
+
     if (input.url) {
         const page = await deps.getPage();
         const currentUrl = await waitForPageUrl(page, { state: 'load' });
@@ -171,7 +295,11 @@ export async function sendWebAi(deps, input = {}) {
         }
     }
     const page = await requireChatGptPage(deps);
-    const contextPack = await prepareContextForBrowser(input);
+    if (!repomixMode) {
+        // Preserve the raw workflow's existing navigation and mutation order.
+        contextPack = await prepareContextForBrowser(input);
+        contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    }
     const rendered = contextPack
         ? contextPack.transport === 'inline'
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
@@ -238,23 +366,22 @@ export async function sendWebAi(deps, input = {}) {
         let attachmentWarnings = [];
         /** @type {any[]} */
         let usedFallbacks = [];
-        const contextAttachmentPath = contextPack?.attachments?.[0]?.path;
-        // input.filePaths (repeatable --file) takes precedence; fall back to the
-        // legacy single input.filePath, then the context-package attachment.
-        const requestedPaths = Array.isArray(input.filePaths) && input.filePaths.length
-            ? input.filePaths
-            : (input.filePath ? [input.filePath] : []);
-        if (contextAttachmentPath && requestedPaths.length) {
-            throw new WebAiError({
-                errorCode: 'provider.attachment-preflight',
-                stage: 'attachment-preflight',
-                vendor: 'chatgpt',
-                retryHint: 'inline-only-or-file',
-                message: 'context package upload and --file upload cannot be combined yet',
-            });
+        if (!repomixMode) {
+            const contextAttachmentPath = contextAttachments[0]?.path;
+            if (contextAttachmentPath && requestedPaths.length) {
+                throw new WebAiError({
+                    errorCode: 'provider.attachment-preflight',
+                    stage: 'attachment-preflight',
+                    vendor: 'chatgpt',
+                    retryHint: 'inline-only-or-file',
+                    message: 'context package upload and --file upload cannot be combined yet',
+                });
+            }
+            uploadPaths = requestedPaths.length
+                ? requestedPaths
+                : (contextAttachmentPath ? [contextAttachmentPath] : []);
         }
-        const uploadPaths = requestedPaths.length ? requestedPaths : (contextAttachmentPath ? [contextAttachmentPath] : []);
-        const uploadFiles = uploadPaths.map(fileInfoFromPath);
+        if (!repomixMode) uploadFiles = uploadPaths.map(fileInfoFromPath);
         if (uploadPaths.length) {
             const uploadResolution = await resolveOptionalChatGptUploadTarget(page, traceCtx);
             const upload = await attachLocalFilesLive(page, uploadFiles, {
@@ -262,7 +389,7 @@ export async function sendWebAi(deps, input = {}) {
                 maxUploadBytes: input.maxUploadFileSize,
                 attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
             });
-            if (!upload.ok) throw new WebAiError({
+            if (repomixMode ? upload.ok !== true : !upload.ok) throw new WebAiError({
                 errorCode: 'provider.attachment-evidence-missing',
                 stage: 'attachment-verify',
                 vendor: 'chatgpt',
@@ -272,6 +399,21 @@ export async function sendWebAi(deps, input = {}) {
             });
             attachmentWarnings = upload.warnings || [];
             usedFallbacks = upload.usedFallbacks || [];
+        }
+        if (strictRepomixUpload) {
+            const attachmentCount = await waitForChatGptRepomixAttachmentCount(page, uploadFiles.length);
+            if (attachmentCount.ok !== true) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: attachmentCount.error,
+                mutationAllowed: true,
+                evidence: {
+                    expectedCount: attachmentCount.expectedCount,
+                    observedCount: attachmentCount.observedCount,
+                },
+            });
         }
         const sendResolution = await resolveOptionalChatGptSendTarget(page, traceCtx);
         const totalUploadBytes = uploadFiles.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0);
@@ -313,7 +455,9 @@ export async function sendWebAi(deps, input = {}) {
             warnings: [
                 ...rendered.warnings,
                 ...(contextPack?.warnings || []),
-                ...(contextAttachmentPath ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
+                ...(repomixMode
+                    ? contextAttachments.map((/** @type {any} */ attachment) => `context package attached: ${attachment.displayPath || attachment.path}`)
+                    : (contextAttachments[0]?.path ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : [])),
                 ...attachmentWarnings,
                 ...(selectedModel?.warnings || []),
                 ...(selectedTools?.warnings || []),
@@ -1214,13 +1358,24 @@ function cleanAssistantText(text) {
  * @param {any} contextPack
  */
 function summarizeContextPack(contextPack) {
-    return {
-        files: contextPack.files.map((/** @type {any} */ file) => ({
+    const summary = {
+        files: (contextPack.files || []).map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
         })),
         excluded: contextPack.excluded,
         budget: contextPack.budget,
+    };
+    if (contextPack.contextTransform !== 'repomix') return summary;
+    return {
+        ...summary,
+        transport: contextPack.transport,
+        contextTransform: 'repomix',
+        attachments: (contextPack.attachments || []).map((/** @type {any} */ attachment) => ({
+            displayPath: attachment.displayPath,
+            sizeBytes: attachment.sizeBytes,
+        })),
+        ...(contextPack.repomix ? { repomix: contextPack.repomix } : {}),
     };
 }

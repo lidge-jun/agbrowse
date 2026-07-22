@@ -47,12 +47,13 @@
  * @property {string} [model]
  * @property {ContextBudgetReport} budget
  * @property {ContextTransportMode} transport
- * @property {ContextTransformMode} contextTransform
+ * @property {'repomix'} [contextTransform]
  * @property {SelectedContextFile[]} files
  * @property {ExcludedContextFile[]} excluded
  * @property {string} composerText
  * @property {string} attachmentText
  * @property {{path:string,displayPath:string,sizeBytes:number}[]} attachments
+ * @property {Record<string, unknown>} [repomix]
  * @property {string[]} warnings
  */
 

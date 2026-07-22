@@ -1,125 +1,60 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { WebAiError } from '../../web-ai/errors.mjs';
 import {
+    buildRepomixArtifacts,
     normalizeContextTransformMode,
-    transformContextFiles,
 } from '../../web-ai/context-pack/transformer.mjs';
-import { estimateTokens } from '../../web-ai/context-pack/token-estimator.mjs';
+import {
+    installPathFakeRepomix,
+    installProjectLocalFakeRepomix,
+    readFakeRepomixEvents,
+} from '../helpers/fake-repomix-project.mjs';
 
 const temporaryDirectories = [];
-const fakeEventKeys = [];
+const suiteCwd = process.cwd();
+const suitePath = process.env.PATH;
+const suiteXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
 afterEach(async () => {
-    vi.restoreAllMocks();
-    for (const key of fakeEventKeys.splice(0)) delete globalThis[key];
+    process.chdir(suiteCwd);
+    if (suitePath === undefined) delete process.env.PATH;
+    else process.env.PATH = suitePath;
+    if (suiteXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = suiteXdgConfigHome;
     await Promise.all(temporaryDirectories.splice(0).map(directory => (
         rm(directory, { recursive: true, force: true, maxRetries: 3 })
     )));
 });
 
-function selectedFiles(cwd) {
-    return [
-        {
-            path: join(cwd, 'src', 'alpha.mjs'),
-            relativePath: 'src/alpha.mjs',
-            language: 'javascript',
-            content: 'export function alpha() { return "한글"; }\n',
-            sizeBytes: 47,
-            estimatedTokens: 32,
-        },
-        {
-            path: join(cwd, 'src', 'beta.py'),
-            relativePath: 'src/beta.py',
-            language: 'python',
-            content: 'def beta():\n    return 2\n',
-            sizeBytes: 25,
-            estimatedTokens: 25,
-        },
-    ];
-}
-
-function fakeRepomixSource(eventKey, processBody = `
-    return [...rawFiles].reverse().map(file => ({
-        path: file.path,
-        content: 'compressed:' + file.path + ':' + file.content,
-    }));
-`) {
-    return `
-const events = globalThis[${JSON.stringify(eventKey)}] ??= [];
-
-export function mergeConfigs(cwd, fileConfig, cliConfig) {
-    const merged = { source: ${JSON.stringify(eventKey)}, cwd, fileConfig, cliConfig };
-    events.push({ type: 'mergeConfigs', cwd, fileConfig, cliConfig, returned: merged });
-    return merged;
-}
-
-export function setLogLevel(level) {
-    events.push({ type: 'setLogLevel', level });
-}
-
-export async function processFiles(rawFiles, config, progressCallback) {
-    const progressReturn = progressCallback('progress-probe');
-    events.push({
-        type: 'processFiles',
-        rawFiles,
-        config,
-        callbackType: typeof progressCallback,
-        progressReturn,
-    });
-    ${processBody}
-}
-`;
-}
-
-async function createTemporaryProject({
-    installRepomix = true,
-    processBody,
-    sourceFactory,
-} = {}) {
-    const cwd = await mkdtemp(join(tmpdir(), 'agbrowse-context-transform-'));
+async function createTemporaryProject(prefix = 'agbrowse-context-transform-') {
+    const cwd = await mkdtemp(join(tmpdir(), prefix));
     temporaryDirectories.push(cwd);
-    await writeFile(join(cwd, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-
-    if (!installRepomix) return { cwd, eventKey: null, events: [] };
-
-    const packageDirectory = join(cwd, 'node_modules', 'repomix');
-    await mkdir(packageDirectory, { recursive: true });
-    await writeFile(join(packageDirectory, 'package.json'), JSON.stringify({
-        name: 'repomix',
-        version: '0.0.0-test',
-        type: 'module',
-        main: './index.mjs',
-        exports: { '.': './index.mjs' },
-    }));
-
-    const eventKey = `__agbrowse_fake_repomix_${randomUUID()}`;
-    fakeEventKeys.push(eventKey);
-    globalThis[eventKey] = [];
-    const source = sourceFactory
-        ? sourceFactory(eventKey)
-        : fakeRepomixSource(eventKey, processBody);
-    await writeFile(join(packageDirectory, 'index.mjs'), source);
-
-    return { cwd, eventKey, events: globalThis[eventKey] };
+    await writeFile(join(cwd, 'package.json'), '{"private":true,"type":"module"}\n');
+    const stagingRoot = join(cwd, '.agbrowse-staging');
+    await mkdir(stagingRoot);
+    return { cwd, stagingRoot };
 }
 
-async function captureTransformFailure(promise) {
+async function captureFailure(promise) {
     try {
         await promise;
     } catch (error) {
         return error;
     }
-    throw new Error('expected context transform to fail');
+    throw new Error('expected Repomix transform to fail');
 }
 
 function expectTypedTransformFailure(error) {
     expect(error).toBeInstanceOf(WebAiError);
-    expect(error.errorCode).toBe('context.transform-failed');
-    expect(error.stage).toBe('context-transform');
+    expect(error).toMatchObject({
+        errorCode: 'context.transform-failed',
+        stage: 'context-transform',
+        retryHint: 'install-compatible-repomix',
+    });
+    expect(error.cause).toBeTruthy();
 }
 
 describe('normalizeContextTransformMode', () => {
@@ -130,35 +65,27 @@ describe('normalizeContextTransformMode', () => {
     });
 
     it('rejects an unsupported mode with supplied and supported values in evidence', async () => {
-        const normalizedError = await captureTransformFailure(Promise.resolve().then(() => (
+        const error = await captureFailure(Promise.resolve().then(() => (
             normalizeContextTransformMode('brotli')
         )));
-        const { cwd } = await createTemporaryProject({ installRepomix: false });
-        const transformError = await captureTransformFailure(transformContextFiles(selectedFiles(cwd), {
-            mode: 'brotli',
-            cwd,
-        }));
 
-        for (const error of [normalizedError, transformError]) {
-            expect(error).toBeInstanceOf(WebAiError);
-            expect(error.errorCode).toBe('context.transform-invalid');
-            expect(error.stage).toBe('context-transform');
-            const evidence = JSON.stringify(error.evidence);
-            expect(evidence).toContain('brotli');
-            expect(evidence).toContain('raw');
-            expect(evidence).toContain('repomix');
-        }
+        expect(error).toBeInstanceOf(WebAiError);
+        expect(error.errorCode).toBe('context.transform-invalid');
+        expect(error.stage).toBe('context-transform');
+        expect(error.evidence).toEqual({
+            supplied: 'brotli',
+            supported: ['raw', 'repomix'],
+        });
     });
 
     it('rejects explicitly supplied empty values instead of treating them as omission', async () => {
         for (const supplied of ['', '   ']) {
-            const error = await captureTransformFailure(Promise.resolve().then(() => (
+            const error = await captureFailure(Promise.resolve().then(() => (
                 normalizeContextTransformMode(supplied)
             )));
 
             expect(error).toBeInstanceOf(WebAiError);
             expect(error.errorCode).toBe('context.transform-invalid');
-            expect(error.stage).toBe('context-transform');
             expect(error.evidence).toMatchObject({
                 supplied,
                 supported: ['raw', 'repomix'],
@@ -167,151 +94,345 @@ describe('normalizeContextTransformMode', () => {
     });
 });
 
-describe('transformContextFiles raw mode', () => {
-    it('returns the original file data by identity without a local Repomix package', async () => {
-        const { cwd } = await createTemporaryProject({ installRepomix: false });
-        const files = selectedFiles(cwd);
-
-        const omitted = await transformContextFiles(files, { cwd });
-        const explicit = await transformContextFiles(files, { mode: 'raw', cwd });
-
-        expect(omitted).toBe(files);
-        expect(explicit).toBe(files);
-        expect(omitted[0]).toBe(files[0]);
-        expect(omitted[1]).toBe(files[1]);
-    });
-});
-
-describe('transformContextFiles repomix mode', () => {
-    it('loads package-root APIs from target cwd and remaps transformed output by path', async () => {
-        const { cwd, events } = await createTemporaryProject();
-        const files = selectedFiles(cwd);
-        const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-        const transformed = await transformContextFiles(files, { mode: 'repomix', cwd });
-
-        const mergeEvent = events.find(event => event.type === 'mergeConfigs');
-        const logEvent = events.find(event => event.type === 'setLogLevel');
-        const processEvent = events.find(event => event.type === 'processFiles');
-        expect(mergeEvent).toMatchObject({
-            cwd,
-            fileConfig: {},
-            cliConfig: { output: { compress: true } },
+describe('buildRepomixArtifacts package and artifact contract', () => {
+    it('prefers the project-local package, records provenance, and returns a single output directly', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-decoy-'));
+        temporaryDirectories.push(pathRoot);
+        const local = await installProjectLocalFakeRepomix(cwd, {
+            version: '9.1.0-local',
+            configPath: 'repomix.config.ts',
+            fileConfig: { output: { filePath: 'reports/review-context.md' } },
+            outputs: [{ content: 'project-local artifact\n' }],
         });
-        expect(logEvent).toEqual({ type: 'setLogLevel', level: -1 });
-        expect(events.indexOf(logEvent)).toBeLessThan(events.indexOf(processEvent));
-        expect(processEvent.config).toBe(mergeEvent.returned);
-        expect(processEvent.rawFiles).toEqual(files.map(file => ({
-            path: file.relativePath,
-            content: file.content,
-        })));
-        expect(processEvent.callbackType).toBe('function');
-        expect(processEvent.progressReturn).toBeUndefined();
-        expect(consoleLog).not.toHaveBeenCalled();
+        const decoy = await installPathFakeRepomix({
+            root: pathRoot,
+            projectCwd: pathRoot,
+            version: '9.2.0-path-decoy',
+            outputs: [{ content: 'wrong PATH artifact\n' }],
+        });
+        process.env.PATH = decoy.binDir;
 
-        expect(transformed.map(file => file.relativePath)).toEqual(files.map(file => file.relativePath));
-        for (let index = 0; index < files.length; index += 1) {
-            const original = files[index];
-            const result = transformed[index];
-            const expectedContent = `compressed:${original.relativePath}:${original.content}`;
-            expect(result).toMatchObject({
-                path: original.path,
-                relativePath: original.relativePath,
-                language: original.language,
-                content: expectedContent,
-                sizeBytes: Buffer.byteLength(expectedContent, 'utf8'),
-                estimatedTokens: estimateTokens(expectedContent, 1),
+        const result = await buildRepomixArtifacts({
+            cwd,
+            stagingRoot,
+            explicitFiles: null,
+            contextExclude: [],
+        });
+
+        expect(result.repomix).toMatchObject({
+            version: '9.1.0-local',
+            source: 'project-local',
+            packagePath: local.packageRoot,
+            configPath: join(cwd, 'repomix.config.ts'),
+            configuredOutputPath: 'reports/review-context.md',
+        });
+        expect(result.artifacts).toEqual([expect.objectContaining({
+            path: join(stagingRoot, 'review-context.md'),
+            displayPath: 'review-context.md',
+            content: 'project-local artifact\n',
+            language: 'markdown',
+        })]);
+        expect(result.artifacts[0].path).not.toMatch(/\.zip$/i);
+
+        const events = await readFakeRepomixEvents(local.eventFile);
+        expect(events.map(event => event.type)).toEqual([
+            'setLogLevel',
+            'loadFileConfig',
+            'mergeConfigs',
+            'pack',
+        ]);
+        expect(events.every(event => event.runtimeCwd === cwd)).toBe(true);
+        expect(events.at(-1).config.ignore.customPatterns).toContain(
+            'reports/review-context.+([0-9]).md',
+        );
+        expect(await readFakeRepomixEvents(decoy.eventFile)).toEqual([]);
+    });
+
+    it('falls back to the npm package behind the Repomix executable on PATH', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-'));
+        temporaryDirectories.push(pathRoot);
+        const pathPackage = await installPathFakeRepomix({
+            root: pathRoot,
+            projectCwd: cwd,
+            version: '8.0.0-path',
+            fileConfig: { output: { filePath: 'path-output.txt' } },
+            outputs: [{ content: 'PATH artifact\n' }],
+        });
+        process.env.PATH = pathPackage.binDir;
+
+        const result = await buildRepomixArtifacts({
+            cwd,
+            stagingRoot,
+            explicitFiles: null,
+        });
+
+        expect(result.repomix).toMatchObject({
+            version: '8.0.0-path',
+            source: 'path',
+            packagePath: pathPackage.packageRoot,
+        });
+        expect(result.artifacts[0]).toMatchObject({
+            displayPath: 'path-output.txt',
+            content: 'PATH artifact\n',
+        });
+        const events = await readFakeRepomixEvents(pathPackage.eventFile);
+        expect(events.at(-1)).toMatchObject({
+            type: 'pack',
+            runtimeCwd: cwd,
+            rootDirs: [cwd],
+        });
+    });
+
+    it('uses a project config before the global fallback', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const globalRoot = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-global-config-'));
+        temporaryDirectories.push(globalRoot);
+        const globalConfig = join(globalRoot, 'repomix', 'repomix.config.ts');
+        const localConfig = join(cwd, 'repomix.config.json');
+        await mkdir(join(globalRoot, 'repomix'), { recursive: true });
+        await writeFile(globalConfig, 'export default {};\n');
+        await writeFile(localConfig, '{}\n');
+        process.env.XDG_CONFIG_HOME = globalRoot;
+        const fake = await installProjectLocalFakeRepomix(cwd);
+
+        const localResult = await buildRepomixArtifacts({ cwd, stagingRoot });
+        await rm(localConfig);
+        const globalStagingRoot = join(cwd, '.agbrowse-staging-global');
+        await mkdir(globalStagingRoot);
+        const globalResult = await buildRepomixArtifacts({ cwd, stagingRoot: globalStagingRoot });
+
+        const configLoads = (await readFakeRepomixEvents(fake.eventFile))
+            .filter(event => event.type === 'loadFileConfig');
+        expect(configLoads.map(event => event.configPath)).toEqual([null, null]);
+        expect([localResult.repomix.configPath, globalResult.repomix.configPath]).toEqual([
+            localConfig,
+            globalConfig,
+        ]);
+    });
+
+    it('preserves Repomix split-output order and original filenames', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const { eventFile } = await installProjectLocalFakeRepomix(cwd, {
+            fileConfig: { output: { filePath: 'configured-name.md', splitOutput: 64 } },
+            outputs: [
+                { name: 'configured-name.2.md', content: 'second-by-name, first-by-order\n' },
+                { name: 'configured-name.1.md', content: 'first-by-name, second-by-order\n' },
+                { name: 'configured-name.10.md', content: 'tenth-by-name, third-by-order\n' },
+            ],
+        });
+
+        const result = await buildRepomixArtifacts({ cwd, stagingRoot });
+
+        expect(result.artifacts.map(artifact => artifact.displayPath)).toEqual([
+            'configured-name.2.md',
+            'configured-name.1.md',
+            'configured-name.10.md',
+        ]);
+        expect(result.artifacts.map(artifact => artifact.content)).toEqual([
+            'second-by-name, first-by-order\n',
+            'first-by-name, second-by-order\n',
+            'tenth-by-name, third-by-order\n',
+        ]);
+        const packEvent = (await readFakeRepomixEvents(eventFile))
+            .find(event => event.type === 'pack');
+        expect(packEvent.config.ignore.customPatterns).toContain('configured-name.+([0-9]).md');
+        expect(packEvent.config.ignore.customPatterns).not.toContain('configured-name.*.md');
+    });
+
+    it.runIf(process.platform !== 'win32')('preserves a POSIX output basename containing a backslash', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const { eventFile } = await installProjectLocalFakeRepomix(cwd, {
+            fileConfig: { output: { filePath: 'foo\\bar.md' } },
+            outputs: [{ content: 'literal backslash basename\n' }],
+        });
+
+        const result = await buildRepomixArtifacts({ cwd, stagingRoot });
+
+        expect(result.artifacts[0].displayPath).toBe('foo\\bar.md');
+        expect(result.repomix.configuredOutputPath).toBe('foo\\bar.md');
+        const packEvent = (await readFakeRepomixEvents(eventFile))
+            .find(event => event.type === 'pack');
+        expect(packEvent.config.ignore.customPatterns).toContain('foo\\\\bar.md');
+    });
+
+    it('replaces config include with the explicit set while retaining ignore, processors, and output patterns', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const selectedPath = join(cwd, 'src', 'selected.fixture');
+        await mkdir(join(cwd, 'src'));
+        await writeFile(selectedPath, 'selected source\n');
+        const processor = { pattern: '**/*.fixture', command: 'node ./processor.mjs {file}' };
+        const outputPatterns = [{ pattern: '**/*.fixture', compress: true }];
+        const { eventFile } = await installProjectLocalFakeRepomix(cwd, {
+            fileConfig: {
+                include: ['**/*'],
+                ignore: { customPatterns: ['ignored/**'], useGitignore: false },
+                input: { processors: [processor] },
+                output: {
+                    filePath: 'reports/custom-context.md',
+                    patterns: outputPatterns,
+                    removeComments: true,
+                    stdout: true,
+                },
+            },
+            outputs: [{ content: 'processed selected source\n' }],
+        });
+
+        await buildRepomixArtifacts({
+            cwd,
+            stagingRoot,
+            explicitFiles: [selectedPath],
+            contextExclude: ['cli-excluded/**'],
+            maxFileSize: 1234,
+        });
+
+        const events = await readFakeRepomixEvents(eventFile);
+        const packEvent = events.find(event => event.type === 'pack');
+        expect(packEvent).toMatchObject({
+            runtimeCwd: cwd,
+            rootDirs: [cwd],
+            explicitFiles: [selectedPath],
+            config: {
+                cwd,
+                include: [],
+                enableFileProcessors: true,
+                input: {
+                    processors: [processor],
+                    maxFileSize: 1234,
+                },
+                output: {
+                    filePath: join(stagingRoot, 'custom-context.md'),
+                    copyToClipboard: false,
+                    patterns: outputPatterns,
+                    removeComments: true,
+                    stdout: false,
+                },
+                ignore: {
+                    useGitignore: false,
+                    customPatterns: expect.arrayContaining([
+                        'ignored/**',
+                        'cli-excluded/**',
+                        'reports/custom-context.md',
+                    ]),
+                },
+            },
+        });
+    });
+
+    it('excludes the retained agbrowse package root when it is inside cwd', async () => {
+        const cwd = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-managed-root-'));
+        temporaryDirectories.push(cwd);
+        await writeFile(join(cwd, 'package.json'), '{"private":true,"type":"module"}\n');
+        const packageRoot = join(cwd, '.browser-agent', 'web-ai-context-packages');
+        const stagingRoot = join(packageRoot, 'web-ai-context-repomix-current');
+        await mkdir(stagingRoot, { recursive: true });
+        const { eventFile } = await installProjectLocalFakeRepomix(cwd);
+
+        await buildRepomixArtifacts({ cwd, stagingRoot, managedRoot: packageRoot });
+
+        const packEvent = (await readFakeRepomixEvents(eventFile))
+            .find(event => event.type === 'pack');
+        expect(packEvent.config.ignore.customPatterns).toContain(
+            '.browser-agent/web-ai-context-packages/**',
+        );
+    });
+
+    it('preserves Repomix security and skipped-file warnings', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        await installProjectLocalFakeRepomix(cwd, {
+            packResult: {
+                suspiciousFilesResults: [{ filePath: 'secret.env', messages: ['secret'], type: 'file' }],
+                suspiciousGitDiffResults: [{ filePath: 'git-diff', messages: ['secret'], type: 'gitDiff' }],
+                suspiciousGitLogResults: [{ filePath: 'git-log', messages: ['secret'], type: 'gitLog' }],
+                skippedFiles: [
+                    { path: 'asset.bin', reason: 'binary-content' },
+                    { path: 'large.txt', reason: 'size-limit' },
+                ],
+            },
+        });
+
+        const result = await buildRepomixArtifacts({ cwd, stagingRoot });
+
+        expect(result.warnings).toEqual([
+            'repomix security: 1 suspicious source file(s) excluded: secret.env',
+            'repomix security: 1 suspicious Git diff item(s) included: git-diff',
+            'repomix security: 1 suspicious Git log item(s) included: git-log',
+            'repomix skipped 1 file(s) (binary-content): asset.bin',
+            'repomix skipped 1 file(s) (size-limit): large.txt',
+        ]);
+    });
+
+    it('rejects direct explicit-file escapes before loading Repomix', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        const outside = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-outside-'));
+        temporaryDirectories.push(outside);
+        const outsideFile = join(outside, 'outside.ts');
+        const linkedFile = join(cwd, 'linked.ts');
+        await writeFile(outsideFile, 'export const OUTSIDE = true;\n');
+        await symlink(outsideFile, linkedFile);
+        const fake = await installProjectLocalFakeRepomix(cwd);
+
+        for (const explicitFile of [outsideFile, linkedFile]) {
+            const error = await captureFailure(buildRepomixArtifacts({
+                cwd,
+                stagingRoot,
+                explicitFiles: [explicitFile],
+            }));
+            expect(error).toMatchObject({
+                errorCode: 'context.symlink-rejected',
+                stage: 'context-preflight',
             });
         }
+        expect(await readFakeRepomixEvents(fake.eventFile)).toEqual([]);
     });
 
-    it.each([
-        ['missing selected path', 'return rawFiles.slice(0, -1);'],
-        ['duplicate processed path', 'return [rawFiles[0], rawFiles[0], ...rawFiles.slice(1)];'],
-        ['unknown processed path', "return [...rawFiles, { path: 'unknown/file.mjs', content: 'x' }];"],
-        ['non-string processed content', "return rawFiles.map((file, index) => index === 0 ? { path: file.path, content: 42 } : file);"],
-    ])('fails closed on %s', async (_label, processBody) => {
-        const { cwd } = await createTemporaryProject({ processBody });
-        const error = await captureTransformFailure(transformContextFiles(selectedFiles(cwd), {
-            mode: 'repomix',
-            cwd,
+    it('fails closed with one typed contract for missing and incompatible packages', async () => {
+        const missing = await createTemporaryProject('agbrowse-repomix-missing-');
+        const emptyBin = join(missing.cwd, 'empty-bin');
+        await mkdir(emptyBin);
+        process.env.PATH = emptyBin;
+        const missingError = await captureFailure(buildRepomixArtifacts({
+            cwd: missing.cwd,
+            stagingRoot: missing.stagingRoot,
         }));
+        expectTypedTransformFailure(missingError);
+        expect(missingError.message).toMatch(/Repomix.*not found|not found.*Repomix/i);
+
+        const incompatible = await createTemporaryProject('agbrowse-repomix-incompatible-');
+        await installProjectLocalFakeRepomix(incompatible.cwd, { incompatible: true });
+        const incompatibleError = await captureFailure(buildRepomixArtifacts({
+            cwd: incompatible.cwd,
+            stagingRoot: incompatible.stagingRoot,
+        }));
+        expectTypedTransformFailure(incompatibleError);
+        expect(incompatibleError.message).toMatch(/incompatible|missing/i);
+    });
+
+    it('fails the whole transform when any reported split part is missing', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        await installProjectLocalFakeRepomix(cwd, {
+            outputs: [
+                { name: 'context.1.md', content: 'complete first part\n' },
+                { name: 'context.2.md', missing: true },
+            ],
+        });
+
+        const error = await captureFailure(buildRepomixArtifacts({ cwd, stagingRoot }));
 
         expectTypedTransformFailure(error);
+        expect(error.message).toMatch(/context\.2\.md|ENOENT|no such file/i);
     });
 
-    it('accepts unchanged content as an unsupported-language fallback', async () => {
-        const { cwd } = await createTemporaryProject({
-            processBody: 'return rawFiles.map(file => ({ path: file.path, content: file.content }));',
+    it('fails closed when Repomix reports an empty output file list', async () => {
+        const { cwd, stagingRoot } = await createTemporaryProject();
+        await installProjectLocalFakeRepomix(cwd, {
+            packResult: { outputFiles: [] },
         });
-        const content = 'opaque unsupported language\n';
-        const files = [{
-            path: join(cwd, 'src', 'sample.unknown-language'),
-            relativePath: 'src/sample.unknown-language',
-            language: 'unknown-language',
-            content,
-            sizeBytes: 999,
-            estimatedTokens: 999,
-        }];
 
-        const transformed = await transformContextFiles(files, { mode: 'repomix', cwd });
-
-        expect(transformed).toHaveLength(1);
-        expect(transformed[0]).toMatchObject({
-            path: files[0].path,
-            relativePath: files[0].relativePath,
-            language: files[0].language,
-            content,
-            sizeBytes: Buffer.byteLength(content, 'utf8'),
-            estimatedTokens: estimateTokens(content, 1),
-        });
-    });
-
-    it('wraps a missing target-cwd package as a typed failure with cause', async () => {
-        const { cwd } = await createTemporaryProject({ installRepomix: false });
-        const error = await captureTransformFailure(transformContextFiles(selectedFiles(cwd), {
-            mode: 'repomix',
-            cwd,
-        }));
+        const error = await captureFailure(buildRepomixArtifacts({ cwd, stagingRoot }));
 
         expectTypedTransformFailure(error);
-        expect(error.cause).toBeTruthy();
-        expect(error.message).toMatch(/repomix/i);
-        expect(error.message).toMatch(/local|install/i);
-        expect(error.message).toMatch(/compatible|runtime|node/i);
-    });
-
-    it('wraps an incompatible package-root API shape as a typed failure with cause', async () => {
-        const { cwd } = await createTemporaryProject({
-            sourceFactory: () => `
-export function mergeConfigs(cwd, fileConfig, cliConfig) {
-    return { cwd, fileConfig, cliConfig };
-}
-export async function processFiles(rawFiles) {
-    return rawFiles;
-}
-`,
-        });
-        const error = await captureTransformFailure(transformContextFiles(selectedFiles(cwd), {
-            mode: 'repomix',
-            cwd,
-        }));
-
-        expectTypedTransformFailure(error);
-        expect(error.cause).toBeTruthy();
-    });
-
-    it('wraps a processing error as a typed failure and preserves the original cause', async () => {
-        const { cwd } = await createTemporaryProject({
-            processBody: "throw new Error('fake process exploded');",
-        });
-        const error = await captureTransformFailure(transformContextFiles(selectedFiles(cwd), {
-            mode: 'repomix',
-            cwd,
-        }));
-
-        expectTypedTransformFailure(error);
-        expect(error.cause).toBeInstanceOf(Error);
-        expect(error.cause.message).toBe('fake process exploded');
+        expect(error.message).toMatch(/invalid outputFiles/);
     });
 });

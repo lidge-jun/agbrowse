@@ -204,12 +204,17 @@ dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed, X/Twitter oEmbed
 - `--context-transform raw|repomix`의 기본값은 `raw`다. 옵션 생략과 명시적
   `raw`는 동일하며 선택된 파일 내용을 변환하지 않고, Repomix를 resolve나
   import하지 않는다.
-- `repomix`는 opt-in lossy structural compression이다. agbrowse가 파일을 선택한
-  뒤 render/budget 계산과 upload archive 생성 전에 적용되며, 함수 본문과 구현
-  세부 정보가 생략될 수 있다.
-- Repomix는 target cwd의 프로젝트에 설치되어 있어야 하며 현재 Node runtime과
-  호환되어야 한다. agbrowse는 Repomix를 설치하거나 다운로드하지 않고 사용자
-  `repomix.config.*`도 읽지 않는다. Raw workflow에는 Repomix가 필요 없다.
+- `repomix`는 effective project/global/built-in config로 cwd를 pack하고 생성된
+  output artifact를 기존 ZIP으로 다시 감싸지 않고 직접 전달한다. 명시적 file
+  selector가 있으면 그 cwd-contained 선택 집합이 상한이며 Repomix ignore,
+  processors, patterns, output 설정은 유지된다. ChatGPT/Gemini는 split parts의
+  원래 순서와 이름을 유지하고 inline은 모든 part를 순서대로 읽은 뒤 기존
+  budget을 적용한다. Grok에서는 명시적으로 거부하며 기존 raw override 계약은
+  변경하지 않는다.
+- package는 target cwd의 project-local 설치를 먼저 resolve하고 없으면 `PATH`의
+  `repomix` 실행 파일 배후 package를 사용한다. 출력은 agbrowse staging에 두되
+  basename을 보존하고 파일 산출물을 위해 stdout과 clipboard copy만 끈다. JS/TS config와 processors 실행은
+  명시적 opt-in 신뢰 경계다. Raw workflow에는 Repomix가 필요 없다.
 
 ## Provider Alias
 
