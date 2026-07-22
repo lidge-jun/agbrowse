@@ -656,6 +656,17 @@ Upload transport creates one `.zip` archive named
 plus the selected source files. Do not create a temporary `.txt`/`.md` file
 yourself for source context; use `--context-from-files` or `--context-file`.
 
+`--context-transform raw` is the default. Omission and explicit `raw` preserve
+the selected file content and do not require or load Repomix. The opt-in
+`--context-transform repomix` mode is lossy: it applies structural compression
+after agbrowse selects files and before rendering, budgeting, and archive
+creation, so function bodies or implementation details may be omitted.
+
+For `repomix`, require a Repomix installation in the target project that is
+compatible with the active Node.js runtime. agbrowse resolves Repomix from the
+target working directory and never bundles, installs, or downloads it. Do not
+assume a user `repomix.config.*` file is loaded.
+
 ```bash
 agbrowse web-ai query \
   --vendor chatgpt \

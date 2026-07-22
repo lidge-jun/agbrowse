@@ -199,6 +199,18 @@ dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed, X/Twitter oEmbed
 | `doctor` | Yes | provider diagnostics와 semantic target 후보 출력 |
 | `claim-audit` | No | repo docs의 hosted/cloud/stealth 등 금지 claim을 검사한다. release gate `gate:no-cloud-claims`와 같은 claim-audit 모듈을 사용하며 `--json`을 지원한다. |
 
+### Context package transform contract
+
+- `--context-transform raw|repomix`의 기본값은 `raw`다. 옵션 생략과 명시적
+  `raw`는 동일하며 선택된 파일 내용을 변환하지 않고, Repomix를 resolve나
+  import하지 않는다.
+- `repomix`는 opt-in lossy structural compression이다. agbrowse가 파일을 선택한
+  뒤 render/budget 계산과 upload archive 생성 전에 적용되며, 함수 본문과 구현
+  세부 정보가 생략될 수 있다.
+- Repomix는 target cwd의 프로젝트에 설치되어 있어야 하며 현재 Node runtime과
+  호환되어야 한다. agbrowse는 Repomix를 설치하거나 다운로드하지 않고 사용자
+  `repomix.config.*`도 읽지 않는다. Raw workflow에는 Repomix가 필요 없다.
+
 ## Provider Alias
 
 | Provider | Model/tier alias | Family/effort 계약 |
