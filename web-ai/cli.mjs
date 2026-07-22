@@ -10,7 +10,12 @@ import { codeWebAi, extractCodeArtifacts } from './code-mode.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession, submitWorkPrompt } from './chatgpt-work-picker.mjs';
-import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
+import {
+    buildContextPackageResult,
+    normalizeContextTransformMode,
+    prepareContextForBrowser,
+    renderContextDryRunReport,
+} from './context-pack/index.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import { runDoctor } from './doctor.mjs';
 import { maybeRecordChurn } from './churn-log.mjs';
@@ -189,6 +194,9 @@ Attachments and context:
   --context-exclude <glob>          Exclude from the package; repeatable
   --context-file <path>             Use a prebuilt context package file
   --context-transport <upload|inline>
+  --context-transform <raw|repomix> Transform selected files before rendering
+                                    (default: raw). repomix is lossy and requires
+                                    a compatible project-local Repomix install.
   --max-input <chars>               Inline prompt budget
   --max-file-size <bytes>           Legacy alias for --max-context-file-size
   --files-report                    Include file report metadata
@@ -384,6 +392,10 @@ Optional inputs:
   --context-exclude <glob>
   --context-file <path>
   --context-transport <upload|inline>
+  --context-transform <raw|repomix>
+                        Transform selected context files before rendering.
+                        Default: raw. repomix is lossy and requires a compatible
+                        project-local Repomix install.
   --context-refresh     Re-upload the dev-agent context zip on a continuation
                         turn. By default it is attached only on the FIRST turn
                         of a conversation; continuation turns (--url /
@@ -604,6 +616,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'attachment-upload-timeout-ms': { type: 'string' },
             'files-report': { type: 'boolean', default: false },
             'context-transport': { type: 'string' },
+            'context-transform': { type: 'string', default: 'raw' },
             'trace-dir': { type: 'string' },
             policy: { type: 'string' },
             'unsafe-allow': { type: 'string', multiple: true },
@@ -638,6 +651,7 @@ async function runWebAiCliInner(argv = [], deps) {
         strict: false,
     });
 
+    values['context-transform'] = normalizeContextTransformMode(values['context-transform']);
     applyVendorDefaults(values, command);
     rejectFutureScope(values);
     const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some((/** @type {any} */ a) => a.startsWith('--vendor='));
@@ -705,6 +719,7 @@ async function runWebAiCliInner(argv = [], deps) {
         attachmentUploadTimeoutMs: values['attachment-upload-timeout-ms'] || process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS,
         filesReport: values['files-report'],
         contextTransport: values['context-transport'],
+        contextTransform: values['context-transform'],
         inlineOnly: values['inline-only'],
         allowCopyMarkdownFallback: values['allow-copy-markdown-fallback'] === true,
         allowGrokContextPack: values['allow-grok-context-pack'] === true,
