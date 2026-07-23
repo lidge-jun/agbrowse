@@ -96,8 +96,11 @@ export function toJsonResult(result, options = {}) {
  * @returns {string}
  */
 function renderSummary(result) {
+    const repomixSummary = result.contextTransform === 'repomix' && result.repomix
+        ? `${plural(result.files.length, 'artifact')}, ${plural(Number(result.repomix.totalFiles), 'source file')}`
+        : null;
     const lines = [
-        `[context-dry-run] ${result.files.length} files, ~${result.budget.estimatedTokens} / ${result.budget.maxInputTokens} tokens (${result.budget.status})`,
+        `[context-dry-run] ${repomixSummary || `${result.files.length} files`}, ~${result.budget.estimatedTokens} / ${result.budget.maxInputTokens} tokens (${result.budget.status})`,
         `[context-dry-run] inline chars: ${result.budget.inlineChars} / ${result.budget.inlineCharLimit}`,
         `[context-dry-run] transport: ${result.transport || 'upload'}`,
     ];
@@ -106,7 +109,7 @@ function renderSummary(result) {
         lines.push('[context-dry-run] transform: repomix');
         if (result.repomix) {
             lines.push(`[context-dry-run] repomix: ${String(result.repomix.version || 'unknown')} (${String(result.repomix.source || 'unknown')})`);
-            lines.push(`[context-dry-run] config: ${String(result.repomix.configPath || 'built-in defaults')}`);
+            lines.push('[context-dry-run] config: Repomix automatic resolution (config or built-in defaults)');
         }
     }
 
@@ -119,7 +122,7 @@ function renderSummary(result) {
     }
 
     lines.push('');
-    lines.push('Included:');
+    lines.push(result.contextTransform === 'repomix' ? 'Repomix artifacts:' : 'Included:');
     if (result.files.length === 0) lines.push('  (none)');
     for (const file of result.files) {
         lines.push(`  - ${file.relativePath} — ~${file.estimatedTokens} tokens, ${file.sizeBytes} bytes`);
@@ -141,4 +144,9 @@ function renderSummary(result) {
     }
 
     return lines.join('\n');
+}
+
+/** @param {number} count @param {string} singular */
+function plural(count, singular) {
+    return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }

@@ -131,6 +131,39 @@ describe('ChatGPT attachment upload surface', () => {
         expect(complete).toMatchObject({ ok: true, expectedCount: 3, observedCount: 3 });
     });
 
+    it('accepts a complete fallback chip surface when an earlier surface is partial', async () => {
+        const result = await waitForChatGptRepomixAttachmentCount({
+            locator: selector => ({
+                count: async () => {
+                    if (/progressbar|uploading|processing|upload-progress/i.test(selector)) return 0;
+                    if (selector.includes('Remove file')) return 1;
+                    if (selector.includes('Remove attachment')) return 2;
+                    if (selector.includes('.group\\/file-tile')) return 3;
+                    return 0;
+                },
+            }),
+            waitForTimeout: async () => undefined,
+        }, 3, { timeoutMs: 0 });
+
+        expect(result).toMatchObject({ ok: true, expectedCount: 3, observedCount: 3 });
+    });
+
+    it('reports the largest partial surface when no attachment count is exact', async () => {
+        const result = await waitForChatGptRepomixAttachmentCount({
+            locator: selector => ({
+                count: async () => {
+                    if (/progressbar|uploading|processing|upload-progress/i.test(selector)) return 0;
+                    if (selector.includes('Remove file')) return 1;
+                    if (selector.includes('Remove attachment')) return 2;
+                    return 0;
+                },
+            }),
+            waitForTimeout: async () => undefined,
+        }, 3, { timeoutMs: 0 });
+
+        expect(result).toMatchObject({ ok: false, expectedCount: 3, observedCount: 2 });
+    });
+
     it('runs the Repomix count gate after upload acceptance and before submit', () => {
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
         const sendBody = chatgptSrc.slice(

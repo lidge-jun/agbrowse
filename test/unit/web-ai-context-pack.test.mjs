@@ -201,6 +201,45 @@ throw new Error('raw mode must not evaluate Repomix config');
         expect(await readFakeRepomixEvents(fake.eventFile)).toEqual([]);
     });
 
+    it('distinguishes Repomix artifacts from packed source files in human dry-run output', () => {
+        const summary = renderContextDryRunReport({
+            ok: true,
+            status: 'ready',
+            vendor: 'chatgpt',
+            budget: {
+                status: 'ok',
+                estimatedTokens: 25,
+                maxInputTokens: 1_000,
+                inlineChars: 0,
+                inlineCharLimit: 80_000,
+            },
+            transport: 'upload',
+            contextTransform: 'repomix',
+            files: [{
+                path: '/tmp/repomix-output.xml',
+                relativePath: 'repomix-output.xml',
+                estimatedTokens: 25,
+                sizeBytes: 100,
+            }],
+            attachments: [],
+            repomix: {
+                version: '1.17.0',
+                source: 'project-local',
+                configPath: null,
+                configResolution: 'repomix-auto',
+                totalFiles: 100,
+            },
+            excluded: [],
+            warnings: [],
+        });
+
+        expect(summary).toContain('[context-dry-run] 1 artifact, 100 source files, ~25 / 1000 tokens (ok)');
+        expect(summary).toContain('[context-dry-run] config: Repomix automatic resolution (config or built-in defaults)');
+        expect(summary).toContain('\nRepomix artifacts:\n');
+        expect(summary).not.toContain('[context-dry-run] 1 files');
+        expect(summary).not.toContain('\nIncluded:\n');
+    });
+
     it('renders repomix content and notice before inline budget calculation', async () => {
         const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-inline-'));
         await mkdir(join(dir, 'src'), { recursive: true });

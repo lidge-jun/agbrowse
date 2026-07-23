@@ -231,10 +231,11 @@ export async function waitForChatGptRepomixAttachmentCount(page, expectedCount, 
             Promise.all(CHATGPT_REPOMIX_ATTACHMENT_COUNT_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
             Promise.all(CHATGPT_REPOMIX_UPLOAD_PROGRESS_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
         ]);
-        // Selectors are ordered from one-remove-button-per-chip to broader tile
-        // fallbacks. Use the first available surface so one chip matching
-        // several selectors is never double-counted.
-        observedCount = attachmentCounts.find(count => count > 0) || 0;
+        // Each surface may represent only part of a mixed attachment batch.
+        // Prefer any complete surface, then retain the largest partial count
+        // for diagnostics without summing cross-selector duplicates.
+        const exactCount = attachmentCounts.find(count => count === expectedCount);
+        observedCount = exactCount ?? Math.max(0, ...attachmentCounts);
         progressCount = progressCounts.reduce((total, count) => total + count, 0);
         if (progressCount === 0 && observedCount === expectedCount) {
             return { ok: true, expectedCount, observedCount };
