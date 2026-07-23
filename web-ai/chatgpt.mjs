@@ -176,7 +176,10 @@ export async function sendWebAi(deps, input = {}) {
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelope(envelope);
-    const selectedModel = await selectChatGptModel(page, input.model, { effort: input.reasoningEffort });
+    const selectedModel = await selectChatGptModel(page, input.model, {
+        effort: input.reasoningEffort,
+        family: input.family,
+    });
 
     await waitForStableAssistantCount(page);
     const assistantCount = await countAssistantMessages(page);
