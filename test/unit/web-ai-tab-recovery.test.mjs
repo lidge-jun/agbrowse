@@ -41,7 +41,41 @@ import {
     isWorkSessionWithBareOrigin,
     isSafeChatGptConversationUrl,
     urlsCompatible,
+    isCdpDisconnectError,
 } from '../../web-ai/tab-recovery.mjs';
+
+describe('isCdpDisconnectError', () => {
+    it.each([
+        new Error('Browser disconnected while reading response'),
+        new Error('Connection closed while reading from transport'),
+        new Error('CDP session detached'),
+        new Error('Protocol error: session closed'),
+        new Error('WebSocket is not open: readyState 3'),
+        Object.assign(new Error('watch failed'), { cause: new Error('connection to the browser was lost') }),
+    ])('matches recoverable CDP transport fixture %#', (error) => {
+        expect(isCdpDisconnectError(error)).toBe(true);
+    });
+
+    it.each([
+        new Error('Target closed'),
+        new Error('Page closed'),
+        new Error('Browser has been closed'),
+        new Error('Page crashed'),
+        new Error('Protocol error: Target closed'),
+    ])('excludes page, target, and browser death fixture %#', (error) => {
+        expect(isCdpDisconnectError(error)).toBe(false);
+    });
+});
+
+describe('reattachSessionPage target-preserving contract', () => {
+    it('resolves only the persisted target and contains no replacement or navigation path', () => {
+        const body = recoverySrc.match(/export async function reattachSessionPage[\s\S]*?\n\}/)?.[0] || '';
+        expect(body).toContain('getPageByTargetId(deps.getPort(), session.targetId)');
+        expect(body).not.toContain('createTab');
+        expect(body).not.toContain('.goto(');
+        expect(body).not.toContain('updateSession');
+    });
+});
 
 describe('isBareOriginUrl', () => {
     it('returns true for "https://chatgpt.com/"', () => {

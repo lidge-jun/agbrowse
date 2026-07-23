@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
  *   targetId: string|null,
  *   tabId: string|null,
  *   tabState?: { createdAt?: string, lastActiveAt?: string, recoveryCount?: number, closeCount?: number, [extra: string]: unknown },
+ *   cdpRecovery?: { fingerprint: string, attemptedAt: string }|null,
  *   originalUrl: string|null,
  *   conversationUrl: string|null,
  *   promptHash: string,

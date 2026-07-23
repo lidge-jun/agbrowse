@@ -13,7 +13,8 @@ import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
 import { getSession, updateSession } from './session.mjs';
-import { withSessionPage, urlsCompatible } from './tab-recovery.mjs';
+import { isRecoverableCdpDisconnect, probeCdpLiveness } from './cdp-liveness.mjs';
+import { isCdpDisconnectError, reattachSessionPage, withSessionPage, urlsCompatible } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
@@ -119,8 +120,9 @@ export async function watchSession(deps, input = {}, notifier = null) {
 /**
  * @param {any} deps
  * @param {any} input
+ * @param {{ probeCdpLiveness?: typeof probeCdpLiveness, reattachSessionPage?: typeof reattachSessionPage, callVendorPoll?: typeof callVendorPoll }} [recoveryDeps]
  */
-export async function watchSessionOnce(deps, input = {}) {
+export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
     const options = normalizeWatchOptions(input);
     const session = getSession(options.sessionId);
     if (!session) {
@@ -190,7 +192,10 @@ export async function watchSessionOnce(deps, input = {}) {
     // returns the updated session; use that healed copy for the attach check instead
     // of the stale outer `session`, which previously re-introduced a false
     // reattach-mismatch (issue #77 watch-path).
-    return withSessionPage(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
+    const pollVendor = recoveryDeps.callVendorPoll || callVendorPoll;
+    let consumedDisconnect = null;
+    try {
+        const result = await withSessionPage(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
         const profileLockSummary = await readProfileLockSummary()
             .catch(err => ({ state: 'unknown', error: err?.message || String(err) }));
         const reattach = await ensureWatcherAttached(page, resolvedSession || session, options);
@@ -229,7 +234,11 @@ export async function watchSessionOnce(deps, input = {}) {
         };
 
         const domHashBefore = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
-        const pollResult = await callVendorPoll(sessionDeps, vendor, session, options);
+        const pollResult = await pollVendor(sessionDeps, vendor, resolvedSession || session, options);
+        if (pollResult?.status === 'tab-crashed' && isCdpDisconnectError(pollResult.error)) {
+            consumedDisconnect = { error: pollResult.error, pollResult };
+            return pollResult;
+        }
         const domHashAfter = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
         const answerText = typeof (/** @type {any} */ (pollResult)).answerText === 'string'
             ? (/** @type {any} */ (pollResult)).answerText
@@ -281,7 +290,112 @@ export async function watchSessionOnce(deps, input = {}) {
             preflight,
             profileLock: profileLockSummary,
         };
+        });
+        if (!consumedDisconnect) return result;
+    } catch (err) {
+        if (!isCdpDisconnectError(err)) throw err;
+        return recoverCdpDisconnect(deps, options, vendor, err, null, recoveryDeps);
+    }
+    return recoverCdpDisconnect(
+        deps,
+        options,
+        vendor,
+        consumedDisconnect.error,
+        consumedDisconnect.pollResult,
+        recoveryDeps,
+    );
+}
+
+/**
+ * One durable, target-preserving recovery attempt. This intentionally does not
+ * re-run attach checks, preflight, or the original harvest callback.
+ * @param {any} deps
+ * @param {any} options
+ * @param {string} vendor
+ * @param {unknown} disconnect
+ * @param {any} consumedResult
+ * @param {{ probeCdpLiveness?: typeof probeCdpLiveness, reattachSessionPage?: typeof reattachSessionPage, callVendorPoll?: typeof callVendorPoll }} recoveryDeps
+ */
+async function recoverCdpDisconnect(deps, options, vendor, disconnect, consumedResult, recoveryDeps) {
+    const preserved = getSession(options.sessionId);
+    if (!preserved) throw disconnect;
+    const fingerprint = cdpDisconnectFingerprint(preserved.targetId, disconnect);
+    if (preserved.cdpRecovery?.fingerprint === fingerprint) {
+        return consumedResult || {
+            ok: false, sessionId: preserved.sessionId, vendor,
+            status: preserved.status || 'polling', terminal: false,
+            warnings: appendUniqueWarning(preserved.warnings || [], 'watcher-cdp-recovery-already-attempted'),
+        };
+    }
+
+    const attemptedAt = new Date().toISOString();
+    updateSession(preserved.sessionId, { cdpRecovery: { fingerprint, attemptedAt } });
+    const probe = recoveryDeps.probeCdpLiveness || probeCdpLiveness;
+    const liveness = await probe({ port: deps.getPort(), targetId: preserved.targetId });
+    const recoverable = isRecoverableCdpDisconnect(liveness);
+    const warning = recoverable ? 'watcher-cdp-reattach-once' : 'watcher-cdp-recovery-skipped';
+    updateSession(preserved.sessionId, {
+        status: recoverable ? 'polling' : preserved.status,
+        lastError: {
+            errorCode: 'watcher.cdp-disconnected',
+            message: recoverable
+                ? 'CDP client disconnected; saved target is still reachable'
+                : 'CDP connection lost and saved target liveness was not proven',
+            evidence: { ...liveness, recoverable, fingerprint },
+        },
+        warnings: appendUniqueWarning(preserved.warnings || [], warning),
     });
+    if (!recoverable) {
+        if (consumedResult) return { ...consumedResult, warnings: mergeWarnings(consumedResult.warnings || [], [warning]) };
+        throw disconnect;
+    }
+
+    const reattach = recoveryDeps.reattachSessionPage || reattachSessionPage;
+    const resolved = await reattach(deps, preserved.sessionId);
+    const checkpoint = getSession(preserved.sessionId) || preserved;
+    if (hasFinalizedSession(checkpoint)) {
+        return {
+            ok: true, sessionId: checkpoint.sessionId, vendor,
+            status: checkpoint.status, terminal: true,
+            answerText: checkpoint.answer || null,
+            warnings: checkpoint.warnings || [],
+        };
+    }
+
+    const sessionDeps = {
+        ...deps,
+        getPage: async () => resolved.page,
+        getTargetId: async () => resolved.targetId,
+    };
+    const pollVendor = recoveryDeps.callVendorPoll || callVendorPoll;
+    const pollResult = await pollVendor(sessionDeps, vendor, checkpoint, options);
+    const refreshed = getSession(checkpoint.sessionId) || checkpoint;
+    const status = refreshed.status || pollResult.status || 'polling';
+    const answerText = typeof pollResult.answerText === 'string'
+        ? pollResult.answerText
+        : (typeof pollResult.answer === 'string' ? pollResult.answer : null);
+    return {
+        ok: pollResult.ok !== false,
+        sessionId: checkpoint.sessionId,
+        vendor,
+        status,
+        terminal: TERMINAL_SESSION_STATUSES.has(status),
+        url: resolved.page?.url?.() || null,
+        answerText,
+        warnings: mergeWarnings(pollResult.warnings || [], [warning]),
+    };
+}
+
+/** @param {any} session */
+function hasFinalizedSession(session) {
+    return TERMINAL_SESSION_STATUSES.has(session?.status) || Boolean(session?.completedAt) || Boolean(session?.answer);
+}
+
+/** @param {string|null|undefined} targetId @param {unknown} err */
+function cdpDisconnectFingerprint(targetId, err) {
+    const message = String((/** @type {any} */ (err))?.message || err || '')
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+    return `${targetId || 'missing-target'}:${message}`;
 }
 
 /**

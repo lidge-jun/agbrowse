@@ -219,6 +219,34 @@ export function isPageDeathError(err) {
     );
 }
 
+/**
+ * Classify a lost CDP client transport without conflating it with a dead page,
+ * target, or browser. Liveness is decided separately over DevTools HTTP.
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function isCdpDisconnectError(err) {
+    const seen = new Set();
+    let current = err;
+    while (current != null && !seen.has(current)) {
+        seen.add(current);
+        const msg = String((/** @type {any} */ (current))?.message || current || '').toLowerCase();
+        if (isPageDeathError(current)) return false;
+        if (
+            msg.includes('browser disconnected') ||
+            msg.includes('connection closed') ||
+            msg.includes('websocket is not open') ||
+            msg.includes('websocket closed') ||
+            msg.includes('connection to the browser') ||
+            msg.includes('cdp session detached') ||
+            msg.includes('session closed') ||
+            (msg.includes('protocol error') && (msg.includes('connection') || msg.includes('session')))
+        ) return true;
+        current = (/** @type {any} */ (current))?.cause;
+    }
+    return false;
+}
+
 // ─── Work-session recovery guards (04 section 6, round-2 fix) ──────────
 
 /**
@@ -557,6 +585,22 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
         url: page.url?.() || current.conversationUrl || current.originalUrl || '',
         conversationUrl: current.conversationUrl || null,
     };
+}
+
+/**
+ * Reconnect to the session's saved target without navigation or replacement.
+ * The caller must independently prove endpoint and target liveness first.
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @returns {Promise<ResolvedPage<unknown>>}
+ */
+export async function reattachSessionPage(deps, sessionId) {
+    const session = getSession(sessionId);
+    if (!session?.targetId) throw new Error(`Session ${sessionId} has no targetId for CDP reattach`);
+    const page = await getPageByTargetId(deps.getPort(), session.targetId);
+    if (!page) throw new Error(`Session ${sessionId} target ${session.targetId} unavailable after CDP reconnect`);
+    page.url();
+    return { page, targetId: session.targetId, session };
 }
 
 /**
