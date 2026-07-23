@@ -20,7 +20,7 @@ describe('web-ai ChatGPT composer tool resolver', () => {
     });
 
     it('selects composer tools only after the composer is ready', () => {
-        const readyIndex = chatgptSrc.indexOf('await readinessAdapter.waitForReady();');
+        const readyIndex = chatgptSrc.indexOf('await waitForChatGptComposerReady(page, readinessAdapter);');
         const toolsIndex = chatgptSrc.indexOf('const selectedTools = await selectChatGptComposerTools(page, input);');
 
         expect(readyIndex).toBeGreaterThan(-1);

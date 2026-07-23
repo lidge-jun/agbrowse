@@ -23,6 +23,7 @@ import {
     updateSession,
 } from './session.mjs';
 import { WebAiError } from './errors.mjs';
+import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { saveAssistantDownloadableFiles } from './chatgpt-files.mjs';
 import { observeAssistantResponse, recoverAssistantResponse } from './chatgpt-response-observer.mjs';
@@ -353,7 +354,7 @@ export async function sendWebAi(deps, input = {}) {
         },
     };
     const readinessAdapter = createChatGptEditorAdapter(page, editorOptions);
-    await readinessAdapter.waitForReady();
+    await waitForChatGptComposerReady(page, readinessAdapter);
     const selectedTools = await selectChatGptComposerTools(page, input);
     const traceCtx = createTraceContext(session.sessionId);
     let tracePersisted = false;
@@ -473,6 +474,33 @@ export async function sendWebAi(deps, input = {}) {
         };
     } finally {
         if (!tracePersisted) persistResolverTrace(session.sessionId, traceCtx);
+    }
+}
+
+/**
+ * Preserve the composer readiness error unless a bounded ChatGPT-scoped probe
+ * identifies a provider interstitial.
+ * @param {any} page
+ * @param {{ waitForReady: () => Promise<void> }} readinessAdapter
+ * @param {{ detect?: typeof detectInterstitial }} [options]
+ */
+export async function waitForChatGptComposerReady(page, readinessAdapter, { detect = detectInterstitial } = {}) {
+    try {
+        await readinessAdapter.waitForReady();
+    } catch (cause) {
+        const verdict = await detect(page, { shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.chatgpt });
+        if (verdict.kind !== 'none') {
+            throw new WebAiError({
+                errorCode: 'provider.interstitial',
+                stage: 'provider-interstitial',
+                vendor: 'chatgpt',
+                retryHint: verdict.retryHint,
+                message: `ChatGPT interstitial blocked composer readiness: ${verdict.kind}`,
+                evidence: verdict,
+                cause,
+            });
+        }
+        throw cause;
     }
 }
 

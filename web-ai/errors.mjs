@@ -11,6 +11,7 @@
 //                                                        tab-switch|poll-session
 //   session.target-ambiguous        target-resolution    pass-session
 //   provider.composer-not-visible   composer-prereq      re-snapshot
+//   provider.interstitial           provider-interstitial wait-and-retry|login|navigate
 //   provider.model-mismatch         provider-select-mode model-fallback
 //   provider.attachment-preflight   attachment-preflight inline-only-or-file
 //   provider.attachment-evidence-missing

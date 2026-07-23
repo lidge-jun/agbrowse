@@ -1,107 +1,164 @@
 // @ts-check
 
-// Parity catalog 201 #4 (P1): unified interstitial detector. agbrowse scattered
-// per-vendor cloudflare/login patterns across chatgpt/grok/gemini-live; this is one
-// typed detector (cloudflare-challenge / login-required / empty-shell / loading / none)
-// with a retryHint, plus isPageDeathError. Reverse port of cli-jaw web-ai/interstitial.ts.
-// classifyInterstitial is pure (all page signals passed in) so it is fully unit-testable.
-
 /**
  * @typedef {'cloudflare-challenge'|'login-required'|'empty-shell'|'loading'|'none'} InterstitialKind
  * @typedef {{ kind: InterstitialKind, evidence: string, url: string, retryHint: 'wait-and-retry'|'login'|'navigate'|'none' }} InterstitialResult
+ * @typedef {'strong'|'shell-vetoed'|'weak'|'none'} CloudflareEvidenceKind
+ * @typedef {{ kind: CloudflareEvidenceKind, evidence: string }} CloudflareVerdict
+ * @typedef {{ url: string, title: string, bodyText: string, hasComposer: boolean, hasTurns: boolean, hasChallengeWidget: boolean, hasChallengeScript: boolean }} InterstitialSignals
+ * @typedef {{ composer: string[], turns: string[] }} ShellSelectors
+ * @typedef {{ now: () => number, sleep: (ms: number) => Promise<void> }} Scheduler
  */
 
-const CLOUDFLARE_PATTERNS = [
-    'just a moment',
-    'checking if the site connection is secure',
-    'enable javascript and cookies',
-    'ray id',
+const GENERIC_CHALLENGE_PATTERNS = [
+    /verify(?:ing)? you are human/,
+    /checking your browser/,
+    /needs to review the security of your connection/,
+    /checking if the site connection is secure/,
+    /enable javascript and cookies/,
+    /just a moment/,
+    /ray id/,
 ];
 
-const LOGIN_PATTERNS = [
-    'log in',
-    'sign in',
-    'sign up',
-    'create an account',
-    'welcome back',
+const LOGIN_PATTERNS = ['log in', 'sign in', 'sign up', 'create an account', 'welcome back'];
+const CHALLENGE_WIDGET_SELECTORS = [
+    '#challenge-form',
+    '#challenge-running',
+    '#cf-challenge-running',
+    '[class*="cf-challenge"]',
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="/cdn-cgi/challenge-platform/"]',
 ];
+const CHALLENGE_SCRIPT_SELECTORS = ['script[src*="/cdn-cgi/challenge-platform/"]'];
 
-const COMPOSER_SELECTORS = [
-    '#prompt-textarea',
-    '[data-testid="composer-textarea"]',
-    'div[contenteditable="true"]',
-];
+export const INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER = Object.freeze({
+    chatgpt: Object.freeze({
+        composer: Object.freeze(['#prompt-textarea', '[data-testid="composer-textarea"]', 'div[contenteditable="true"]']),
+        turns: Object.freeze(['[data-message-author-role="assistant"]', '[data-turn="assistant"]', 'article[data-testid^="conversation-turn"]']),
+    }),
+    grok: Object.freeze({
+        composer: Object.freeze(['.ProseMirror', '[contenteditable="true"]']),
+        turns: Object.freeze(['[data-testid="assistant-message"]']),
+    }),
+    gemini: Object.freeze({
+        composer: Object.freeze(['rich-textarea [contenteditable="true"]', 'textarea']),
+        turns: Object.freeze(['model-response', '[data-response-index]']),
+    }),
+});
 
-const ASSISTANT_TURN_SELECTORS = [
-    '[data-message-author-role="assistant"]',
-    '[data-turn="assistant"]',
-    'article[data-testid^="conversation-turn"]',
-];
+export const CLOUDFLARE_SHORT_BODY_LENGTH = 600;
+const CLOUDFLARE_HYDRATION_GRACE_MS = 12_000;
+const CLOUDFLARE_REPROBE_INTERVAL_MS = 500;
+const PROBE_TIMEOUT_MS = 250;
+const MIN_REPROBE_INTERVAL_MS = 1;
 
-/**
- * Classify an interstitial from already-gathered page signals (pure).
- * @param {{ url?: string, bodyText?: string, hasComposer?: boolean, hasTurns?: boolean }} signals
- * @returns {InterstitialResult}
- */
-export function classifyInterstitial({ url = '', bodyText = '', hasComposer = false, hasTurns = false } = {}) {
-    const lower = bodyText.toLowerCase();
+/** @param {Partial<InterstitialSignals>} signals @returns {CloudflareVerdict} */
+export function classifyCloudflareVerdict({
+    title = '', bodyText = '', hasComposer = false, hasTurns = false,
+    hasChallengeWidget = false, hasChallengeScript = false,
+} = {}) {
+    const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
+    const normalizedBody = bodyText.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (hasComposer || hasTurns) return { kind: 'shell-vetoed', evidence: hasComposer ? 'composer' : 'conversation turn' };
 
-    if (CLOUDFLARE_PATTERNS.some((p) => lower.includes(p))) {
-        const matched = CLOUDFLARE_PATTERNS.find((p) => lower.includes(p)) || 'cloudflare';
-        return { kind: 'cloudflare-challenge', evidence: matched, url, retryHint: 'wait-and-retry' };
+    const titleSaysChallenge = normalizedTitle.includes('just a moment')
+        || (normalizedTitle.includes('attention required') && normalizedTitle.includes('cloudflare'));
+    if (titleSaysChallenge) return { kind: 'strong', evidence: 'challenge title' };
+    if (hasChallengeWidget) return { kind: 'strong', evidence: 'challenge widget' };
+
+    const isShortPage = normalizedBody.length < CLOUDFLARE_SHORT_BODY_LENGTH;
+    const matchedCopy = isShortPage ? GENERIC_CHALLENGE_PATTERNS.find((pattern) => pattern.test(normalizedBody)) : undefined;
+    if (matchedCopy) return { kind: 'strong', evidence: `challenge copy: ${matchedCopy.source}` };
+    if (isShortPage && hasChallengeScript) return { kind: 'weak', evidence: 'challenge script on short page' };
+    return { kind: 'none', evidence: '' };
+}
+
+/** @param {Partial<InterstitialSignals>} signals @returns {InterstitialResult} */
+export function classifyInterstitial({ url = '', bodyText = '', hasComposer = false, hasTurns = false, ...rest } = {}) {
+    const cloudflare = classifyCloudflareVerdict({ bodyText, hasComposer, hasTurns, ...rest });
+    if (cloudflare.kind === 'strong') {
+        return { kind: 'cloudflare-challenge', evidence: cloudflare.evidence, url, retryHint: 'wait-and-retry' };
     }
-
+    const lower = bodyText.toLowerCase();
     if (/^https:\/\/auth0?\.|\/auth\/|\/login/i.test(url)) {
         return { kind: 'login-required', evidence: `auth URL: ${url}`, url, retryHint: 'login' };
     }
-    if (LOGIN_PATTERNS.some((p) => lower.includes(p)) && bodyText.length < 2000) {
-        const matched = LOGIN_PATTERNS.find((p) => lower.includes(p)) || 'login';
+    if (LOGIN_PATTERNS.some((pattern) => lower.includes(pattern)) && bodyText.length < 2000) {
+        const matched = LOGIN_PATTERNS.find((pattern) => lower.includes(pattern)) || 'login';
         return { kind: 'login-required', evidence: matched, url, retryHint: 'login' };
     }
-
-    const isChatGptUrl = /chatgpt\.com|chat\.openai\.com/.test(url);
-    if (isChatGptUrl && !hasComposer && !hasTurns && bodyText.length < 500) {
+    if (/chatgpt\.com|chat\.openai\.com/.test(url) && !hasComposer && !hasTurns && bodyText.length < 500) {
         return { kind: 'empty-shell', evidence: 'no composer and no turns', url, retryHint: 'wait-and-retry' };
     }
-
     return { kind: 'none', evidence: '', url, retryHint: 'none' };
 }
 
 /**
- * Detect an interstitial on a live page (gathers body text + composer/turn presence).
  * @param {any} page
+ * @param {{ graceMs?: number, intervalMs?: number, probeTimeoutMs?: number, shellSelectors?: ShellSelectors, scheduler?: Scheduler }} [options]
  * @returns {Promise<InterstitialResult>}
  */
-export async function detectInterstitial(page) {
+export async function detectInterstitial(page, {
+    graceMs = CLOUDFLARE_HYDRATION_GRACE_MS,
+    intervalMs = CLOUDFLARE_REPROBE_INTERVAL_MS,
+    probeTimeoutMs = PROBE_TIMEOUT_MS,
+    shellSelectors = { composer: [], turns: [] },
+    scheduler = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+} = {}) {
     const url = page?.url?.() || '';
-    try {
-        const bodyText = await page.innerText('body').catch(() => '');
-        const hasComposer = await hasAnySelector(page, COMPOSER_SELECTORS);
-        const hasTurns = await hasAnySelector(page, ASSISTANT_TURN_SELECTORS);
-        return classifyInterstitial({ url, bodyText, hasComposer, hasTurns });
-    } catch {
-        return { kind: 'none', evidence: 'detection failed', url, retryHint: 'none' };
+    const boundedGraceMs = Math.max(0, Number.isFinite(graceMs) ? graceMs : CLOUDFLARE_HYDRATION_GRACE_MS);
+    const boundedIntervalMs = Math.max(MIN_REPROBE_INTERVAL_MS, Number.isFinite(intervalMs) ? intervalMs : CLOUDFLARE_REPROBE_INTERVAL_MS);
+    const boundedProbeMs = Math.max(1, Number.isFinite(probeTimeoutMs) ? probeTimeoutMs : PROBE_TIMEOUT_MS);
+    const deadline = scheduler.now() + boundedGraceMs;
+    for (;;) {
+        const signals = await gatherInterstitialSignals(page, url, shellSelectors, boundedProbeMs, scheduler);
+        const verdict = classifyCloudflareVerdict(signals);
+        if (verdict.kind === 'strong') return cloudflareResult(url, verdict.evidence);
+        if (verdict.kind === 'shell-vetoed') return classifyInterstitial(signals);
+        if (verdict.kind === 'none') return classifyInterstitial(signals);
+        if (scheduler.now() >= deadline) return cloudflareResult(url, verdict.evidence);
+        await scheduler.sleep(Math.min(boundedIntervalMs, Math.max(MIN_REPROBE_INTERVAL_MS, deadline - scheduler.now())));
     }
 }
 
-/**
- * @param {unknown} err
- * @returns {boolean}
- */
-export function isPageDeathError(err) {
-    const msg = String((/** @type {{message?: string}} */ (err))?.message || err || '').toLowerCase();
-    return msg.includes('target closed') || msg.includes('page closed') || msg.includes('browser has been closed') || msg.includes('crash');
+/** @param {string} url @param {string} evidence @returns {InterstitialResult} */
+function cloudflareResult(url, evidence) {
+    return { kind: 'cloudflare-challenge', evidence, url, retryHint: 'wait-and-retry' };
 }
 
-/**
- * @param {any} page
- * @param {string[]} selectors
- * @returns {Promise<boolean>}
- */
-async function hasAnySelector(page, selectors) {
-    for (const sel of selectors) {
-        const count = await page.locator(sel).count().catch(() => 0);
+/** @param {any} page @param {string} url @param {ShellSelectors} shellSelectors @param {number} timeoutMs @param {Scheduler} scheduler @returns {Promise<InterstitialSignals>} */
+async function gatherInterstitialSignals(page, url, shellSelectors, timeoutMs, scheduler) {
+    const [title, bodyText, hasComposer, hasTurns, hasChallengeWidget, hasChallengeScript] = await Promise.all([
+        boundedProbe(() => page.title(), '', timeoutMs, scheduler),
+        boundedProbe(() => page.innerText('body'), '', timeoutMs, scheduler),
+        hasAnySelector(page, shellSelectors.composer || [], timeoutMs, scheduler),
+        hasAnySelector(page, shellSelectors.turns || [], timeoutMs, scheduler),
+        hasAnySelector(page, CHALLENGE_WIDGET_SELECTORS, timeoutMs, scheduler),
+        hasAnySelector(page, CHALLENGE_SCRIPT_SELECTORS, timeoutMs, scheduler),
+    ]);
+    return { url, title, bodyText, hasComposer, hasTurns, hasChallengeWidget, hasChallengeScript };
+}
+
+/** @template T @param {() => Promise<T>} probe @param {T} fallback @param {number} timeoutMs @param {Scheduler} scheduler @returns {Promise<T>} */
+async function boundedProbe(probe, fallback, timeoutMs, scheduler) {
+    try {
+        return await Promise.race([Promise.resolve().then(probe), scheduler.sleep(timeoutMs).then(() => fallback)]);
+    } catch {
+        return fallback;
+    }
+}
+
+/** @param {any} page @param {readonly string[]} selectors @param {number} timeoutMs @param {Scheduler} scheduler */
+async function hasAnySelector(page, selectors, timeoutMs, scheduler) {
+    for (const selector of selectors) {
+        const count = await boundedProbe(() => page.locator(selector).count(), 0, timeoutMs, scheduler);
         if (count > 0) return true;
     }
     return false;
+}
+
+/** @param {unknown} err @returns {boolean} */
+export function isPageDeathError(err) {
+    const msg = String((/** @type {{message?: string}} */ (err))?.message || err || '').toLowerCase();
+    return msg.includes('target closed') || msg.includes('page closed') || msg.includes('browser has been closed') || msg.includes('crash');
 }
