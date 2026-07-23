@@ -1,6 +1,14 @@
 # 010 — Streaming Scope Hardening
 
 Status: D (diff-level implementation roadmap)
+
+## Audit amendments (round 1, Sol reviewer Newton — GO-WITH-FIXES, 5 blockers, all folded)
+
+1. **Latest-assistant-turn must be role-verified** (High): do not treat the last top-level match of the combined selector list as assistant. Selection rule: prefer the last node matching `[data-message-author-role="assistant"]`/`[data-turn="assistant"]`; use its nearest top-level conversation wrapper as the progress scope. A bare `article[data-testid^="conversation-turn"]` without an assistant-role descendant is NOT an assistant turn.
+2. **Behavioral DOM tests, not string assertions** (High): the streaming-state tests must run `readChatGptStreamingState` against real jsdom/happy-dom fixtures — exact stop button hit, form-scoped fallback hit, out-of-form fallback miss, and each `:not()` exclusion (dictation/voice/read) as separate fixtures.
+3. **No new broad completed-sidecar `includes('thought for')`** (High): the predicate must use the anchored duration grammar `/^thought for \d+[a-z]*( seconds?| minutes?)?( edit)?$/i` on normalized visible text (G7/G12 stay deferred; this plan must not introduce a NEW broad suppression). A growing live trace containing "Thought for 2s: Searching…" must remain live.
+4. **Out-of-scope callers declared** (Medium): `chatgpt-deep-research.mjs:49-52`, `chatgpt-work-picker.mjs:690,950`, `chatgpt-multi-turn.mjs:54-56` keep their own stop predicates — WP2 scope is the general ChatGPT response path (`chatgpt.mjs` poller + observer + shared constants). Their migration is recorded as a deferred follow-up row in 040 (G1b).
+5. **Activation table ↔ test mapping** (Medium): every activation row must name its executable test case; ARIA omitted-max and completed-sidecar counter-case get explicit fixtures.
 Format: DIFFLEVEL-ROADMAP-01
 Work-phase: WP2
 Upstream predicates verified with `git show 99b30cfa 0071c547 9f6703bf 93ccb79d` in `/tmp/oracle-chase-260724`.

@@ -1,5 +1,16 @@
 # 080 — Sol CLI reachability and current-tier effort override
 
+## Audit amendments (round 1, Sol reviewer Laplace — GO-WITH-FIXES, 6 blockers, all folded)
+
+**CLI contract OVERRIDE (main-session decision, supersedes the body's "no --family flag" choice):** the repo already encodes the separate family axis — `test/integration/web-ai-cli-contract.test.mjs:358` rejects `--model gpt-5.6-sol` with "should use --family", and `structure/commands.md:282` documents family/tier as separate axes. WP7 therefore adds a dedicated `--family gpt-5.6-sol` CLI flag (ChatGPT-only), keeps `--model` tier-only, and keeps the existing rejection of `--model gpt-5.6-sol` intact. This resolves blocker 3 without contract overload; upstream's alias-to-picker-entry behavior is adapted to agbrowse's two-axis model deliberately (documented divergence).
+
+1. **Phantom constant** (High): `CHATGPT_OBSERVED_PRO_PILL_LABELS` does not exist — define and export the observed Pro pill label list in chatgpt-model.mjs (or derive from existing label tables) before `readActiveProComposerPill()` uses it.
+2. **Final family re-verification** (High): `readVisibleChatGptFamilyEvidence()` is only verified with the family submenu open; effort selection reopens the root menu. The final Sol/Pro guard must reopen via `openSimplifiedIntelligenceSubmenu(page, { forceFamily: true })` (or a dedicated re-read helper) before reading evidence.
+3. **Contract divergence** (High): resolved by the `--family` override above.
+4. **Docs sync scope** (Medium): beyond CLI help/README/commands.md, sync `CAPABILITY_TRUTH_TABLE.md`, `phase_status.md`, `runtime_contracts.md`, root help, `skills/web-ai/SKILL.md`, and EN/KO dev docs where they state the family/effort contract (structure/INDEX.md:72 checklist).
+5. **Gates** (Medium): run `npm run docs:counts` (verify-counts / str_func.md snapshot) and `npm run docs:drift` after changing cli.mjs/chatgpt.mjs/chatgpt-model.mjs; update `structure/str_func.md` counts if tracked.
+6. **Named activation tests** (Medium): parser test proving `--family` maps to `input.family` with `input.model` untouched; family-preservation cases for thinking AND instant tiers; Pro-conflict veto parameterized over observed pill labels (`Pro`, `Standard Pro`, `Extended Pro`); effort-only tests for chatgpt (accepted) and grok/gemini (still rejected).
+
 Date: 2026-07-24  
 Format: `DIFFLEVEL-ROADMAP-01`  
 Upstream mechanisms: `f2f4a6c3`, `52649bad`, `e827942f`

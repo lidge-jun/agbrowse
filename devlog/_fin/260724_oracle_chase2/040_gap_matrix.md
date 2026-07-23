@@ -61,6 +61,23 @@ Deferred: G7-G12 (terminal-gate P2 grammar/strata — dominant risk closed by WP
 
 ## C-phase verification notes (2026-07-24)
 
+## Final dispositions (close-out, 2026-07-24)
+
+| Work-phase | Commit | Gaps closed | Evidence |
+| --- | --- | --- | --- |
+| WP2 | `5e59a9f` | G1, G2, G3, G4 — Implemented | composer-scoped stop + turn-scoped genuine progress + verified sidecar; focused 33/33, unit 1365 at close |
+| WP3 | `fcffa1f` | G5, G6 — Implemented | identity-bound completion, gated copy-fallback, pre-gate image path; unit 1371 |
+| WP4 | `a3ba41c` | G29 — Implemented | conversation-url.mjs predicate + central session gate + effective-target Work guard; unit 1381 |
+| WP5 | `fe52ea5` | G13, G14, G15 — Implemented | structured verdict + shell veto + <600 gate + bounded grace + ChatGPT preflight wiring; unit 1394 |
+| WP6 | `fe219c4` | G30 — Implemented | cdp-liveness probe + disconnect classification + fingerprint-bounded reattach; unit 1422 |
+| WP7 | `f8e8b9b` | G20, G22, G27 — Implemented | --family flag, Pro-conflict final guard, effort-only override + docs sync; unit 1429, drift 164, counts 76 |
+| WP8 | `cdf93ce` | G34 — Implemented | parseProviderLimitEnv strict parser + pool-0 behavioral tests; unit 1450 |
+
+Non-implemented rows unchanged from the matrix: Covered (G19, G21, G24, G26, G32, G33 — path:line proof in 001-005/050), Not-applicable (G23 API routing, G31 serve-owned tabs — rationale in rows), Deferred with rationale (G7-G12 terminal-gate P2 grammar/strata, G16-G18 Work-surface normalization unit, G25 zh locale, G28 DR wrapper, G10 superseded upstream). Follow-up rows recorded during audits: G1b (stop-scoping migration for deep-research/work-picker/multi-turn callers), G13b (grok/gemini interstitial wiring) — both Deferred.
+
+All 34 rows carry a final disposition. Cycle terminal outcome: DONE.
+
 - Decade-doc lanes re-verified every research anchor against the current tree; corrections are recorded inside each decade doc (010/020: observer recovery range refined to `88-145,170-180,182-189`; 030: session writes enumerated incl. `chatgpt-deep-research.mjs:311,335-339,432`, `chatgpt-multi-turn.mjs:209-216`, `chatgpt-work-picker.mjs:871-885`; 070: `watchSessionOnce :123` insertion region; 080/090: CLI anchors `cli.mjs:609-612,722-724`, env reads `tab-lease-store.mjs:69-73`).
-- **Material finding (G13-G15)**: `web-ai/interstitial.mjs` currently has NO production consumer — only `test/unit/web-ai-interstitial.test.mjs:2` imports it. WP5 (060) therefore hardens the detector but production wiring is explicitly OUT of that phase's scope (recorded in 060). The G13-G15 classification stays Gap because the detector is the designated future integration point.
+- **Material finding (G13-G15)**: at analysis time `web-ai/interstitial.mjs` had NO production consumer — only the unit test imported it. The WP5 audit (Hilbert, blocker 1) pulled minimal ChatGPT wiring INTO scope, and `fe52ea5` landed it: `chatgpt.mjs:26` imports the detector and the composer-readiness preflight consumes verdicts at `chatgpt.mjs:490-501`. This note is superseded by the Final dispositions table (G13-G15 Implemented); Grok/Gemini wiring remains deferred as G13b.
+- Covered-row anchors re-verified at close-out (Gibbs audit): all six claims hold on the final tree; post-WP7/WP8 shifted anchors — G21 `chatgpt-model.mjs:60-125,738-888,891-923`; G24 `chatgpt-model.mjs:92-107,165-172,650-735`; G26 `chatgpt-model.mjs:266-283` + `cli.mjs:1622-1632`; G32 `tab-lease-store.mjs:314-392,585-600,623-650`; G33 `tab-lease-store.mjs:99-106,526-550`; G19 `chatgpt-work-picker.mjs:234-289,1007-1053`.
 - Test runner is **Vitest** (`npx vitest run`, `npm run test:unit`), not `node --test` — 010/020 corrected this; all decade docs' test plans use Vitest entry points.

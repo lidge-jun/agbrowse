@@ -1,5 +1,14 @@
 # 030 — Durable ChatGPT conversation URL persistence (G29)
 
+## Audit amendments (round 1, Sol reviewer Planck — GO-WITH-FIXES, 6 blockers, all folded)
+
+1. **Work recovery guard bypass** (High): gating create to `conversationUrl:null` while keeping `originalUrl` lets `{conversationUrl:null, originalUrl:"https://chatgpt.com/"}` bypass the bare-origin Work guard (`tab-recovery.mjs:32` selects `conversationUrl || originalUrl`; guard at `:283` checks only `conversationUrl`). Fix: the Work bare-origin guard must evaluate the EFFECTIVE recovery target (`conversationUrl || originalUrl`), and a named regression test covers the exact post-gate shape.
+2. **Complete producer inventory (current tree)** (Medium): central gate covers all, but record: `tab-recovery.mjs:68,81,112-120,475,540`; `session.mjs:202,224-225`; `chatgpt.mjs:323-329,442-444,1063-1069`; `chatgpt-deep-research.mjs:311,335-339,432`; `chatgpt-multi-turn.mjs:209-216`; `chatgpt-work-picker.mjs:875-885`; `tab-finalizer.mjs:64-72` (previously missed); Work create via `cli.mjs:1937-1943` and `mcp-server.mjs:249-255`; non-ChatGPT `grok-live.mjs:204-210`, `gemini-live.mjs:324-330`.
+3. **Activation-test additions** (Medium): named tests for (a) `WEB:` reattach ⇒ `createTab` NOT called; (b) non-ChatGPT UPDATE bypass (gemini patch passes ungated); (c) blocker-1 Work recovery shape.
+4. **Prefilter scope** (Low): apply suspicious-character checks (`..`, `\`, NUL) to the parsed pathname/authority only, not the raw string — query/fragment content must not reject an otherwise durable URL. Decision: parsed-components-only.
+5. **WP3 mention classification** (Low): `chatgpt.mjs:553` is a live-URL lookup key (no store write); `:919`/`:939` are carry-throughs of stored values into result DTOs — both safe, no gating needed.
+6. **Atomic rollback unit** (Low): predicate + central gate + effective-target Work guard + their tests revert as ONE unit (single WP4 commit).
+
 Date: 2026-07-24  
 Status: Diff-level implementation roadmap  
 Format: DIFFLEVEL-ROADMAP-01  
@@ -260,4 +269,3 @@ npm test
 - **Unexpected ChatGPT id alphabet:** the upstream contract intentionally excludes underscore and colon. If ChatGPT introduces a new durable alphabet, update the one regex and its matrix rather than weakening call sites.
 - **Central-boundary coupling:** `updateSession` performs one read before patch. This is acceptable for the file-backed store but must remain inside the existing lock semantics; do not move validation into `session-store.mjs`, which is vendor-neutral.
 - **Rollback:** revert the new import/predicate and session boundary gate together. Do not roll back only `tab-recovery.mjs`, which would reintroduce mismatch between persistence and navigation safety.
-

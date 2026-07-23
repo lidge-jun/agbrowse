@@ -1,5 +1,16 @@
 # 070 — Recoverable CDP disconnect classification and bounded harvest (G30)
 
+## Audit amendments (round 1, Sol reviewer Lorentz — GO-WITH-FIXES, 8 blockers, all folded)
+
+1. **Poller-consumed failures must reach the policy** (Critical): ChatGPT/Grok/Gemini catch `isPageDeathError`, set `crashed`, and RETURN `status:'tab-crashed'` (chatgpt.mjs:799, grok-live.mjs:319, gemini-live.mjs:679) — a thrown-error catch never sees them. Design decision: the watcher classifies BOTH thrown disconnect errors AND `tab-crashed` poll results whose recorded error text matches `isCdpDisconnectError`; on proven liveness it clears `crashed` and runs the one bounded reattach. Pollers stay unchanged.
+2. **Retry boundary must not duplicate side effects** (High): do not re-run the whole harvest callback. The bounded attempt wraps only re-attach + a fresh `callVendorPoll`; before the second poll, re-read authoritative session state and skip if the session already reached a completed/persisted state (finalization checkpoint guard).
+3. **Durable one-attempt bound** (High): persist a disconnect fingerprint + attempt marker on the session (e.g. `cdpRecovery: { fingerprint, attemptedAt }`); a matching fingerprint blocks further auto-reattach across separate watcher invocations. Test crosses two `watchSessionOnce` calls.
+4. **WP3 identity contract preserved** (High): recovery must harvest only post-baseline turns; baseline/identity reconstruction from session state is asserted by a named test (recovery cannot complete from an older assistant snapshot).
+5. **Classification test matrix** (Medium): representative fixtures for browser disconnect, target closure, CDP session detach, protocol error, wrapped/nested errors; generic "connection closed" alone is a candidate, and reattach proceeds only with endpoint+target liveness proof (the probe is the arbiter, not the text).
+6. **Explicit DI seam** (Medium): `watchSessionOnce` accepts optional deps `{ probeCdpLiveness, reattachSessionPage, callVendorPoll }` (defaults to real impls); activation tests inject fakes — recoverable, endpoint-dead, target-missing, list-error, cross-invocation one-attempt.
+7. **Rollback staging** (Medium): single WP6 commit; rollback order = unhook watcher wiring first (probe/classifier module is inert without it), then remove module. No partial landing.
+8. **Anchors re-based** (Low): `isPageDeathError` 211-220, `resolveSessionPage` 409-560, `withSessionPage` 572-583, `watchSessionOnce` callback 193-284, `callVendorPoll` 515-539; tab-recovery test imports 38-44; watcher executable helpers from :84. Probe endpoints confirmed correct for local CDP (`/json/version` + `/json/list`, port from tab-manager.mjs:107 conventions).
+
 Date: 2026-07-24  
 Status: Diff-level implementation roadmap  
 Format: DIFFLEVEL-ROADMAP-01  

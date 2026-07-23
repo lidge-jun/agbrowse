@@ -1,5 +1,16 @@
 # 060 — Interstitial hardening (G13 + G14 + G15)
 
+## Audit amendments (round 1, Sol reviewer Hilbert — GO-WITH-FIXES, 6 blockers, all folded)
+
+Main-session decisions on the reviewer's findings:
+
+1. **Minimal production wiring PULLED INTO scope** (Critical): hardening an unconsumed detector creates no runtime value. WP5 wires ONE consumer: the ChatGPT composer-readiness preflight failure path (`chatgpt.mjs:355-361`) — on readiness failure, probe the detector and convert a non-`none` verdict into the existing structured error surface (follow the repo's existing error taxonomy; reviewer suggested `WebAiError`-style stage `provider-interstitial`). Grok/Gemini wiring stays OUT (follow-up row G13b in 040). Integration/unit test proves the wired path fires.
+2. **Shell veto is provider-scoped, not "unified"** (High): `hasComposer||hasTurns` with ChatGPT selectors is wrong for Grok (`.ProseMirror`, `[data-testid="assistant-message"]`) and Gemini (`model-response`, `[data-response-index]`). Design: caller supplies provider shell selectors (or a provider selector map); the shipped wiring passes the ChatGPT map; API/docs state ChatGPT-only scope. Grok/Gemini shell fixtures added as named tests for the map shape.
+3. **Truly bounded grace window** (High): per-probe timeouts (title/innerText/locator counts), `intervalMs` clamped to a positive range, injectable `{now, sleep}` scheduler for tests. Named tests: hanging probe bounded; zero/negative interval clamped; probe-error policy.
+4. **Activation matrix 1:1 named tests** (Medium): add strong-title immediate, 600+ content-rich quote page, weak-evidence disappearance, live shell-veto no-sleep; fix the false-positive fixtures (real article without artificial hasTurns; Work fixture with actual Work shell selector + challenge copy). Replace the ordering-brittle makePage with snapshot-scoped fixtures.
+5. **Threshold policy + staged rollback** (Medium): `<600` stays a named constant scoped to the ChatGPT wiring; localized/long-challenge fixture added; rollback order defined: (1) unwire consumer, (2) disable grace polling, (3) revert copy threshold, (4) revert shell selectors — each independently revertible; full revert = the WP5 commit.
+6. **Contract clarity** (Low): do not keep a synchronous API that silently promotes weak⇒challenge; expose the structured verdict as the primary API and keep any instantaneous helper clearly named; shell veto requires visible-element semantics (or an explicit presence-veto fixture documenting the choice).
+
 Date: 2026-07-24  
 Format: DIFFLEVEL-ROADMAP-01  
 Work-phase: WP5  

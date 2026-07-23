@@ -1,5 +1,15 @@
 # 020 — Terminal Evidence Binding
 
+## Audit amendments (round 1, Sol reviewer Anscombe — GO-WITH-FIXES, 7 blockers, all folded)
+
+1. **Copy-Markdown timeout fallback must not bypass the gate** (High): the `allowCopyMarkdownFallback` timeout path (`chatgpt.mjs:821,841,848`) currently returns `status:'complete'` on stable text alone. Bind it to the same sampled-snapshot + scoped terminal proof; without proof it returns deferred/timeout, never complete. Named integration test: fallback active + stable copied text + no correlated controls ⇒ NOT complete.
+2. **One shared top-level assistant-turn resolver** (High): do not re-implement selector-first turn selection. Extract/reuse WP2's role-verified resolver (`chatgpt-response-dom.mjs:67-79`) for snapshots, streaming scope, and completion correlation. Test: a newer bare `article[data-testid^="conversation-turn"]` without assistant-role descendant never becomes a snapshot/terminal target.
+3. **Positive generated-image completion path** (High): mirror upstream 67da293a — detect a generated-image answer BEFORE the terminal gate (image-only responses may mount no action bar). `collectImages()` reachability must not depend on text passing the tightened gate. Integration test drives image-only completion through the poll loop.
+4. **Fail-closed error surface specified** (Medium): on selector drift ⇒ session path returns deferred/unverified (`chatgpt.mjs:786`), non-session path returns recoverable `provider.poll-timeout` (`chatgpt.mjs:887`). Both surfaces get named tests.
+5. **Activation table 1:1 test mapping** (Medium): add named tests for turn-only identity, both-identities, evaluate-failure, streaming recovery; fake fixture gains identity-bearing turns + scoped controls.
+6. **Anchors re-based post-WP2** (Medium): text reader now `chatgpt-response-dom.mjs:122-148`; poll finalize `chatgpt.mjs:608-635`; recovery `766-811`; `isResponseFinished` `938-961`; image block `654-694`; fragment tests `11-62` (text) / `64-143` (streaming). Observer anchors unchanged.
+7. **Atomic landing + rollback** (Medium): `readTopLevelAssistantSnapshots` is a new symbol — land imports, serialization-safe body, fake-node support, and JSDoc together; rollback = revert the WP3 commit only (WP2 streaming behavior must remain intact, covered by existing 33 WP2 tests).
+
 Status: D (diff-level implementation roadmap)
 Format: DIFFLEVEL-ROADMAP-01
 Work-phase: WP3
