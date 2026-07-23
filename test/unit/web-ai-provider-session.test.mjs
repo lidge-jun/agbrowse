@@ -65,6 +65,56 @@ describe('web-ai summarizeEnvelope', () => {
     });
 });
 
+describe('web-ai durable conversation URL persistence', () => {
+    it('omits a non-durable initial ChatGPT URL while preserving originalUrl', async () => {
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'x' },
+            { originalUrl: 'https://chatgpt.com/', conversationUrl: 'https://chatgpt.com/c/WEB:req-1' },
+        );
+
+        expect(session.originalUrl).toBe('https://chatgpt.com/');
+        expect(session.conversationUrl).toBeNull();
+    });
+
+    it('preserves the last durable ChatGPT URL and applies sibling fields on rejected update', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const durableUrl = 'https://chatgpt.com/c/abc-123';
+        const session = createSession({ vendor: 'chatgpt', prompt: 'x' }, { conversationUrl: durableUrl });
+        const updated = updateSession(session.sessionId, {
+            conversationUrl: 'https://chatgpt.com/',
+            status: 'polling',
+            answer: 'partial',
+        });
+
+        expect(updated.conversationUrl).toBe(durableUrl);
+        expect(updated.status).toBe('polling');
+        expect(updated.answer).toBe('partial');
+    });
+
+    it('accepts a later durable ChatGPT URL after an initial root URL', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'x' },
+            { originalUrl: 'https://chatgpt.com/' },
+        );
+        const updated = updateSession(session.sessionId, { conversationUrl: 'https://chatgpt.com/c/later-123' });
+
+        expect(updated.conversationUrl).toBe('https://chatgpt.com/c/later-123');
+    });
+
+    it('passes a Gemini conversation URL update through ungated', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'gemini', prompt: 'x' },
+            { conversationUrl: 'https://gemini.google.com/app/initial' },
+        );
+        const updated = updateSession(session.sessionId, { conversationUrl: 'https://gemini.google.com/app/next' });
+
+        expect(updated.conversationUrl).toBe('https://gemini.google.com/app/next');
+    });
+});
+
 describe('web-ai session timeout monotonicity', () => {
     it('does not downgrade completed sessions when a later poll times out', async () => {
         const { createSession, markSessionTimeout, updateSession, getSession } = await import('../../web-ai/session.mjs');

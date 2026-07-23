@@ -3,6 +3,7 @@ import { createTab, isTabAlive, getPageByTargetId, waitForPageByTargetId, listMa
 import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
+import { isDurableConversationUrl } from './conversation-url.mjs';
 
 /** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
 
@@ -282,7 +283,8 @@ export function isWorkTabUrlConsistent(session, tabUrl) {
  */
 export function isWorkSessionWithBareOrigin(session) {
     if (!_isWorkSession(session)) return false;
-    return isBareOriginUrl(/** @type {string|null|undefined} */ (session.conversationUrl));
+    const recoveryTarget = session.conversationUrl || session.originalUrl;
+    return isBareOriginUrl(/** @type {string|null|undefined} */ (recoveryTarget));
 }
 
 
@@ -332,17 +334,7 @@ export function isWorkSessionWithBareOrigin(session) {
  * @returns {boolean}
  */
 export function isSafeChatGptConversationUrl(url) {
-    if (typeof url !== 'string' || url === '') return false;
-    if (url.includes('..') || url.includes('\\') || url.includes('\0')) return false;
-    let u;
-    try {
-        u = new URL(url);
-    } catch {
-        return false;
-    }
-    if (u.protocol !== 'https:') return false;
-    if (u.hostname !== 'chatgpt.com' && u.hostname !== 'chat.openai.com') return false;
-    return /\/c\/[A-Za-z0-9_-]+/.test(u.pathname);
+    return isDurableConversationUrl(url);
 }
 
 /**

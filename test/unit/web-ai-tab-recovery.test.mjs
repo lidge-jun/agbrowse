@@ -142,6 +142,14 @@ describe('isWorkSessionWithBareOrigin', () => {
     it('returns false for null session', () => {
         expect(isWorkSessionWithBareOrigin(null)).toBe(false);
     });
+
+    it('rejects the Work post-gate recovery shape using originalUrl as the effective target', () => {
+        expect(isWorkSessionWithBareOrigin({
+            responseContract: 'work',
+            conversationUrl: null,
+            originalUrl: 'https://chatgpt.com/',
+        })).toBe(true);
+    });
 });
 
 // Source-string contract tests for recovery guards

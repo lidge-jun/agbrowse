@@ -13,6 +13,7 @@ import {
 import { normalizeChatGptModelChoice } from './chatgpt-model.mjs';
 import { normalizeGrokModelChoice } from './grok-model.mjs';
 import { normalizeGeminiModelChoice, isGeminiDeepThinkChoice } from './gemini-model.mjs';
+import { isDurableConversationUrl } from './conversation-url.mjs';
 
 /**
  * @typedef {import('./session-store.mjs').WebAiSession} WebAiSession
@@ -183,10 +184,15 @@ function saveStore() {
  */
 export function createSession(envelope, meta = {}) {
     const now = new Date().toISOString();
+    const vendor = envelope?.vendor || meta.vendor || null;
+    const observedConversationUrl = meta.conversationUrl || meta.originalUrl || null;
+    const conversationUrl = vendor === 'chatgpt'
+        ? (isDurableConversationUrl(observedConversationUrl) ? observedConversationUrl : null)
+        : observedConversationUrl;
     /** @type {WebAiSession} */
     const session = {
         sessionId: generateSessionId(),
-        vendor: envelope?.vendor || meta.vendor || null,
+        vendor,
         createdAt: now,
         updatedAt: now,
         deadlineAt: meta.deadlineAt || null,
@@ -199,7 +205,7 @@ export function createSession(envelope, meta = {}) {
             closeCount: 0,
         },
         originalUrl: meta.originalUrl || null,
-        conversationUrl: meta.conversationUrl || meta.originalUrl || null,
+        conversationUrl,
         promptHash: `sha256:${hashPrompt(envelope || {})}`,
         envelopeSummary: meta.envelopeSummary || {},
         status: 'sent',
@@ -222,7 +228,17 @@ export function createSession(envelope, meta = {}) {
  * @returns {WebAiSession|null}
  */
 export function updateSession(sessionId, patch = {}) {
-    return patchSession(sessionId, { ...patch, updatedAt: new Date().toISOString() });
+    const current = getSession(sessionId);
+    if (!current) return null;
+    const nextPatch = { ...patch };
+    if (
+        current.vendor === 'chatgpt' &&
+        Object.hasOwn(nextPatch, 'conversationUrl') &&
+        !isDurableConversationUrl(/** @type {string|null|undefined} */ (nextPatch.conversationUrl))
+    ) {
+        delete nextPatch.conversationUrl;
+    }
+    return patchSession(sessionId, { ...nextPatch, updatedAt: new Date().toISOString() });
 }
 
 /**
