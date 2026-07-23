@@ -56,8 +56,9 @@ import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
     readChatGptStreamingState,
-    readTopLevelAssistantTexts,
+    readTopLevelAssistantSnapshots,
     readTopLevelAssistantTextsFromLocators,
+    resolveTopLevelAssistantTurns,
 } from './chatgpt-response-dom.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
@@ -568,6 +569,7 @@ export async function pollWebAi(deps, input = {}) {
     const deadline = Date.now() + timeout * 1000;
     const startedAt = Date.now();
     let stableText = '';
+    let stableSnapshot = null;
     let stableSince = 0;
     let lastHeartbeat = 0;
     // 33 short-circuit: a MutationObserver wakes the loop as soon as the response
@@ -605,9 +607,10 @@ export async function pollWebAi(deps, input = {}) {
                 };
             }
         }
-        const answers = await readAssistantMessages(page);
-        const newAnswers = answers.slice(baseline.assistantCount).filter(isFinalAnswer);
-        const latest = newAnswers.at(-1) || '';
+        const snapshots = await readAssistantSnapshots(page);
+        const newSnapshots = snapshots.slice(baseline.assistantCount).filter(sample => isFinalAnswer(sample.text));
+        const latestSnapshot = newSnapshots.at(-1) || null;
+        const latest = latestSnapshot?.text || '';
         const streaming = await isStreaming(page);
         const now = Date.now();
         if ((streaming || latest) && now - lastHeartbeat >= 30_000) {
@@ -615,7 +618,29 @@ export async function pollWebAi(deps, input = {}) {
             process.stderr.write(`[poll] ${elapsed}s — ${streaming ? 'streaming' : 'stabilizing'}...\n`);
             lastHeartbeat = now;
         }
-        const finished = !streaming && latest ? await isResponseFinished(page) : false;
+        if (!streaming && latestSnapshot && session && input.outputImage !== undefined
+            && isImageOnlyGeneratedImageChromeText(latest)) {
+            const imageResult = await collectGeneratedImageAnswer(deps, input, session, baseline);
+            if (imageResult) {
+                if (!input.skipFinalize) {
+                    await finalizeProviderTab(deps, {
+                        vendor, session: /** @type {any} */ (session), page,
+                        answerText: imageResult.answerText,
+                        warnings: imageResult.warnings,
+                        archiveFlag: input.archiveFlag,
+                    });
+                }
+                return withAnswerArtifact({
+                    ok: true, vendor, status: 'complete', url: page.url(), sessionId: session.sessionId,
+                    answerText: imageResult.answerText, baseline, usedFallbacks: ['generated-image'],
+                    warnings: imageResult.warnings, responseStableMs: 0,
+                });
+            }
+        }
+        const completion = !streaming && latestSnapshot
+            ? await isResponseFinished(page, latestSnapshot, baseline.assistantCount)
+            : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+        const finished = completion.finished === true;
         // G5: Turn ordering — ensure latest assistant turn follows latest user turn
         // before accepting as stable. Prevents stale historical text from being returned.
         if (latest && !streaming) {
@@ -625,14 +650,8 @@ export async function pollWebAi(deps, input = {}) {
         if (latest && !streaming) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
-                const textLen = latest.length;
-                const minStableMs = finished
-                    ? 1000
-                    : textLen < 16 ? 8000
-                    : textLen < 40 ? 3000
-                    : textLen < 500 ? 2000
-                    : 3000;
-                if (elapsedStable >= minStableMs) {
+                const minStableMs = 1000;
+                if (finished && elapsedStable >= minStableMs) {
                     const usedFallbacks = [];
                     const warnings = [];
                     let answerText = latest;
@@ -731,10 +750,12 @@ export async function pollWebAi(deps, input = {}) {
                 }
             } else {
                 stableText = latest;
+                stableSnapshot = latestSnapshot;
                 stableSince = Date.now();
             }
         } else {
             stableText = '';
+            stableSnapshot = null;
             stableSince = 0;
         }
         if (observerWake) {
@@ -771,7 +792,10 @@ export async function pollWebAi(deps, input = {}) {
             baselineAssistantCount: baseline.assistantCount,
             isFinalAnswer,
             readStreaming: () => isStreaming(page),
-            readFinished: () => isResponseFinished(page),
+            readFinished: async sample => {
+                const completion = await isResponseFinished(page, sample, baseline.assistantCount);
+                return completion.finished === true;
+            },
         });
         if (recovered?.text) {
             if (recovered.streaming === true) {
@@ -783,7 +807,7 @@ export async function pollWebAi(deps, input = {}) {
                     streamingState: 'streaming',
                 });
             }
-            const canComplete = recovered.finished === true || Number(recovered.responseStableMs || 0) > 0;
+            const canComplete = recovered.finished === true;
             if (!canComplete) {
                 return buildDeferredPollingResult({
                     vendor, page, session, baseline,
@@ -832,9 +856,27 @@ export async function pollWebAi(deps, input = {}) {
                 });
             }
             stableText = '';
+            stableSnapshot = null;
         }
         if (responseStableMs <= 0) {
             stableText = '';
+            stableSnapshot = null;
+        }
+        const completion = stableSnapshot
+            ? await isResponseFinished(page, stableSnapshot, baseline.assistantCount)
+            : { finished: false };
+        if (completion.finished !== true) {
+            if (session) {
+                return buildDeferredPollingResult({
+                    vendor, page, session, baseline,
+                    answerText: stableText,
+                    usedFallbacks: ['copy-markdown'],
+                    warning: 'copy-markdown-deferred-unverified',
+                    streamingState: 'unknown',
+                });
+            }
+            stableText = '';
+            stableSnapshot = null;
         }
     }
 
@@ -914,6 +956,7 @@ async function isStreaming(page) {
             {
                 assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
                 stopSelectors: CHATGPT_STOP_SELECTORS,
+                resolverSource: resolveTopLevelAssistantTurns.toString(),
             },
         ));
         if (streaming) return true;
@@ -934,29 +977,51 @@ async function isStreaming(page) {
 
 /**
  * @param {any} page
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot} sample
+ * @param {number} minTurnIndex
+ * @returns {Promise<{ finished: boolean, messageId: string|null, turnId: string|null, turnIndex: number }>}
  */
-async function isResponseFinished(page) {
+async function isResponseFinished(page, sample, minTurnIndex) {
     try {
-        return await page.evaluate(
-            /** @param {string} finishedSelector */
-            (finishedSelector) => {
-            const ASSISTANT_TURN_SELECTORS = [
-                '[data-message-author-role="assistant"]',
-                '[data-turn="assistant"]',
-                'article[data-testid^="conversation-turn"]',
-            ];
-            const CONVERSATION_TURN = 'article[data-testid^="conversation-turn"], div[data-testid^="conversation-turn"], section[data-testid^="conversation-turn"]';
-            const turns = Array.from(document.querySelectorAll(CONVERSATION_TURN));
-            for (let i = turns.length - 1; i >= 0; i--) {
-                const turn = turns[i];
-                const isAssistant = ASSISTANT_TURN_SELECTORS.some(s => turn.matches?.(s) || turn.querySelector(s));
-                if (!isAssistant) continue;
-                return Boolean(turn.querySelector(finishedSelector));
+        const result = await page.evaluate(
+            ({ finishedSelector, sample, minTurnIndex, resolverSource, selectors }) => {
+            const resolver = (0, eval)(`(${resolverSource})`);
+            const turns = resolver(selectors);
+            for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
+                const turn = turns[turnIndex];
+                const messageNode = turn.matches?.('[data-message-id]') ? turn : turn.querySelector?.('[data-message-id]');
+                const turnNode = turn.matches?.('[data-testid^="conversation-turn"]')
+                    ? turn
+                    : turn.querySelector?.('[data-testid^="conversation-turn"]');
+                const messageId = messageNode?.getAttribute?.('data-message-id') || null;
+                const turnId = turnNode?.getAttribute?.('data-testid') || null;
+                const hasIdentity = Boolean(sample.messageId || sample.turnId);
+                const identityMatches = (!sample.messageId || sample.messageId === messageId)
+                    && (!sample.turnId || sample.turnId === turnId);
+                if (hasIdentity ? !identityMatches : turnIndex < minTurnIndex) continue;
+                return { finished: Boolean(turn.querySelector(finishedSelector)), messageId, turnId, turnIndex };
             }
-            return false;
-        }, FINISHED_ACTIONS_SELECTOR);
+            return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+        }, {
+            finishedSelector: FINISHED_ACTIONS_SELECTOR,
+            sample,
+            minTurnIndex,
+            resolverSource: resolveTopLevelAssistantTurns.toString(),
+            selectors: CHATGPT_ASSISTANT_SELECTORS,
+        });
+        if (result === true) {
+            return {
+                finished: true,
+                messageId: sample.messageId || null,
+                turnId: sample.turnId || null,
+                turnIndex: sample.turnIndex,
+            };
+        }
+        return result && typeof result === 'object'
+            ? result
+            : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
     } catch {
-        return false;
+        return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
     }
 }
 
@@ -1259,10 +1324,73 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
  * @param {any} page
  */
 async function readAssistantMessages(page) {
-    const evaluated = await page.evaluate(readTopLevelAssistantTexts, ASSISTANT_SELECTORS).catch(() => []);
-    if (Array.isArray(evaluated) && evaluated.length) return evaluated.map(cleanAssistantText).filter(Boolean);
+    const snapshots = await readAssistantSnapshots(page);
+    if (snapshots.length) return snapshots.map(sample => cleanAssistantText(sample.text)).filter(Boolean);
     const fallback = await readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS);
     return fallback.map(cleanAssistantText).filter(Boolean);
+}
+
+/**
+ * @param {any} page
+ * @returns {Promise<import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[]>}
+ */
+async function readAssistantSnapshots(page) {
+    try {
+        let snapshots = await page.evaluate(readTopLevelAssistantSnapshots, ASSISTANT_SELECTORS).catch(() => []);
+        if (!Array.isArray(snapshots) || snapshots.length === 0) snapshots = await page.evaluate(
+            readTopLevelAssistantSnapshots,
+            { selectors: ASSISTANT_SELECTORS, resolverSource: resolveTopLevelAssistantTurns.toString() },
+        );
+        if (!Array.isArray(snapshots)) return [];
+        return snapshots.map((sample, turnIndex) => typeof sample === 'string'
+            ? { text: sample, messageId: null, turnId: null, turnIndex }
+            : sample);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Image-only assistant turns may never mount text action controls. Collection
+ * itself supplies the positive generated-image evidence for this path.
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} session
+ * @param {any} baseline
+ * @returns {Promise<{ answerText: string, warnings: string[] } | null>}
+ */
+async function collectGeneratedImageAnswer(deps, input, session, baseline) {
+    const cdp = await deps.getCdpSession?.();
+    if (!cdp) throw new WebAiError({
+        errorCode: 'provider.image-output',
+        stage: 'image-output',
+        vendor: 'chatgpt',
+        retryHint: 'start-headed',
+        message: 'CDP session unavailable for explicit generated-image output',
+    });
+    try {
+        const result = await collectImages(cdp, {
+            baselineAssistantCount: baseline?.assistantCount || 0,
+            outputPath: input.outputImage || null,
+            sessionId: input.outputImage ? null : session.sessionId,
+            waitTimeoutMs: 60_000,
+        });
+        if (result.errors?.length) throw new WebAiError({
+            errorCode: 'provider.image-output',
+            stage: 'image-output',
+            vendor: 'chatgpt',
+            retryHint: 'check-generated-image-or-disable-output-image',
+            message: result.errors.join('; '),
+            mutationAllowed: true,
+        });
+        if (!result.savedPaths.length) return null;
+        const label = result.images.length === 1
+            ? 'Generated image.'
+            : `Generated ${result.images.length} images.`;
+        return { answerText: label + result.markdownSuffix, warnings: result.warnings || [] };
+    } finally {
+        await cdp.detach?.().catch(() => undefined);
+    }
 }
 
 /**

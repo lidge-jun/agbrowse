@@ -59,14 +59,20 @@ describe('observeAssistantResponse', () => {
 });
 
 describe('recoverAssistantResponse', () => {
-    const pageWith = (texts) => ({ evaluate: async () => texts });
+    const pageWith = (texts) => ({
+        evaluate: async () => texts.map((text, turnIndex) => ({
+            text,
+            messageId: `m${turnIndex}`,
+            turnId: `conversation-turn-${turnIndex}`,
+            turnIndex,
+        })),
+    });
 
     it('returns the latest assistant turn when it passes isFinalAnswer', async () => {
         const r = await recoverAssistantResponse(pageWith(['old', 'the real final answer']), {
             isFinalAnswer: (t) => !/^answer now$/i.test(t),
-            stabilityWindowMs: 0,
         });
-        expect(r).toEqual({
+        expect(r).toMatchObject({
             from: 'recovery',
             text: 'the real final answer',
             recovered: true,
@@ -79,7 +85,6 @@ describe('recoverAssistantResponse', () => {
     it('rejects a placeholder latest turn', async () => {
         const r = await recoverAssistantResponse(pageWith(['Answer now']), {
             isFinalAnswer: (t) => !/^answer now$/i.test(t),
-            stabilityWindowMs: 0,
         });
         expect(r).toBeNull();
     });
@@ -89,7 +94,7 @@ describe('recoverAssistantResponse', () => {
     });
 
     it('returns the latest turn when no predicate is supplied', async () => {
-        const r = await recoverAssistantResponse(pageWith(['x', 'y']), { stabilityWindowMs: 0 });
+        const r = await recoverAssistantResponse(pageWith(['x', 'y']));
         expect(r?.text).toBe('y');
     });
 
@@ -102,7 +107,6 @@ describe('recoverAssistantResponse', () => {
         const r = await recoverAssistantResponse(pageWith(['partial answer']), {
             readStreaming: async () => true,
             readFinished: async () => true,
-            stabilityWindowMs: 0,
         });
         expect(r).toMatchObject({
             text: 'partial answer',
@@ -116,7 +120,6 @@ describe('recoverAssistantResponse', () => {
         const r = await recoverAssistantResponse(pageWith(['final answer']), {
             readStreaming: async () => false,
             readFinished: async () => true,
-            stabilityWindowMs: 0,
         });
         expect(r).toMatchObject({
             text: 'final answer',
@@ -131,9 +134,31 @@ describe('recoverAssistantResponse', () => {
         const child = fakeNode('Fragment');
         parent.children.add(child);
         const r = await recoverAssistantResponse(pageWithDocument({ [CHATGPT_ASSISTANT_SELECTORS[0]]: [parent, child] }), {
-            stabilityWindowMs: 0,
         });
         expect(r?.text).toBe('Full assistant answer\nFragment');
+    });
+
+    it('does not recover stable text without scoped finished proof', async () => {
+        const r = await recoverAssistantResponse(pageWith(['stable final answer']), {
+            readStreaming: async () => false,
+            readFinished: async () => false,
+        });
+        expect(r).toMatchObject({ finished: false, responseStableMs: 0 });
+    });
+
+    it('passes the recovered sample identity into readFinished', async () => {
+        let observed = null;
+        const r = await recoverAssistantResponse(pageWith(['old', 'final']), {
+            baselineAssistantCount: 1,
+            readFinished: async sample => { observed = sample; return true; },
+        });
+        expect(observed).toMatchObject({ messageId: 'm1', turnId: 'conversation-turn-1', turnIndex: 1 });
+        expect(r).toMatchObject({ finished: true, responseStableMs: 1 });
+    });
+
+    it('fails closed when snapshot evaluation fails during recovery', async () => {
+        const r = await recoverAssistantResponse({ evaluate: async () => { throw new Error('selector drift'); } });
+        expect(r).toBeNull();
     });
 });
 

@@ -155,6 +155,12 @@ function createFakeChatGptPage(opts = {}) {
         insertedText: '',
         keys: [],
         assistantTexts: ['old answer'],
+        assistantTurns: [{
+            text: 'old answer',
+            messageId: 'm0',
+            turnId: 'conversation-turn-0',
+            finished: true,
+        }],
         turnTexts: ['old answer'],
         clickedSend: false,
         copyMarkdownSelectors: [],
@@ -173,9 +179,26 @@ function createFakeChatGptPage(opts = {}) {
         waitForTimeout: async () => {
             if (!neverStabilize && page.assistantTexts.at(-1) === 'Pro thinking...') {
                 page.assistantTexts[page.assistantTexts.length - 1] = finalAnswer;
+                Object.assign(page.assistantTurns.at(-1), { text: finalAnswer, finished: true });
             }
         },
         evaluate: async (_fn, arg, legacySendSelectors) => {
+            if (_fn?.name === 'readTopLevelAssistantSnapshots') {
+                return page.assistantTurns.map((turn, turnIndex) => ({ ...turn, turnIndex }));
+            }
+            if (_fn?.name === 'readChatGptStreamingState') return false;
+            if (String(_fn).includes('finishedSelector') && arg?.sample) {
+                const turnIndex = page.assistantTurns.findLastIndex(turn =>
+                    (!arg.sample.messageId || turn.messageId === arg.sample.messageId)
+                    && (!arg.sample.turnId || turn.turnId === arg.sample.turnId));
+                const turn = page.assistantTurns[turnIndex];
+                return {
+                    finished: Boolean(turn?.finished),
+                    messageId: turn?.messageId || null,
+                    turnId: turn?.turnId || null,
+                    turnIndex,
+                };
+            }
             if (typeof arg === 'string' && arg.includes('copy-turn-action-button')) {
                 const lastAnswer = page.assistantTexts.at(-1) || '';
                 return Boolean(lastAnswer) && lastAnswer !== 'Pro thinking...';
@@ -251,5 +274,11 @@ function commitPrompt(page) {
     page.turnTexts.push(page.composerValue);
     page.composerValue = '';
     page.assistantTexts.push('Pro thinking...');
+    page.assistantTurns.push({
+        text: 'Pro thinking...',
+        messageId: `m${page.assistantTurns.length}`,
+        turnId: `conversation-turn-${page.assistantTurns.length}`,
+        finished: false,
+    });
     page.turnTexts.push('Pro thinking...');
 }

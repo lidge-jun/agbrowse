@@ -1,6 +1,7 @@
+import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { queryWebAi } from '../../web-ai/chatgpt.mjs';
-import { getSession } from '../../web-ai/session.mjs';
+import { pollWebAi, queryWebAi } from '../../web-ai/chatgpt.mjs';
+import { getSession, saveBaseline } from '../../web-ai/session.mjs';
 
 describe('web-ai fake ChatGPT fixture', () => {
     it('fills composer, stores baseline, filters placeholder, and returns final answer', async () => {
@@ -59,21 +60,115 @@ describe('web-ai fake ChatGPT fixture', () => {
             totalSteps: 3,
         });
     });
+
+    it('accepts turn-only identity with scoped controls', async () => {
+        const page = createFakeChatGptPage({ identity: 'turn' });
+        const result = await runFakeQuery(page);
+        expect(result.status).toBe('complete');
+    });
+
+    it('accepts message-only identity with scoped controls', async () => {
+        const page = createFakeChatGptPage({ identity: 'message' });
+        const result = await runFakeQuery(page);
+        expect(result.status).toBe('complete');
+    });
+
+    it('accepts identity-less completion only at or after the assistant baseline', async () => {
+        const page = createFakeChatGptPage({ identity: 'none' });
+        const result = await runFakeQuery(page);
+        expect(result.status).toBe('complete');
+        expect(result.baseline.assistantCount).toBe(1);
+    });
+
+    it('requires both identities when both are sampled', async () => {
+        const page = createFakeChatGptPage({ mismatchMessageId: true });
+        const result = await runFakeQuery(page, { timeout: 1 });
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('recovery-deferred-unverified');
+    });
+
+    it('returns deferred unverified when completion evaluation fails in a session', async () => {
+        const page = createFakeChatGptPage({ failCompletionEvaluate: true });
+        const result = await runFakeQuery(page, { timeout: 1 });
+        expect(result.status).toBe('polling');
+        expect(result.warnings).toContain('recovery-deferred-unverified');
+    });
+
+    it('returns recoverable provider poll-timeout without a session when selectors drift', async () => {
+        const page = createFakeChatGptPage({ url: 'https://chatgpt.com/c/non-session-drift', failSnapshotEvaluate: true });
+        saveBaseline({
+            vendor: 'chatgpt', url: page.url(), envelope: {}, assistantCount: 1, textHash: 'fake',
+        });
+        const result = await pollWebAi({ getPage: async () => page }, { vendor: 'chatgpt', timeout: 1 });
+        expect(result).toMatchObject({
+            status: 'timeout', recoverable: true, error: 'timed out waiting for answer',
+        });
+    });
+
+    it('returns deferred streaming recovery for the sampled response', async () => {
+        const page = createFakeChatGptPage({ streaming: true });
+        const result = await runFakeQuery(page, { timeout: 1 });
+        expect(result.status).toBe('polling');
+        expect(result.warnings).toContain('recovery-deferred-streaming');
+    });
+
+    it('does not complete copy-markdown timeout fallback without correlated controls', async () => {
+        const page = createFakeChatGptPage({ finishResponse: false });
+        const result = await runFakeQuery(page, { timeout: 1, allowCopyMarkdownFallback: true });
+        expect(result.status).toBe('polling');
+        expect(result.warnings).toContain('recovery-deferred-unverified');
+    });
+
+    it('completes an image-only response before the tightened text gate', async () => {
+        const outputImage = '/tmp/agbrowse-fake-generated-image.png';
+        rmSync(outputImage, { force: true });
+        const page = createFakeChatGptPage({ imageOnly: true });
+        const previousFetch = globalThis.fetch;
+        globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+        });
+        try {
+            const result = await runFakeQuery(page, { outputImage }, {
+                send: async (method, payload) => {
+                    if (method === 'Input.insertText') {
+                        page.insertedText = payload.text;
+                        page.composerValue = payload.text;
+                        return {};
+                    }
+                    return method === 'Runtime.evaluate'
+                    ? { result: { value: [{
+                        url: 'https://chatgpt.com/backend-api/estuary/content?id=file_fake',
+                        fileId: 'file_fake', alt: 'Generated image', width: 512, height: 512,
+                    }] } }
+                    : method === 'Network.getCookies' ? { cookies: [] } : {};
+                },
+                detach: async () => undefined,
+            });
+            expect(result).toMatchObject({ status: 'complete', answerText: expect.stringContaining('Generated image.') });
+            expect(result.usedFallbacks).toContain('generated-image');
+        } finally {
+            globalThis.fetch = previousFetch;
+            rmSync(outputImage, { force: true });
+        }
+    });
 });
 
-function createFakeChatGptPage() {
+function createFakeChatGptPage(options = {}) {
     const page = {
         composerValue: '',
         insertedText: '',
         keys: [],
         assistantTexts: ['old answer'],
+        assistantTurns: [{ text: 'old answer', messageId: 'm0', turnId: 'conversation-turn-0', finished: true }],
+        options,
         turnTexts: ['old answer'],
         clickedSend: false,
         composerResolverValidated: false,
         sendResolverValidated: false,
         copyResolverValidated: false,
         copyMarkdownSelectors: [],
-        url: () => 'https://chatgpt.com/c/fake',
+        url: () => options.url || 'https://chatgpt.com/c/fake',
         keyboard: {
             insertText: async text => {
                 page.insertedText = text;
@@ -88,9 +183,30 @@ function createFakeChatGptPage() {
         waitForTimeout: async () => {
             if (page.assistantTexts.at(-1) === 'Pro thinking...') {
                 page.assistantTexts[page.assistantTexts.length - 1] = 'OK';
+                const text = options.imageOnly ? 'Edit' : 'OK';
+                page.assistantTexts[page.assistantTexts.length - 1] = text;
+                Object.assign(page.assistantTurns.at(-1), { text, finished: options.finishResponse !== false });
             }
         },
         evaluate: async (_fn, arg, legacySendSelectors) => {
+            if (_fn?.name === 'readTopLevelAssistantSnapshots') {
+                if (options.failSnapshotEvaluate) throw new Error('snapshot evaluate failed');
+                return page.assistantTurns.map((turn, turnIndex) => ({ ...turn, turnIndex }));
+            }
+            if (_fn?.name === 'readChatGptStreamingState') return options.streaming === true;
+            if (String(_fn).includes('finishedSelector') && arg?.sample) {
+                if (options.failCompletionEvaluate) throw new Error('evaluate failed');
+                const turnIndex = page.assistantTurns.findLastIndex(turn =>
+                    (!arg.sample.messageId || turn.messageId === arg.sample.messageId)
+                    && (!arg.sample.turnId || turn.turnId === arg.sample.turnId));
+                const turn = page.assistantTurns[turnIndex];
+                return {
+                    finished: options.mismatchMessageId ? false : Boolean(turn?.finished),
+                    messageId: options.mismatchMessageId ? 'different-message' : turn?.messageId || null,
+                    turnId: turn?.turnId || null,
+                    turnIndex,
+                };
+            }
             if (typeof arg === 'string' && arg.includes('copy-turn-action-button')) {
                 const lastAnswer = page.assistantTexts.at(-1) || '';
                 return lastAnswer && lastAnswer !== 'Pro thinking...';
@@ -117,6 +233,7 @@ function createFakeLocator(page, selector) {
     const isAssistant = selector.includes('assistant');
     return {
         first: () => createFakeLocator(page, selector),
+        evaluateAll: async () => false,
         count: async () => {
             if (isComposer || isSendButton) return 1;
             if (isCopyButton) return 1;
@@ -165,5 +282,31 @@ function commitPrompt(page) {
     page.turnTexts.push(page.composerValue);
     page.composerValue = '';
     page.assistantTexts.push('Pro thinking...');
+    page.assistantTurns.push({
+        text: 'Pro thinking...',
+        messageId: ['turn', 'none'].includes(page.options.identity) ? null : `m${page.assistantTurns.length}`,
+        turnId: ['message', 'none'].includes(page.options.identity) ? null : `conversation-turn-${page.assistantTurns.length}`,
+        finished: false,
+    });
     page.turnTexts.push('Pro thinking...');
+}
+
+async function runFakeQuery(page, input = {}, cdpOverride = null) {
+    return queryWebAi({
+        getPage: async () => page,
+        getCdpSession: async () => cdpOverride || ({
+            send: async (method, payload) => {
+                if (method === 'Input.insertText') {
+                    page.insertedText = payload.text;
+                    page.composerValue = payload.text;
+                }
+                return {};
+            },
+            detach: async () => undefined,
+        }),
+    }, {
+        vendor: 'chatgpt', prompt: 'Reply exactly: OK', project: 'fixture', goal: 'test',
+        output: 'one line', constraints: 'inline only', timeout: 2,
+        ...input,
+    });
 }

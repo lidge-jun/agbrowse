@@ -4,6 +4,7 @@ import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
     readChatGptStreamingState,
+    readTopLevelAssistantSnapshots,
     readTopLevelAssistantTexts,
     readTopLevelAssistantTextsFromLocators,
 } from '../../web-ai/chatgpt-response-dom.mjs';
@@ -58,6 +59,39 @@ describe('ChatGPT assistant response fragments', () => {
 
         await expect(readTopLevelAssistantTextsFromLocators(page, CHATGPT_ASSISTANT_SELECTORS))
             .resolves.toEqual(['Full assistant answer']);
+    });
+
+    it('extracts message id, turn id, and top-level turn index with assistant text', () => {
+        const snapshots = readSnapshotsFixture(`
+            <article data-testid="conversation-turn-7">
+                <div data-message-author-role="assistant" data-message-id="m7">Final answer</div>
+            </article>`);
+        expect(snapshots).toEqual([{
+            text: 'Final answer',
+            messageId: 'm7',
+            turnId: 'conversation-turn-7',
+            turnIndex: 0,
+        }]);
+    });
+
+    it('keeps readTopLevelAssistantTexts as a snapshot projection', () => {
+        const dom = new JSDOM('<article data-testid="conversation-turn-1"><div data-turn="assistant">Projected text</div></article>');
+        const previous = globalThis.document;
+        globalThis.document = dom.window.document;
+        try {
+            expect(readTopLevelAssistantTexts(CHATGPT_ASSISTANT_SELECTORS)).toEqual(['Projected text']);
+        } finally {
+            dom.window.close();
+            if (previous === undefined) delete globalThis.document;
+            else globalThis.document = previous;
+        }
+    });
+
+    it('does not snapshot a newer bare conversation article without an assistant role', () => {
+        const snapshots = readSnapshotsFixture(`
+            <article data-testid="conversation-turn-1"><div data-turn="assistant">Verified</div></article>
+            <article data-testid="conversation-turn-2">Bare newer turn</article>`);
+        expect(snapshots.map(snapshot => snapshot.text)).toEqual(['Verified']);
     });
 });
 
@@ -211,5 +245,18 @@ function readStreamingFixture(html, { sidecar = false } = {}) {
             if (value === undefined) delete globalThis[key];
             else globalThis[key] = value;
         }
+    }
+}
+
+function readSnapshotsFixture(html) {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
+    const previous = globalThis.document;
+    globalThis.document = dom.window.document;
+    try {
+        return readTopLevelAssistantSnapshots(CHATGPT_ASSISTANT_SELECTORS);
+    } finally {
+        dom.window.close();
+        if (previous === undefined) delete globalThis.document;
+        else globalThis.document = previous;
     }
 }

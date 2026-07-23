@@ -12,12 +12,52 @@ export const CHATGPT_STOP_SELECTORS = [
 ];
 
 /**
+ * Resolve role-verified, top-level assistant turns in document order.
+ * Browser-context helper; callers that serialize another helper may pass this
+ * function's source and reconstruct it inside page.evaluate.
+ * @param {string[]} selectors
+ * @returns {Element[]}
+ */
+export function resolveTopLevelAssistantTurns(selectors) {
+    const activeSelectors = Array.isArray(selectors) && selectors.length
+        ? selectors
+        : [
+            '[data-message-author-role="assistant"]',
+            '[data-turn="assistant"]',
+            'article[data-testid^="conversation-turn"]',
+        ];
+    const roleSelectors = [
+        '[data-message-author-role="assistant"]',
+        '[data-turn="assistant"]',
+    ];
+    const roleNodes = [];
+    for (const selector of roleSelectors) {
+        for (const node of Array.from(document.querySelectorAll(selector))) {
+            if (!roleNodes.includes(node)) roleNodes.push(node);
+        }
+    }
+    const turns = [];
+    for (const roleNode of roleNodes) {
+        const wrapperSelectors = activeSelectors.filter(selector => !roleSelectors.includes(selector));
+        const candidate = wrapperSelectors.length && typeof roleNode.closest === 'function'
+            ? roleNode.closest(wrapperSelectors.join(', ')) || roleNode
+            : roleNode;
+        if (turns.some(turn => turn === candidate || turn.contains(candidate))) continue;
+        for (let i = turns.length - 1; i >= 0; i--) {
+            if (candidate.contains(turns[i])) turns.splice(i, 1);
+        }
+        turns.push(candidate);
+    }
+    return turns;
+}
+
+/**
  * Browser-context helper. Returns whether the current ChatGPT response has
  * positive live-generation evidence.
  * @param {{ assistantSelectors: string[], stopSelectors: string[] }} options
  * @returns {boolean}
  */
-export function readChatGptStreamingState({ assistantSelectors, stopSelectors }) {
+export function readChatGptStreamingState({ assistantSelectors, stopSelectors, resolverSource }) {
     const isVisible = (/** @type {Element} */ node) => {
         if (!(node instanceof HTMLElement)) return false;
         const rect = node.getBoundingClientRect();
@@ -61,28 +101,16 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors })
         if (Array.from(nodes).some(isVisible)) return true;
     }
 
-    const activeAssistantSelectors = Array.isArray(assistantSelectors) && assistantSelectors.length
-        ? assistantSelectors
-        : CHATGPT_ASSISTANT_SELECTORS;
-    const roleSelectors = [
-        '[data-message-author-role="assistant"]',
-        '[data-turn="assistant"]',
-    ];
-    let assistantNodes;
+    let assistantNodes = [];
     try {
-        assistantNodes = Array.from(document.querySelectorAll(roleSelectors.join(', ')));
-    } catch {
-        assistantNodes = [];
-    }
+        const resolver = resolverSource
+            ? (0, eval)(`(${resolverSource})`)
+            : resolveTopLevelAssistantTurns;
+        assistantNodes = resolver(assistantSelectors);
+    } catch { /* selector drift fails closed */ }
     const latestAssistant = assistantNodes.at(-1);
     if (latestAssistant) {
-        const wrapperSelectors = activeAssistantSelectors.filter(selector =>
-            !roleSelectors.includes(selector));
-        let progressScope = latestAssistant;
-        if (wrapperSelectors.length && typeof latestAssistant.closest === 'function') {
-            progressScope = latestAssistant.closest(wrapperSelectors.join(', ')) || latestAssistant;
-        }
-        if (hasLiveProgress(progressScope)) return true;
+        if (hasLiveProgress(latestAssistant)) return true;
     }
 
     let panels;
@@ -120,31 +148,48 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors })
 }
 
 /**
+ * @typedef {object} ChatGptAssistantSnapshot
+ * @property {string} text
+ * @property {string|null} messageId
+ * @property {string|null} turnId
+ * @property {number} turnIndex
+ */
+
+/**
+ * Browser-context helper. Keep the body serialization-safe for page.evaluate.
+ * @param {string[]|{ selectors: string[], resolverSource?: string }} input
+ * @returns {ChatGptAssistantSnapshot[]}
+ */
+export function readTopLevelAssistantSnapshots(input) {
+    const selectors = Array.isArray(input) ? input : input?.selectors;
+    const resolverSource = Array.isArray(input) ? '' : input?.resolverSource;
+    const resolver = resolverSource
+        ? (0, eval)(`(${resolverSource})`)
+        : resolveTopLevelAssistantTurns;
+    return resolver(selectors).map((node, turnIndex) => {
+        const messageNode = node.matches?.('[data-message-id]')
+            ? node
+            : node.querySelector?.('[data-message-id]');
+        const turnNode = node.matches?.('[data-testid^="conversation-turn"]')
+            ? node
+            : node.querySelector?.('[data-testid^="conversation-turn"]');
+        return {
+            text: String((/** @type {any} */ (node)).innerText || node.textContent || '').trim(),
+            messageId: messageNode?.getAttribute?.('data-message-id') || null,
+            turnId: turnNode?.getAttribute?.('data-testid') || null,
+            turnIndex,
+        };
+    }).filter(snapshot => Boolean(snapshot.text));
+}
+
+/**
  * Browser-context helper. Keep this self-contained so Playwright can serialize
  * it into page.evaluate without relying on module closures.
  * @param {string[]} selectors
  * @returns {string[]}
  */
 export function readTopLevelAssistantTexts(selectors) {
-    const activeSelectors = Array.isArray(selectors) && selectors.length
-        ? selectors
-        : [
-            '[data-message-author-role="assistant"]',
-            '[data-turn="assistant"]',
-            'article[data-testid^="conversation-turn"]',
-        ];
-    const isInsideAnotherMatchedNode = (/** @type {any} */ el, /** @type {any[]} */ matched) =>
-        matched.some(other => other !== el && typeof other.contains === 'function' && other.contains(el));
-
-    for (const selector of activeSelectors) {
-        const matched = Array.from(document.querySelectorAll(selector));
-        const topLevel = matched.filter(el => !isInsideAnotherMatchedNode(el, matched));
-        const texts = topLevel
-            .map(el => String((/** @type {any} */ (el)).innerText || el.textContent || '').trim())
-            .filter(Boolean);
-        if (texts.length) return texts;
-    }
-    return [];
+    return readTopLevelAssistantSnapshots(selectors).map(snapshot => snapshot.text);
 }
 
 /**

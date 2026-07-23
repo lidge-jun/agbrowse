@@ -13,7 +13,8 @@
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
-    readTopLevelAssistantTexts,
+    readTopLevelAssistantSnapshots,
+    resolveTopLevelAssistantTurns,
 } from './chatgpt-response-dom.mjs';
 
 const DEFAULT_QUIET_MS = 1_200;
@@ -91,58 +92,42 @@ export async function observeAssistantResponse(page, { baselineAssistantCount = 
  * rejecting placeholders via the injected `isFinalAnswer` predicate. Read-only;
  * never throws. Returns `null` when there is no usable final answer.
  * @param {{ evaluate: Function, waitForTimeout?: Function, locator?: Function }} page
- * @param {{ baselineAssistantCount?: number, isFinalAnswer?: (text: string) => boolean, readStreaming?: () => Promise<boolean>|boolean, readFinished?: () => Promise<boolean>|boolean, stabilityWindowMs?: number }} [opts]
- * @returns {Promise<{ from: 'recovery', text: string, recovered: true, streaming: boolean, finished: boolean, responseStableMs: number } | null>}
+ * @param {{ baselineAssistantCount?: number, isFinalAnswer?: (text: string) => boolean, readStreaming?: () => Promise<boolean>|boolean, readFinished?: (sample: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot) => Promise<boolean>|boolean }} [opts]
+ * @returns {Promise<{ from: 'recovery', text: string, sample: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot, recovered: true, streaming: boolean, finished: boolean, responseStableMs: number } | null>}
  */
-export async function recoverAssistantResponse(page, { baselineAssistantCount = 0, isFinalAnswer, readStreaming, readFinished, stabilityWindowMs } = {}) {
+export async function recoverAssistantResponse(page, { baselineAssistantCount = 0, isFinalAnswer, readStreaming, readFinished } = {}) {
     const minIdx = Math.max(0, Math.floor(Number(baselineAssistantCount) || 0));
     const readCandidates = async () => {
-        let texts;
+        let snapshots;
         try {
-            texts = await page.evaluate(readTopLevelAssistantTexts, CHATGPT_ASSISTANT_SELECTORS);
+            snapshots = await page.evaluate(readTopLevelAssistantSnapshots, CHATGPT_ASSISTANT_SELECTORS).catch(() => []);
+            if (!Array.isArray(snapshots) || snapshots.length === 0) snapshots = await page.evaluate(
+                readTopLevelAssistantSnapshots,
+                {
+                    selectors: CHATGPT_ASSISTANT_SELECTORS,
+                    resolverSource: resolveTopLevelAssistantTurns.toString(),
+                },
+            );
         } catch {
             return [];
         }
-        if (!Array.isArray(texts) || !texts.length) return [];
-        return texts.slice(minIdx).filter(text => {
-            if (!text) return false;
-            return typeof isFinalAnswer === 'function' ? isFinalAnswer(text) : true;
+        if (!Array.isArray(snapshots) || !snapshots.length) return [];
+        return snapshots.slice(minIdx).filter(sample => {
+            if (!sample?.text) return false;
+            return typeof isFinalAnswer === 'function' ? isFinalAnswer(sample.text) : true;
         });
     };
 
     const candidates = await readCandidates();
-    if (!candidates.length) return null;
-    let latest = candidates.at(-1) || '';
-    if (!latest) return null;
+    const sample = candidates.at(-1) || null;
+    if (!sample?.text) return null;
 
     let streaming = await readStreamingState(page, readStreaming);
     if (streaming) {
-        return { from: 'recovery', text: latest, recovered: true, streaming: true, finished: false, responseStableMs: 0 };
+        return { from: 'recovery', text: sample.text, sample, recovered: true, streaming: true, finished: false, responseStableMs: 0 };
     }
-
-    let finished = await readFinishedState(readFinished);
-    let responseStableMs = finished ? 1 : 0;
-    if (!finished) {
-        const waitMs = recoveryStabilityWindowMs(latest, stabilityWindowMs);
-        if (waitMs > 0 && typeof page.waitForTimeout === 'function') {
-            const startedAt = Date.now();
-            await page.waitForTimeout(waitMs).catch(() => undefined);
-            const afterStreaming = await readStreamingState(page, readStreaming);
-            if (afterStreaming) {
-                return { from: 'recovery', text: latest, recovered: true, streaming: true, finished: false, responseStableMs: 0 };
-            }
-            const reread = await readCandidates();
-            const stableLatest = reread.at(-1) || '';
-            if (stableLatest && stableLatest === latest) {
-                responseStableMs = Math.max(1, Date.now() - startedAt);
-                finished = await readFinishedState(readFinished);
-            } else if (stableLatest) {
-                latest = stableLatest;
-            }
-        }
-    }
-
-    return { from: 'recovery', text: latest, recovered: true, streaming: false, finished, responseStableMs };
+    const finished = await readFinishedState(readFinished, sample);
+    return { from: 'recovery', text: sample.text, sample, recovered: true, streaming: false, finished, responseStableMs: finished ? 1 : 0 };
 }
 
 /**
@@ -170,22 +155,14 @@ async function readStreamingState(page, readStreaming) {
 }
 
 /**
- * @param {(() => Promise<boolean>|boolean)|undefined} readFinished
+ * @param {((sample: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot) => Promise<boolean>|boolean)|undefined} readFinished
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot} sample
  */
-async function readFinishedState(readFinished) {
+async function readFinishedState(readFinished, sample) {
     if (typeof readFinished !== 'function') return false;
     try {
-        return Boolean(await readFinished());
+        return Boolean(await readFinished(sample));
     } catch {
         return false;
     }
-}
-
-/**
- * @param {string} text
- * @param {number|undefined} overrideMs
- */
-function recoveryStabilityWindowMs(text, overrideMs) {
-    if (Number.isFinite(Number(overrideMs))) return Math.max(0, Math.floor(Number(overrideMs)));
-    return String(text || '').length < 500 ? 3000 : 5000;
 }
