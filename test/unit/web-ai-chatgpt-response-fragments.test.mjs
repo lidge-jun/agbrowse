@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
+    CHATGPT_STOP_SELECTORS,
+    readChatGptStreamingState,
     readTopLevelAssistantTexts,
     readTopLevelAssistantTextsFromLocators,
 } from '../../web-ai/chatgpt-response-dom.mjs';
@@ -58,6 +61,87 @@ describe('ChatGPT assistant response fragments', () => {
     });
 });
 
+describe('ChatGPT streaming state', () => {
+    it('detects an exact stop test-id outside the composer', () => {
+        expect(readStreamingFixture('<button data-testid="stop-button">Stop</button>')).toBe(true);
+    });
+
+    it('detects the scoped aria Stop fallback inside the composer', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop generating">Stop</button></form>')).toBe(true);
+    });
+
+    it('ignores the aria Stop fallback outside the composer', () => {
+        expect(readStreamingFixture('<button aria-label="Stop generating">Stop</button>')).toBe(false);
+    });
+
+    it('excludes a composer Stop dictation control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop dictation">Stop</button></form>')).toBe(false);
+    });
+
+    it('excludes a composer Stop voice control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop voice">Stop</button></form>')).toBe(false);
+    });
+
+    it('excludes a composer Stop reading control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop reading">Stop</button></form>')).toBe(false);
+    });
+
+    it('scopes progress to the latest role-verified assistant turn', () => {
+        const shellOnly = `
+            <progress value="10" max="100"></progress>
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant">Old</div></article>
+            <article data-testid="conversation-turn-2"><div data-message-author-role="assistant">Latest</div></article>`;
+        const latestProgress = `
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant"><progress value="10" max="100"></progress></div></article>
+            <article data-testid="conversation-turn-2"><div data-message-author-role="assistant"><progress value="20" max="100"></progress></div></article>`;
+        expect(readStreamingFixture(shellOnly)).toBe(false);
+        expect(readStreamingFixture(latestProgress)).toBe(true);
+    });
+
+    it('does not treat a bare latest conversation article as an assistant turn', () => {
+        const html = `
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant">Old</div></article>
+            <article data-testid="conversation-turn-2"><progress value="20" max="100"></progress></article>`;
+        expect(readStreamingFixture(html)).toBe(false);
+    });
+
+    it('treats completed HTML progress as idle and incomplete HTML progress as live', () => {
+        const fixture = (value) => `
+            <article data-testid="conversation-turn-1">
+                <div data-message-author-role="assistant"><progress value="${value}" max="100"></progress></div>
+            </article>`;
+        expect(readStreamingFixture(fixture(100))).toBe(false);
+        expect(readStreamingFixture(fixture(99))).toBe(true);
+    });
+
+    it('treats indeterminate HTML progress as live', () => {
+        const html = '<div data-message-author-role="assistant"><progress></progress></div>';
+        expect(readStreamingFixture(html)).toBe(true);
+    });
+
+    it('defaults omitted ARIA max to 100 for completed and incomplete progress', () => {
+        const fixture = (now) => `
+            <div data-turn="assistant"><div role="progressbar" aria-valuenow="${now}"></div></div>`;
+        expect(readStreamingFixture(fixture(100))).toBe(false);
+        expect(readStreamingFixture(fixture(99))).toBe(true);
+    });
+
+    it('requires thinking metadata before a right-side panel can veto completion', () => {
+        expect(readStreamingFixture('<aside>Reasoning</aside>', { sidecar: true })).toBe(false);
+        expect(readStreamingFixture('<aside data-testid="reasoning-sidecar">Reasoning</aside>', { sidecar: true })).toBe(true);
+    });
+
+    it('ignores an anchored completed sidecar summary', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thought for 12s</aside>';
+        expect(readStreamingFixture(html, { sidecar: true })).toBe(false);
+    });
+
+    it('keeps a growing Thought for trace live', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Reasoning Thought for 2s: Searching…</aside>';
+        expect(readStreamingFixture(html, { sidecar: true })).toBe(true);
+    });
+});
+
 function fakeNode(text) {
     return {
         innerText: text,
@@ -87,5 +171,45 @@ function withDocument(nodesBySelector, fn) {
     } finally {
         if (previous === undefined) delete globalThis.document;
         else globalThis.document = previous;
+    }
+}
+
+function readStreamingFixture(html, { sidecar = false } = {}) {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
+    const previous = {
+        document: globalThis.document,
+        window: globalThis.window,
+        HTMLElement: globalThis.HTMLElement,
+        HTMLProgressElement: globalThis.HTMLProgressElement,
+    };
+    globalThis.document = dom.window.document;
+    globalThis.window = dom.window;
+    globalThis.HTMLElement = dom.window.HTMLElement;
+    globalThis.HTMLProgressElement = dom.window.HTMLProgressElement;
+    Object.defineProperty(dom.window, 'innerWidth', { configurable: true, value: 1000 });
+    for (const element of dom.window.document.querySelectorAll('*')) {
+        element.getBoundingClientRect = () => ({
+            left: sidecar && element.matches('aside') ? 400 : 0,
+            width: sidecar && element.matches('aside') ? 300 : 20,
+            height: sidecar && element.matches('aside') ? 200 : 20,
+            right: 0,
+            bottom: 0,
+            top: 0,
+            x: 0,
+            y: 0,
+            toJSON() {},
+        });
+    }
+    try {
+        return readChatGptStreamingState({
+            assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
+            stopSelectors: CHATGPT_STOP_SELECTORS,
+        });
+    } finally {
+        dom.window.close();
+        for (const [key, value] of Object.entries(previous)) {
+            if (value === undefined) delete globalThis[key];
+            else globalThis[key] = value;
+        }
     }
 }

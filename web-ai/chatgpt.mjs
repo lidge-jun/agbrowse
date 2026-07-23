@@ -55,6 +55,7 @@ import { buildTargetMismatchResult } from './session-target-guard.mjs';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    readChatGptStreamingState,
     readTopLevelAssistantTexts,
     readTopLevelAssistantTextsFromLocators,
 } from './chatgpt-response-dom.mjs';
@@ -907,60 +908,27 @@ export async function pollWebAi(deps, input = {}) {
  * @param {any} page
  */
 async function isStreaming(page) {
-    // Stop button (primary streaming signal)
-    for (const selector of [
-        'button[data-testid="stop-button"]',
-        'button[aria-label*="Stop" i]',
-    ]) {
-        const first = page.locator(selector).first();
-        if (typeof first.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
-    }
-    // G3: Progress bar detection — connector/tool phases may surface only a progress
-    // bar with no Stop button (Oracle 1146107). Deep Research already checks
-    // [role="progressbar"] in its own path; this covers the general ChatGPT path.
-    for (const selector of [
-        'progress',
-        '[role="progressbar"]',
-    ]) {
-        const first = page.locator(selector).first();
-        if (typeof first.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
-    }
-    // G4: Right-side thinking/reasoning sidecar panel detection (Oracle 1146107).
-    // A reasoning phase is sometimes exposed ONLY through a side panel with no inline
-    // label or Stop button. Past-tense "Thought for Xs" panels are excluded.
     try {
-        const hasSidecar = await page.evaluate(() => {
-            const norm = (/** @type {string} */ s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-            const isVisible = (/** @type {Element} */ el) => {
-                if (!(el instanceof HTMLElement)) return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            };
-            const looksLikeThinking = (/** @type {Element} */ node) => {
-                const label = norm([
-                    node.textContent,
-                    node.getAttribute?.('aria-label'),
-                    node.getAttribute?.('data-testid'),
-                ].filter(Boolean).join(' '));
-                if (label.includes('thought for')) return false;
-                return label.includes('thinking') || label.includes('reasoning') || label.includes('pro thinking');
-            };
-            let panels;
-            try {
-                panels = document.querySelectorAll(
-                    'aside, [role="complementary"], [role="dialog"], [data-testid*="thinking"], [data-testid*="reasoning"], [class*="sidecar"], [class*="sidebar"]',
-                );
-            } catch { return false; }
-            for (const node of Array.from(panels)) {
-                if (!isVisible(node)) continue;
-                const rect = (/** @type {HTMLElement} */ (node)).getBoundingClientRect();
-                const rightSide = rect.left >= window.innerWidth * 0.35 && rect.width >= 180 && rect.height >= 120;
-                if (rightSide && looksLikeThinking(node)) return true;
-            }
-            return false;
-        });
-        if (hasSidecar) return true;
-    } catch { /* page may be navigating */ }
+        const streaming = Boolean(await page.evaluate(
+            readChatGptStreamingState,
+            {
+                assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
+                stopSelectors: CHATGPT_STOP_SELECTORS,
+            },
+        ));
+        if (streaming) return true;
+    } catch { /* page may be navigating or lack a complete DOM context */ }
+    // Keep a navigation/test-harness-safe fallback while preserving the shared
+    // composer-scoped selector contract.
+    try {
+        for (const selector of CHATGPT_STOP_SELECTORS) {
+            const first = page.locator?.(selector)?.first?.();
+            if (typeof first?.isVisible === 'function'
+                && await first.isVisible().catch(() => false)) return true;
+        }
+    } catch {
+        return false;
+    }
     return false;
 }
 

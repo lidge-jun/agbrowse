@@ -32,6 +32,7 @@ export function buildResponseObserverExpression({ baselineAssistantCount = 0, qu
     const quiet = Number.isFinite(Number(quietMs)) ? Math.max(200, Math.floor(Number(quietMs))) : DEFAULT_QUIET_MS;
     const timeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1_000, Math.floor(Number(timeoutMs))) : DEFAULT_OBSERVER_TIMEOUT_MS;
     const assistantSelector = CHATGPT_ASSISTANT_SELECTORS.join(', ');
+    // Shared fallback is composer-scoped and excludes dictation, voice, and read controls.
     const stopSelector = CHATGPT_STOP_SELECTORS.join(', ');
     return `(() => new Promise((resolve) => {
         const MIN = ${minIdx};
@@ -157,6 +158,7 @@ async function readStreamingState(page, readStreaming) {
         }
     }
     try {
+        // Shared fallback is composer-scoped and exclusions must not be weakened here.
         for (const selector of CHATGPT_STOP_SELECTORS) {
             const first = page.locator?.(selector)?.first?.();
             if (typeof first?.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;

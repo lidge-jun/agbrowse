@@ -7,6 +7,14 @@ import {
 import { CHATGPT_ASSISTANT_SELECTORS } from '../../web-ai/chatgpt-response-dom.mjs';
 
 describe('buildResponseObserverExpression', () => {
+    it('embeds the composer-scoped Stop fallback exclusions', () => {
+        const expr = buildResponseObserverExpression();
+        expect(expr).toContain('form button');
+        expect(expr).toContain('dictat');
+        expect(expr).toContain('voice');
+        expect(expr).toContain('read');
+    });
+
     it('embeds clamped baseline / quiet / timeout literals', () => {
         const expr = buildResponseObserverExpression({ baselineAssistantCount: 2, quietMs: 800, timeoutMs: 5_000 });
         expect(expr).toContain('const MIN = 2;');
