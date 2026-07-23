@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,7 +30,7 @@ afterEach(() => {
 
 describe('web-ai context pack', () => {
     it('collects inline patterns and context-file excludes', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         const list = join(dir, 'context.txt');
         await writeFile(list, ['src/**/*.ts', '!src/**/*.test.ts'].join('\n'));
 
@@ -45,7 +45,7 @@ describe('web-ai context pack', () => {
     });
 
     it('expands directories and globs in deterministic relative order', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await mkdir(join(dir, 'src'), { recursive: true });
         await writeFile(join(dir, 'src', 'b.mjs'), 'export const b = 1;');
         await writeFile(join(dir, 'src', 'a.mjs'), 'export const a = 1;');
@@ -57,7 +57,7 @@ describe('web-ai context pack', () => {
     });
 
     it('rejects symlink traversal', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await writeFile(join(dir, 'target.mjs'), 'export const ok = true;');
         await symlink(join(dir, 'target.mjs'), join(dir, 'link.mjs'));
 
@@ -65,7 +65,7 @@ describe('web-ai context pack', () => {
     });
 
     it('renders structured untrusted context package with file report metadata', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await mkdir(join(dir, 'web-ai'), { recursive: true });
         await writeFile(join(dir, 'web-ai', 'question.mjs'), 'export function ask() { return "ok"; }\n');
 
@@ -88,7 +88,7 @@ describe('web-ai context pack', () => {
     });
 
     it('can force inline transport for the old composer-only path', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await writeFile(join(dir, 'small.txt'), 'hello');
 
         const result = await buildInlineContextOrFail({
@@ -104,7 +104,7 @@ describe('web-ai context pack', () => {
     });
 
     it('fails strict inline context before browser mutation when over budget', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await writeFile(join(dir, 'large.txt'), 'x'.repeat(120));
 
         await expect(buildInlineContextOrFail({
@@ -116,7 +116,7 @@ describe('web-ai context pack', () => {
     });
 
     it('excludes oversized files in dry-run mode', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await writeFile(join(dir, 'large.txt'), 'x'.repeat(20));
 
         const result = await buildContextPackageResult({
@@ -131,7 +131,7 @@ describe('web-ai context pack', () => {
     });
 
     it('keeps omitted and explicit raw rendering byte-identical', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-raw-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-raw-')));
         await mkdir(join(dir, 'src'), { recursive: true });
         const source = 'export const value = 1;\n';
         await writeFile(join(dir, 'src', 'example.js'), source);
@@ -241,7 +241,7 @@ throw new Error('raw mode must not evaluate Repomix config');
     });
 
     it('renders repomix content and notice before inline budget calculation', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-inline-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-inline-')));
         await mkdir(join(dir, 'src'), { recursive: true });
         const source = 'export function originalImplementation() { return 42; }\n';
         const transformed = 'export function originalImplementation() { /* compressed */ }\n';
@@ -287,7 +287,7 @@ throw new Error('raw mode must not evaluate Repomix config');
     });
 
     it('uses a Repomix-only fence longer than every backtick run in inline Markdown', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-fence-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-fence-')));
         const transformed = [
             '# Packed context',
             '```typescript',
@@ -321,7 +321,7 @@ throw new Error('raw mode must not evaluate Repomix config');
     });
 
     it('uses process.cwd by default and reads every split part in Repomix order before final budgeting', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-cwd-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-cwd-')));
         const first = 'first artifact in Repomix order\n';
         const second = 'second artifact in Repomix order\n';
         const fake = await installProjectLocalFakeRepomix(dir, {
@@ -386,7 +386,7 @@ throw new Error('raw mode must not evaluate Repomix config');
     });
 
     it('uploads the configured Repomix output directly without wrapping it in a zip', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-upload-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-upload-')));
         await mkdir(join(dir, 'src'), { recursive: true });
         const source = 'export function detailedImplementation() { return 42; }\n';
         const transformed = 'export function detailedImplementation() { /* compressed */ }\n';
@@ -428,8 +428,8 @@ throw new Error('raw mode must not evaluate Repomix config');
     });
 
     it('rejects cwd escapes only for Repomix while raw rendering remains unchanged', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-boundary-'));
-        const outsideDir = await mkdtemp(join(tmpdir(), 'ctx-pack-outside-'));
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-repomix-boundary-')));
+        const outsideDir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-outside-')));
         const outsidePath = join(outsideDir, 'outside.txt');
         const linkedPath = join(outsideDir, 'linked.txt');
         const outsideContent = 'outside source remains raw\n';

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 async function createTemporaryProject(prefix = 'agbrowse-context-transform-') {
-    const cwd = await mkdtemp(join(tmpdir(), prefix));
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), prefix)));
     temporaryDirectories.push(cwd);
     await writeFile(join(cwd, 'package.json'), '{"private":true,"type":"module"}\n');
     const stagingRoot = join(cwd, '.agbrowse-staging');
@@ -132,7 +132,7 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
 
     it('prefers the project-local package, records package provenance, and returns a single output directly', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
-        const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-decoy-'));
+        const pathRoot = await realpath(await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-decoy-')));
         temporaryDirectories.push(pathRoot);
         const local = await installProjectLocalFakeRepomix(cwd, {
             version: '9.1.0-local',
@@ -187,7 +187,7 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
 
     it('falls back to the npm package behind the Repomix executable on PATH', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
-        const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-'));
+        const pathRoot = await realpath(await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-')));
         temporaryDirectories.push(pathRoot);
         const pathPackage = await installPathFakeRepomix({
             root: pathRoot,
@@ -351,7 +351,7 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
     });
 
     it('excludes the retained agbrowse package root when it is inside cwd', async () => {
-        const cwd = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-managed-root-'));
+        const cwd = await realpath(await mkdtemp(join(tmpdir(), 'agbrowse-repomix-managed-root-')));
         temporaryDirectories.push(cwd);
         await writeFile(join(cwd, 'package.json'), '{"private":true,"type":"module"}\n');
         const packageRoot = join(cwd, '.browser-agent', 'web-ai-context-packages');
@@ -395,7 +395,7 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
 
     it('rejects direct explicit-file escapes before loading Repomix', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
-        const outside = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-outside-'));
+        const outside = await realpath(await mkdtemp(join(tmpdir(), 'agbrowse-repomix-outside-')));
         temporaryDirectories.push(outside);
         const outsideFile = join(outside, 'outside.ts');
         const linkedFile = join(cwd, 'linked.ts');
