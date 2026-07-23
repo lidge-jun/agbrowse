@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { execBrowser } from '../helpers/exec-browser.mjs';
+import { installProjectLocalFakeRepomix } from '../helpers/fake-repomix-project.mjs';
+
+const execFileAsync = promisify(execFile);
+const BROWSER_SCRIPT = fileURLToPath(new URL('../../skills/browser/browser.mjs', import.meta.url));
+
+async function execBrowserFromCwd(args, cwd, env = {}) {
+    try {
+        const result = await execFileAsync(process.execPath, [BROWSER_SCRIPT, ...args], {
+            cwd,
+            env: {
+                ...process.env,
+                AGBROWSE_UPDATE_CHECK: '0',
+                ...env,
+            },
+            timeout: 45_000,
+            maxBuffer: 1024 * 1024,
+        });
+        return { code: 0, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+    } catch (error) {
+        return {
+            code: error.status ?? (typeof error.code === 'number' ? error.code : 1),
+            stdout: String(error.stdout || '').trim(),
+            stderr: String(error.stderr || '').trim(),
+        };
+    }
+}
 
 describe('web-ai CLI contract', () => {
     it('shows detailed web-ai help without requiring a prompt', async () => {
@@ -30,6 +59,10 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('--max-upload-file-size <bytes>');
         expect(result.stdout).toContain('--attachment-upload-timeout-ms <ms>');
         expect(result.stdout).toContain('--max-context-file-size <bytes>');
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('(default: raw)');
+        expect(result.stdout).toContain('context.transform-invalid');
+        expect(result.stdout).toContain('context.transform-failed');
         expect(result.stdout).toContain('out.png, out-2.png, out-3.png');
         expect(result.stdout).toContain('query --session <id> sends a new prompt');
         expect(result.stdout).toContain('--session "$SID"');
@@ -45,9 +78,18 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('subcommand, not a --code flag');
         expect(result.stdout).toContain('--output-zip <path>');
         expect(result.stdout).toContain('--multi-zip');
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('Default: raw');
         expect(result.stdout).toContain('PLAN.md or 00_plan.md');
         expect(result.stdout).toContain('turn_plan.update_turn_plan');
         expect(result.stdout).toContain('MACHINE: /mnt/data/result.zip');
+    });
+
+    it('shows the context transform option in root help', async () => {
+        const result = await execBrowser(['--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('--context-transform <raw|repomix>');
+        expect(result.stdout).toContain('Default raw');
     });
 
     it('shows command-specific code extraction help without a browser', async () => {
@@ -153,6 +195,92 @@ describe('web-ai CLI contract', () => {
         expect(result.code).not.toBe(0);
         expect(result.stderr).toContain('unsupported ChatGPT model selection');
         expect(result.stderr).not.toContain('--inline-only');
+    });
+
+    it('allows repomix cwd packing through send/query preflight without file selectors', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'query',
+            '--vendor',
+            'chatgpt',
+            '--prompt',
+            'hello',
+            '--context-transform',
+            'repomix',
+            '--model',
+            'deepthink',
+        ]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('unsupported ChatGPT model selection');
+        expect(result.stderr).not.toContain('--inline-only');
+    });
+
+    it('rejects Repomix for Grok before browser startup without changing raw Grok render', async () => {
+        const repomix = await execBrowser([
+            'web-ai',
+            'render',
+            '--vendor',
+            'grok',
+            '--prompt',
+            'hello',
+            '--context-transform',
+            'repomix',
+            '--json',
+        ], { env: { AGBROWSE_WEB_AI_AUTO_START: '0' } });
+        const raw = await execBrowser([
+            'web-ai',
+            'render',
+            '--vendor',
+            'grok',
+            '--prompt',
+            'hello',
+            '--context-transform',
+            'raw',
+            '--json',
+        ]);
+
+        expect(repomix.code).not.toBe(0);
+        expect(JSON.parse(repomix.stderr).error).toMatchObject({
+            errorCode: 'capability.unsupported',
+            stage: 'context-transform',
+            vendor: 'grok',
+            mutationAllowed: false,
+        });
+        expect(raw.code).toBe(0);
+        expect(JSON.parse(raw.stdout).contextTransform).toBeUndefined();
+    });
+
+    it('fails Repomix preparation before browser startup or tab mutation', async () => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'agbrowse-repomix-prebrowser-'));
+        const browserHome = join(projectDir, '.browser-home');
+        try {
+            writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ name: 'fixture-project', private: true }));
+            await installProjectLocalFakeRepomix(projectDir, { incompatible: true });
+
+            const result = await execBrowserFromCwd([
+                'web-ai',
+                'query',
+                '--vendor',
+                'chatgpt',
+                '--prompt',
+                'hello',
+                '--context-transform',
+                'repomix',
+                '--json',
+            ], projectDir, {
+                BROWSER_AGENT_HOME: browserHome,
+                AGBROWSE_WEB_AI_AUTO_START: '0',
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(JSON.parse(result.stderr).error).toMatchObject({
+                errorCode: 'context.transform-failed',
+                stage: 'context-transform',
+            });
+            expect(result.stderr).not.toContain('headed Chrome');
+        } finally {
+            rmSync(projectDir, { recursive: true, force: true });
+        }
     });
 
     it('does not default --model for chatgpt when omitted', async () => {
@@ -305,9 +433,136 @@ describe('web-ai CLI contract', () => {
         const parsed = JSON.parse(result.stdout);
         expect(parsed.status).toBe('dry-run');
         expect(parsed.transport).toBe('upload');
+        expect(parsed.contextTransform).toBeUndefined();
         expect(parsed.attachments).toHaveLength(1);
         expect(parsed.files[0].relativePath).toBe('web-ai/question.mjs');
         expect(parsed.composerText).toBeUndefined();
+    });
+
+    it('normalizes omitted context transform to byte-identical explicit raw JSON', async () => {
+        const args = [
+            'web-ai',
+            'context-dry-run',
+            '--vendor',
+            'chatgpt',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'web-ai/question.mjs',
+            '--context-transport',
+            'inline',
+            '--json',
+        ];
+        const omitted = await execBrowser(args);
+        const explicitRaw = await execBrowser([...args, '--context-transform', 'raw']);
+
+        expect(omitted.code).toBe(0);
+        expect(explicitRaw.code).toBe(0);
+        expect(explicitRaw.stdout).toBe(omitted.stdout);
+        expect(JSON.parse(omitted.stdout).contextTransform).toBeUndefined();
+    });
+
+    it('rejects an invalid context transform before context processing with structured JSON', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'context-dry-run',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'does-not-exist.mjs',
+            '--context-transform',
+            'brotli',
+            '--json',
+        ]);
+
+        expect(result.code).not.toBe(0);
+        const parsed = JSON.parse(result.stderr);
+        expect(parsed.error.errorCode).toBe('context.transform-invalid');
+        expect(parsed.error.stage).toBe('context-transform');
+        const evidence = JSON.stringify(parsed.error.evidence);
+        expect(evidence).toContain('brotli');
+        expect(evidence).toContain('raw');
+        expect(evidence).toContain('repomix');
+        expect(evidence).not.toContain('does-not-exist.mjs');
+    });
+
+    it('rejects an explicitly empty context transform before context processing', async () => {
+        const result = await execBrowser([
+            'web-ai',
+            'context-dry-run',
+            '--prompt',
+            'review context',
+            '--context-from-files',
+            'does-not-exist.mjs',
+            '--context-transform=',
+            '--json',
+        ]);
+
+        expect(result.code).not.toBe(0);
+        const parsed = JSON.parse(result.stderr);
+        expect(parsed.error).toMatchObject({
+            errorCode: 'context.transform-invalid',
+            stage: 'context-transform',
+            evidence: {
+                supplied: '',
+                supported: ['raw', 'repomix'],
+            },
+        });
+        expect(result.stderr).not.toContain('does-not-exist.mjs');
+    });
+
+    it('adds a human summary transform line only for repomix', async () => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'agbrowse-context-transform-cli-'));
+        const browserHome = join(projectDir, '.browser-home');
+        try {
+            writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ name: 'fixture-project', private: true }));
+            writeFileSync(join(projectDir, 'sample.js'), 'export function sample() { return 1; }\n');
+            await installProjectLocalFakeRepomix(projectDir, {
+                outputs: [{ name: 'configured-context.md', content: '# packed context\n' }],
+            });
+
+            const args = [
+                'web-ai',
+                'context-dry-run',
+                '--prompt',
+                'review context',
+                '--context-from-files',
+                'sample.js',
+                '--context-transport',
+                'inline',
+            ];
+            const raw = await execBrowserFromCwd(args, projectDir, { BROWSER_AGENT_HOME: browserHome });
+            const repomix = await execBrowserFromCwd(
+                [...args, '--context-transform', 'repomix'],
+                projectDir,
+                { BROWSER_AGENT_HOME: browserHome },
+            );
+            const deepRender = await execBrowserFromCwd([
+                'web-ai',
+                'render',
+                '--prompt',
+                'review context',
+                '--research',
+                'deep',
+                '--context-from-files',
+                'sample.js',
+                '--context-transport',
+                'inline',
+                '--context-transform',
+                'repomix',
+            ], projectDir, { BROWSER_AGENT_HOME: browserHome });
+
+            expect(raw.code).toBe(0);
+            expect(raw.stdout).not.toContain('[context-dry-run] transform:');
+            expect(repomix.code).toBe(0);
+            expect(repomix.stdout).toContain('[context-dry-run] transform: repomix');
+            expect(deepRender.code).toBe(0);
+            expect(deepRender.stdout).toContain('export function sample()');
+            expect(deepRender.stdout).not.toContain('[CONTEXT TRANSFORM]');
+            expect(deepRender.stdout).not.toContain('# packed context');
+        } finally {
+            rmSync(projectDir, { recursive: true, force: true });
+        }
     });
 
     it('supports context render with full composer text', async () => {

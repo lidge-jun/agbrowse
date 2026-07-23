@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, posix as pathPosix } from 'node:path';
+import { basename, join, posix as pathPosix, resolve } from 'node:path';
 /** @ts-ignore — archiver has no bundled types and @types/archiver is not installed */
 import archiver from 'archiver';
 import { DEFAULT_INLINE_CHAR_LIMIT } from './constants.mjs';
 import { buildContextPack } from './file-selector.mjs';
 import { buildContextRenderResult } from './renderer.mjs';
+import { buildRepomixArtifacts, normalizeContextTransformMode } from './transformer.mjs';
 import { WebAiError } from '../errors.mjs';
 
 /**
@@ -24,6 +25,7 @@ import { WebAiError } from '../errors.mjs';
  *   vendor?: string,
  *   model?: string,
  *   contextTransport?: string,
+ *   contextTransform?: unknown,
  *   inlineOnly?: boolean,
  *   maxInput?: number,
  * }} BuilderInput
@@ -33,8 +35,7 @@ const PACKAGE_DIR = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.bro
 
 /** @param {BuilderInput} [input] */
 export async function buildContextPackageResult(input = {}) {
-    const selected = await buildContextPack(input);
-    const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
+    const result = await selectTransformAndRender(input);
     if (result.budget.estimatedTokens > result.budget.maxInputTokens) {
         result.ok = false;
     }
@@ -58,8 +59,7 @@ export async function buildInlineContextOrFail(input = {}) {
 /** @param {BuilderInput} [input] */
 export async function prepareContextForBrowser(input = {}) {
     if (!hasContextPackaging(input)) return null;
-    const selected = await buildContextPack({ ...input, strict: true });
-    const result = buildContextRenderResult(input, selected.files, selected.excluded, selected.warnings);
+    const result = await selectTransformAndRender({ ...input, strict: true });
     if (result.budget.estimatedTokens > result.budget.maxInputTokens) {
         throw overBudgetError(result.budget);
     }
@@ -70,15 +70,14 @@ export async function prepareContextForBrowser(input = {}) {
         }
         return result;
     }
-    if (!selected.files.length) throw new WebAiError({
-        errorCode: 'context.over-budget',
-        stage: 'context-preflight',
-        retryHint: 'reduce-files',
-        message: 'context package attachment is empty',
-    });
+    if (result.contextTransform === 'repomix') {
+        if (!result.attachments.length) throw emptyContextAttachmentError();
+        return result;
+    }
+    if (!result.files.length) throw emptyContextAttachmentError();
     await fs.mkdir(PACKAGE_DIR, { recursive: true });
     const filePath = join(PACKAGE_DIR, `web-ai-context-package-${randomUUID()}.zip`);
-    await zipContextFiles(selected.files, result.attachmentText, filePath);
+    await zipContextFiles(result.files, result.attachmentText, filePath);
     const stat = await fs.stat(filePath);
     result.attachments = [{
         path: filePath,
@@ -88,14 +87,103 @@ export async function prepareContextForBrowser(input = {}) {
     return result;
 }
 
+/** @param {BuilderInput} input */
+async function selectTransformAndRender(input) {
+    const contextTransform = normalizeContextTransformMode(input.contextTransform);
+    if (contextTransform === 'repomix') {
+        return buildRepomixContextResult({ ...input, contextTransform });
+    }
+    const selected = await buildContextPack(input);
+    return buildContextRenderResult(
+        { ...input, contextTransform },
+        selected.files,
+        selected.excluded,
+        selected.warnings,
+    );
+}
+
+/** @param {BuilderInput & {contextTransform:'repomix'}} input */
+async function buildRepomixContextResult(input) {
+    const cwd = resolve(input.cwd || process.cwd());
+    const explicitSelection = hasExplicitContextSelection(input);
+    const selected = explicitSelection
+        ? await buildContextPack(input)
+        : { files: [], excluded: [], warnings: [] };
+    if (explicitSelection && selected.files.length === 0) {
+        throw emptyContextAttachmentError();
+    }
+    await fs.mkdir(PACKAGE_DIR, { recursive: true });
+    const stagingDir = await fs.mkdtemp(join(PACKAGE_DIR, 'web-ai-context-repomix-'));
+    let packed;
+    try {
+        packed = await buildRepomixArtifacts({
+            cwd,
+            stagingRoot: stagingDir,
+            managedRoot: PACKAGE_DIR,
+            explicitFiles: explicitSelection ? selected.files.map(file => file.path) : null,
+            contextExclude: input.contextExclude || [],
+            maxFileSize: input.maxFileSize,
+        });
+    } catch (error) {
+        await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+    }
+
+    const files = packed.artifacts.map(artifact => ({
+        path: artifact.path,
+        relativePath: artifact.displayPath,
+        sizeBytes: artifact.sizeBytes,
+        estimatedTokens: artifact.estimatedTokens,
+        language: artifact.language,
+        content: artifact.content,
+    }));
+    const result = buildContextRenderResult(
+        input,
+        files,
+        selected.excluded,
+        [...selected.warnings, ...(packed.warnings || [])],
+    );
+    return {
+        ...result,
+        repomix: packed.repomix,
+        ...(result.transport === 'upload' ? {
+            attachments: packed.artifacts.map(artifact => ({
+                path: artifact.path,
+                displayPath: artifact.displayPath,
+                sizeBytes: artifact.sizeBytes,
+            })),
+        } : {}),
+    };
+}
+
+/** @param {BuilderInput} input */
+function hasExplicitContextSelection(input) {
+    return Boolean(
+        input.contextFile ||
+        (Array.isArray(input.contextFromFiles)
+            ? input.contextFromFiles.length > 0
+            : input.contextFromFiles)
+    );
+}
+
 /**
- * @param {{ contextFile?: string, contextFromFiles?: any }} [input]
+ * @param {{ contextFile?: string, contextFromFiles?: any, contextTransform?: unknown }} [input]
  */
 export function hasContextPackaging(input = {}) {
     return Boolean(
         input.contextFile ||
-        (Array.isArray(input.contextFromFiles) && input.contextFromFiles.length > 0)
+        (Array.isArray(input.contextFromFiles) && input.contextFromFiles.length > 0) ||
+        String(input.contextTransform || '').trim().toLowerCase() === 'repomix'
     );
+}
+
+function emptyContextAttachmentError() {
+    return new WebAiError({
+        errorCode: 'context.over-budget',
+        stage: 'context-preflight',
+        retryHint: 'reduce-files',
+        message: 'context package attachment is empty',
+    });
 }
 
 /** @param {{ estimatedTokens: number, maxInputTokens: number }} budget */

@@ -742,7 +742,8 @@ Initial `errorCode` catalog:
   `provider.runtime-disabled`
 - `capability.unsupported`
 - `session.target-ambiguous`
-- `context.over-budget`, `context.symlink-rejected`
+- `context.over-budget`, `context.symlink-rejected`,
+  `context.transform-invalid`, `context.transform-failed`
 - `grok.context-pack-not-allowed`
 - `internal.unhandled`
 
@@ -1086,16 +1087,48 @@ replace, and clear operations are intentionally unsupported.
 Use context packages when the prompt plus files would be too large or when you
 want untrusted file content separated from the main instruction block.
 
-Upload transport writes one `web-ai-context-package-<id>.zip` archive. The
+Raw upload transport writes one `web-ai-context-package-<id>.zip` archive. The
 archive contains `CONTEXT_PACKAGE.md` plus the selected source files; do not
 create a temporary `.txt` or `.md` file yourself for source context.
 
-> Use ChatGPT or Gemini for context packaging. Grok context packages **fail
-> closed** by default — `web-ai send/query --vendor grok` with
+Context files use `--context-transform raw` by default. Omitting the option and
+passing `raw` are equivalent: selected file content is rendered and archived
+without transformation, and Repomix is not required or loaded.
+
+`--context-transform repomix` instead runs Repomix with its effective project,
+global, or built-in configuration and uploads the generated output file
+directly; ChatGPT and Gemini upload every `output.splitOutput` part in Repomix
+order.
+Without `--context-from-files` or `--context-file`, Repomix packs the current
+working directory. With either selector, the selected cwd-contained source
+files are the upper bound passed to Repomix; this selector-safe path requires
+Repomix 1.0.0 or newer. Repomix's ignore, processor, pattern, and other output
+settings still apply. Configured instruction text, Git diff/log sections, and
+processor output may therefore add non-source content to the artifact. Inline
+transport reads the generated parts in order and applies the existing context
+budgets.
+
+agbrowse first resolves a project-local Repomix package, then the package behind
+the `repomix` executable on `PATH`; it never installs or downloads Repomix. The
+configured output basename is preserved in an agbrowse-managed staging
+directory. `output.copyToClipboard` is disabled; other effective output content
+settings are preserved. `output.stdout` is also disabled because agbrowse needs
+a file artifact to upload. The active Repomix version must support the config and
+the current Node.js runtime.
+
+> Trust warning: opting into Repomix executes local/global JavaScript or
+> TypeScript config and configured `input.processors` with the same privileges
+> as a local Repomix CLI run. Review untrusted repositories before using it.
+
+> Use ChatGPT or Gemini for provider-bound context packaging. Grok context
+> packages **fail closed** by default — `web-ai send/query --vendor grok` with
 > `--context-from-files` / `--context-file` / `--context-transport upload`
 > throws with `stage: 'grok-context-pack-not-allowed'`. Pass
-> `--allow-grok-context-pack` to override deliberately; the runtime still
-> emits `grok-context-pack-not-recommended` when the override is used.
+> `--allow-grok-context-pack` to override deliberately for raw context only;
+> the runtime still emits `grok-context-pack-not-recommended` when the override
+> is used. `web-ai render/send/query/code --vendor grok` explicitly rejects
+> Repomix. The provider-neutral `context-render` and `context-dry-run` utilities
+> only build or inspect the package and do not imply live Grok support.
 
 Dry run:
 
@@ -1106,6 +1139,9 @@ agbrowse web-ai context-dry-run \
   --context-from-files "web-ai/*.mjs" \
   --json
 ```
+
+Add `--context-transform repomix` to build the exact staged artifact during a
+dry run before using the same configuration in a live context command.
 
 Live upload:
 

@@ -7,10 +7,16 @@
 import { parseArgs } from 'node:util';
 import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi, deepResearchWebAi } from './chatgpt.mjs';
 import { codeWebAi, extractCodeArtifacts } from './code-mode.mjs';
+import { buildCodeModePrompt } from './code-mode-prompt.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession, submitWorkPrompt } from './chatgpt-work-picker.mjs';
-import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
+import {
+    buildContextPackageResult,
+    normalizeContextTransformMode,
+    prepareContextForBrowser,
+    renderContextDryRunReport,
+} from './context-pack/index.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import { runDoctor } from './doctor.mjs';
 import { maybeRecordChurn } from './churn-log.mjs';
@@ -189,11 +195,16 @@ Attachments and context:
   --context-exclude <glob>          Exclude from the package; repeatable
   --context-file <path>             Use a prebuilt context package file
   --context-transport <upload|inline>
+  --context-transform <raw|repomix> Use raw context packaging (default: raw), or
+                                    upload Repomix artifacts produced from its
+                                    effective config. Without file selectors,
+                                    repomix packs cwd and executes trusted
+                                    config/processors like the local CLI.
   --max-input <chars>               Inline prompt budget
   --max-file-size <bytes>           Legacy alias for --max-context-file-size
   --files-report                    Include file report metadata
   --allow-copy-markdown-fallback    Explicitly permit provider Copy button capture after DOM response
-  --allow-grok-context-pack         Override Grok hard-gate (Grok prefers inline + single --file)
+  --allow-grok-context-pack         Override Grok raw-context hard-gate (Repomix remains unsupported)
   --require-source-audit            Fail closed when completed answers lack inline sources
   --source-audit-ratio <0..1>       Required sourced claim ratio (default 1)
   --source-audit-scope <text>       Checked scope for absence/no-result claims
@@ -303,6 +314,7 @@ Failure envelope (when --json or AGBROWSE_JSON_ERRORS=1):
          watcher.session-missing | watcher.already-running |
          snapshot.unavailable | snapshot.ref-stale |
          context.over-budget | context.symlink-rejected |
+         context.transform-invalid | context.transform-failed |
          code-mode.vendor-unsupported | code-mode.prompt-missing |
          code-mode.output-conflict | code-mode.conversation-id-missing |
          code-extract.conversation-id-missing |
@@ -384,6 +396,10 @@ Optional inputs:
   --context-exclude <glob>
   --context-file <path>
   --context-transport <upload|inline>
+  --context-transform <raw|repomix>
+                        Default: raw. repomix uploads config-driven Repomix
+                        artifacts; without selectors it packs cwd. Config and
+                        processors execute with local CLI privileges.
   --context-refresh     Re-upload the dev-agent context zip on a continuation
                         turn. By default it is attached only on the FIRST turn
                         of a conversation; continuation turns (--url /
@@ -604,6 +620,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'attachment-upload-timeout-ms': { type: 'string' },
             'files-report': { type: 'boolean', default: false },
             'context-transport': { type: 'string' },
+            'context-transform': { type: 'string', default: 'raw' },
             'trace-dir': { type: 'string' },
             policy: { type: 'string' },
             'unsafe-allow': { type: 'string', multiple: true },
@@ -638,10 +655,19 @@ async function runWebAiCliInner(argv = [], deps) {
         strict: false,
     });
 
+    values['context-transform'] = normalizeContextTransformMode(values['context-transform']);
     applyVendorDefaults(values, command);
     rejectFutureScope(values);
     const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some((/** @type {any} */ a) => a.startsWith('--vendor='));
-    const hasContextPackage = Boolean(values['context-file'] || (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0));
+    const contextTransform = values.research === 'deep' && ['render', 'send', 'query', 'code'].includes(command)
+        ? 'raw'
+        : values['context-transform'];
+    const hasRepomixContext = contextTransform === 'repomix';
+    const hasContextPackage = Boolean(
+        values['context-file'] ||
+        (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0) ||
+        hasRepomixContext
+    );
     // --file may repeat → parseArgs yields an array; normalize to a path list.
     const filePaths = (Array.isArray(values.file) ? values.file : (values.file ? [values.file] : [])).filter((value) => typeof value === 'string');
     if (['send', 'query'].includes(command) && !values['inline-only'] && filePaths.length === 0 && !hasContextPackage) {
@@ -705,6 +731,7 @@ async function runWebAiCliInner(argv = [], deps) {
         attachmentUploadTimeoutMs: values['attachment-upload-timeout-ms'] || process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS,
         filesReport: values['files-report'],
         contextTransport: values['context-transport'],
+        contextTransform,
         inlineOnly: values['inline-only'],
         allowCopyMarkdownFallback: values['allow-copy-markdown-fallback'] === true,
         allowGrokContextPack: values['allow-grok-context-pack'] === true,
@@ -737,7 +764,41 @@ async function runWebAiCliInner(argv = [], deps) {
     };
 
     validateCodeModeCliInput(command, input);
-    await enforceCliPolicy(command, input);
+    const repomixContextProvider = (
+        ['render', 'send', 'query', 'code'].includes(command) &&
+        input.contextTransform === 'repomix'
+    )
+        ? (input.session
+            ? getSession(input.session)?.vendor || input.vendor || 'chatgpt'
+            : input.vendor || 'chatgpt')
+        : null;
+    if (repomixContextProvider && !['chatgpt', 'gemini'].includes(repomixContextProvider)) {
+        throw new WebAiError({
+            errorCode: 'capability.unsupported',
+            stage: 'context-transform',
+            vendor: repomixContextProvider,
+            retryHint: 'use-raw-or-supported-provider',
+            message: '--context-transform repomix supports only ChatGPT and Gemini',
+            mutationAllowed: false,
+            evidence: { contextTransform: 'repomix', supportedVendors: ['chatgpt', 'gemini'] },
+        });
+    }
+    await enforceCliPolicy(
+        command,
+        repomixContextProvider ? { ...input, vendor: repomixContextProvider } : input,
+    );
+    if (['send', 'query', 'code'].includes(command) && repomixContextProvider) {
+        // Resolve config, run Repomix, and validate its staged artifacts before
+        // browser startup or tab selection can mutate provider state.
+        input.preparedContextPack = await prepareContextForBrowser({
+            ...input,
+            vendor: repomixContextProvider,
+            prompt: command === 'code'
+                ? buildCodeModePrompt(input.prompt, { multiZip: input.multiZip === true })
+                : input.prompt,
+            inlineOnly: command === 'code' ? false : input.inlineOnly,
+        });
+    }
     await ensureHeadedBrowserForWebAi(deps, command, argv);
 
     if (values['control-summary'] && !values.json && BROWSER_REQUIRED_COMMANDS.has(command)) {
@@ -930,11 +991,13 @@ async function enforceCliPolicy(command, input) {
     const mutating = ['send', 'query', 'stop'].includes(command);
     const provider = input.vendor || input.provider || 'chatgpt';
     const policyUrl = input.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[input.vendor || 'chatgpt'];
+    const repomixContext = input.contextTransform === 'repomix';
+    const contextFileAccess = Boolean(input.contextFile || input.contextFromFiles?.length || repomixContext);
     const action = {
         url: policyUrl,
-        upload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
-        explicitUpload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
-        fileAccess: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
+        upload: Boolean(input.filePath || contextFileAccess),
+        explicitUpload: Boolean(input.filePath || contextFileAccess),
+        fileAccess: Boolean(input.filePath || contextFileAccess),
         clipboardWriteIntercept: input.allowCopyMarkdownFallback === true,
         explicitClipboardWriteIntercept: input.allowCopyMarkdownFallback === true,
         evaluate: false,

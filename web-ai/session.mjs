@@ -491,7 +491,7 @@ export function resolveTimeoutBudgetSec(
 
 /**
  * @param {WebAiEnvelope} [input]
- * @param {{ files?: unknown[], transport?: string } | null} [contextPack]
+ * @param {{ files?: unknown[], transport?: string, contextTransform?: string, attachments?: unknown[], repomix?: Record<string, unknown> } | null} [contextPack]
  * @returns {Record<string, unknown>}
  */
 export function summarizeEnvelope(input = {}, contextPack = null) {
@@ -502,6 +502,11 @@ export function summarizeEnvelope(input = {}, contextPack = null) {
     if (input.filePath) summary.filePath = input.filePath;
     if (contextPack?.files?.length) summary.fileCount = contextPack.files.length;
     if (contextPack?.transport) summary.contextTransport = contextPack.transport;
+    if (contextPack?.contextTransform === 'repomix') {
+        summary.contextTransform = 'repomix';
+        if (contextPack.attachments?.length) summary.contextAttachmentCount = contextPack.attachments.length;
+        if (contextPack.repomix) summary.repomix = contextPack.repomix;
+    }
     return summary;
 }
 

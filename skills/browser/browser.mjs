@@ -3404,8 +3404,11 @@ try {
         --url <conversation-or-provider-url>
         --inline-only | --file <path> | --context-from-files <glob>
         --context-transport <upload|inline>
+        --context-transform <raw|repomix> Default raw; repomix uploads artifacts
+                                           produced from its effective config.
+                                           Without selectors it packs cwd.
         --allow-copy-markdown-fallback Capture provider Copy button output
-        --allow-grok-context-pack      Override Grok hard-gate (prefer inline)
+        --allow-grok-context-pack      Override Grok raw-context gate; not Repomix
         --timeout <sec>                Long tier defaults: chatgpt-pro=5400 ·
                                        grok-heavy=3600 · deep-research=3600;
                                        unknown tier falls back
