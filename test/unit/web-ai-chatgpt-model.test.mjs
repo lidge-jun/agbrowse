@@ -125,6 +125,67 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it.each(['thinking', 'instant'])('preserves the current %s tier when selecting the Sol family', async model => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model,
+            family: 'gpt-5.5',
+            initialSelectedEffort: model === 'thinking' ? 'medium' : null,
+            simplifiedIntelligenceMenu: true,
+            checkedModelRows: false,
+            checkedEffortRows: false,
+        });
+
+        await expect(selectChatGptModel(page, undefined, { family: 'gpt-5.6-sol' })).resolves.toMatchObject({
+            selected: model,
+            modelSelection: { familyLabel: 'GPT-5.6 Sol', verified: true },
+        });
+    });
+
+    it.each(['Pro', 'Standard Pro', 'Extended Pro'])('vetoes Sol when the final composer pill is %s', async composerProPillLabel => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            family: 'gpt-5.5',
+            composerProPillLabel,
+            simplifiedIntelligenceMenu: true,
+            checkedModelRows: false,
+            checkedEffortRows: false,
+            roleButtonPill: true,
+        });
+
+        await expect(selectChatGptModel(page, undefined, { family: 'gpt-5.6-sol' })).rejects.toMatchObject({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            evidence: { activeComposerLabel: composerProPillLabel },
+        });
+    });
+
+    it('applies effort-only to the currently checked thinking tier', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({
+            model: 'thinking',
+            initialSelectedEffort: 'medium',
+            effortTexts: canonicalThinkingEffortTexts(),
+        });
+
+        await expect(selectChatGptModel(page, undefined, { effort: 'high' })).resolves.toMatchObject({
+            selected: 'thinking',
+            effort: 'high',
+        });
+    });
+
+    it('rejects effort-only when the current tier is Pro', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ model: 'pro', simplifiedIntelligenceMenu: true });
+
+        await expect(selectChatGptModel(page, undefined, { effort: 'extended' })).rejects.toMatchObject({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            evidence: { model: 'pro', effort: 'high' },
+        });
+    });
+
     it('selects every supported canonical thinking effort through the flat radio UI', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
 
@@ -676,7 +737,9 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(cliSrc).toContain("effort: { type: 'string' }");
         expect(cliSrc).toContain("'reasoning-effort': { type: 'string' }");
         expect(cliSrc).toContain('reasoningEffort: values.effort');
-        expect(chatgptSrc).toContain("selectChatGptModel(page, input.model, { effort: input.reasoningEffort })");
+        expect(cliSrc).toContain("family: { type: 'string' }");
+        expect(cliSrc).toContain('family: values.family');
+        expect(chatgptSrc).toContain('family: input.family');
         expect(chatgptSrc).toContain('updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });');
         expect(chatgptSrc).toContain('...(selectedModel?.warnings || [])');
     });
@@ -720,6 +783,8 @@ function useAdvancingClock() {
 
 function createFakeModelPage({
     model = 'thinking',
+    family = 'gpt-5.5',
+    composerProPillLabel = null,
     effortTexts = {},
     activePillTexts = null,
     genericEffortTexts = null,
@@ -751,6 +816,7 @@ function createFakeModelPage({
         modelMenuOpen: initialModelMenuOpen,
         effortMenuOpen: false,
         currentModel: model,
+        currentFamily: family,
         selectedEffort: initialSelectedEffort,
         effortMenuSource: null,
         exactEffortTrigger,
@@ -805,6 +871,21 @@ function createFakeModelPage({
         }),
     ];
     const modelRows = simplifiedIntelligenceMenu ? simplifiedRows : legacyModelRows;
+    const familyLabels = {
+        'gpt-5.6-sol': 'GPT-5.6 Sol',
+        'gpt-5.5': 'GPT-5.5',
+        'gpt-5.4': 'GPT-5.4',
+        'gpt-5.3': 'GPT-5.3',
+        o3: 'o3',
+    };
+    const familyRows = Object.entries(familyLabels).map(([key, text]) => createElement({
+        text,
+        get checked() { return state.currentFamily === key; },
+        onClick: () => { state.currentFamily = key; },
+    }));
+    const familyTrigger = createElement({
+        text: () => familyLabels[state.currentFamily],
+    });
     const exactTrigger = createElement({
         text: exactEffortTriggerText,
         testId: `model-switcher-gpt-5-5-${exactEffortTriggerModel}-thinking-effort`,
@@ -826,9 +907,9 @@ function createFakeModelPage({
         visible: closedDropdownButton,
     });
     const modelPill = createElement({
-        text: () => state.selectedEffort
+        text: () => composerProPillLabel || (state.selectedEffort
             ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
-            : state.currentModel,
+            : state.currentModel),
         onClick: () => { state.modelMenuOpen = true; },
     });
     const splitModelPill = createElement({
@@ -916,6 +997,7 @@ function createFakeModelPage({
     function selectElements(selector) {
         if (modelPickerUnavailable) return [];
         if (selector === 'button, [role="button"], [role="menuitem"]') return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'text' ? [...composerPills(), genericTrigger] : composerPills();
+        if (selector.includes('[role="button"].__composer-pill')) return roleButtonPill ? composerPills() : [];
         if (selector.includes('__composer-pill') && !selector.includes('aria-haspopup')) return roleButtonPill ? composerPills() : [];
         if (selector === 'button[aria-haspopup="menu"]') return composerPills();
         if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));
@@ -935,6 +1017,10 @@ function createFakeModelPage({
             }
             return [];
         }
+        if (selector === '[role="menu"][data-state="open"]') {
+            return state.modelMenuOpen ? [createElement({ text: familyRows.map(row => row.text).join('\n') })] : [];
+        }
+        if (selector === '[role="menuitem"][data-has-submenu]') return state.modelMenuOpen ? [familyTrigger] : [];
         if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
         if (selector === '[data-testid^="model-switcher-gpt-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
         if (selector === '[role="menuitemradio"], [role="menuitem"]') {
@@ -944,13 +1030,13 @@ function createFakeModelPage({
         }
         if (selector === '[role="menuitemradio"]') {
             if (state.effortMenuOpen && effortOptionRole === 'menuitemradio') return currentEffortRows();
-            if (simplifiedIntelligenceMenu && state.modelMenuOpen) return simplifiedRows;
+            if (simplifiedIntelligenceMenu && state.modelMenuOpen) return [...familyRows, ...simplifiedRows];
             return [];
         }
         if (selector === '[role="menuitem"]') return state.effortMenuOpen && effortOptionRole === 'menuitem' ? currentEffortRows() : [];
         if (selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')) {
             const checkedTestId = selector.match(/data-testid="([^"]+)"/)?.[1];
-            return [...modelRows, ...currentEffortRows()]
+            return [...familyRows, ...modelRows, ...currentEffortRows()]
                 .filter(element => element.checked)
                 .filter(element => !checkedTestId || element.testId === checkedTestId);
         }
@@ -1004,7 +1090,12 @@ function makeLocator(elements, selector = '') {
         evaluateAll: async (fn, arg) => fn(elements.map(element => ({
             innerText: element.text,
             textContent: element.text,
-            getAttribute: name => name === 'data-testid' ? element.testId : null,
+            getAttribute: name => {
+                if (name === 'data-testid') return element.testId;
+                if (name === 'aria-checked') return element.checked ? 'true' : 'false';
+                if (name === 'data-state') return element.checked ? 'checked' : 'unchecked';
+                return null;
+            },
         })), arg),
         // Scoped locator: delegate to the page's selectElements for sub-queries.
         // This allows composer-scoped menu root patterns to work.

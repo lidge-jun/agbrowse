@@ -799,6 +799,11 @@ Model aliases:
 | `--effort medium\|high\|xhigh` | `Medium` / `High` / `Extra High` |
 | `--family gpt-5.6-sol\|gpt-5.5\|gpt-5.4\|gpt-5.3\|o3` | Chat family aliases; omit to preserve current UI family |
 
+`--family` is ChatGPT-only and does not change the checked tier. `--effort`
+without `--model` or `--family` applies to the current ChatGPT tier; it fails
+with `provider.model-mismatch` when that tier is Pro because Pro has no effort
+control. Gemini and Grok still require `--model` with effort.
+
 Legacy effort normalization: `light|standard → medium`, `extended → high` (one
 stderr warning), `heavy → xhigh`. Legacy Pro effort resolves to flat Pro and
 emits one no-selection stderr warning. `gpt-5.3` is no longer a synonym for

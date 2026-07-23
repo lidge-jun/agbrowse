@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -44,6 +44,7 @@ describe('web-ai CLI contract', () => {
         expect(result.stdout).toContain('Provider:');
         expect(result.stdout).toContain('--context-from-files');
         expect(result.stdout).toContain('--effort <alias>');
+        expect(result.stdout).toContain('--family <alias>');
         expect(result.stdout).toContain('ChatGPT: instant, thinking, pro');
         expect(result.stdout).toContain('Tab lease policy:');
         expect(result.stdout).toContain('leaseClosedTabs');
@@ -289,8 +290,8 @@ describe('web-ai CLI contract', () => {
         expect(result.stderr).not.toContain('unsupported');
 
         const effortWithoutModel = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
-        expect(effortWithoutModel.code).not.toBe(0);
-        expect(effortWithoutModel.stderr).toContain('reasoning effort requires --model');
+        expect(effortWithoutModel.code).toBe(0);
+        expect(effortWithoutModel.stderr).not.toContain('reasoning effort requires --model');
     });
 
     it('rejects unsupported ChatGPT model choices', async () => {
@@ -309,8 +310,8 @@ describe('web-ai CLI contract', () => {
         expect(thinking.stderr).not.toContain('unsupported ChatGPT reasoning effort');
 
         const effortOnly = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
-        expect(effortOnly.code).not.toBe(0);
-        expect(effortOnly.stderr).toContain('reasoning effort requires --model');
+        expect(effortOnly.code).toBe(0);
+        expect(effortOnly.stderr).not.toContain('reasoning effort requires --model');
 
         const proHeavy = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--model', 'pro', '--effort', 'heavy']);
         expect(proHeavy.code).not.toBe(0);
@@ -359,6 +360,24 @@ describe('web-ai CLI contract', () => {
         const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--model', 'gpt-5.6-sol']);
         expect(result.code).not.toBe(0);
         expect(result.stderr).toContain('unsupported ChatGPT model selection');
+    });
+
+    it('parses ChatGPT --family independently from the tier model', async () => {
+        const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--family', 'gpt-5.6-sol', '--model', 'thinking']);
+        expect(result.code).toBe(0);
+        expect(result.stderr).not.toContain('unsupported');
+
+        const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
+        expect(cliSrc).toContain('model: values.model');
+        expect(cliSrc).toContain('family: values.family');
+    });
+
+    it('keeps model-less effort ChatGPT-only', async () => {
+        for (const vendor of ['gemini', 'grok']) {
+            const result = await execBrowser(['web-ai', 'render', '--vendor', vendor, '--prompt', 'hello', '--effort', 'high']);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toContain('reasoning effort requires --model');
+        }
     });
 
     it('accepts observed Gemini and Grok model choices in CLI preflight', async () => {

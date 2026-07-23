@@ -220,7 +220,7 @@ dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed, X/Twitter oEmbed
 
 | Provider | Model/tier alias | Family/effort 계약 |
 | --- | --- | --- |
-| ChatGPT | tier `instant`, `thinking`, `pro`; Chat family `gpt-5.6-sol`, `gpt-5.5`, `gpt-5.4`, `gpt-5.3`, `o3`; Work command `web-ai work send --prompt ... --power N`; MCP `web_ai_work_send` | `instant`는 GPT-5.5에 고정된다. `thinking`의 canonical effort는 `medium`, `high`, `xhigh`이고 legacy `light|low|standard|normal|regular|default → medium`, `extended → high`, `heavy|extra-high|extra_high|extra high → xhigh`를 mutation 전에 정규화한다. `pro`는 flat `Pro`이며 새 호출은 effort를 생략한다. Work-only Model/Effort/Speed는 WP1 재프로브로 확정한 `--power N` 매핑을 전용 Work 진입점에서만 조작한다. |
+| ChatGPT | `--model instant|thinking|pro`; `--family gpt-5.6-sol|gpt-5.5|gpt-5.4|gpt-5.3|o3`; Work command `web-ai work send --prompt ... --power N`; MCP `web_ai_work_send` | family는 tier를 보존한다. `thinking`의 canonical effort는 `medium`, `high`, `xhigh`이고 legacy `light|low|standard|normal|regular|default → medium`, `extended → high`, `heavy|extra-high|extra_high|extra high → xhigh`를 mutation 전에 정규화한다. ChatGPT effort-only는 현재 tier에 적용하며 현재 Pro면 `provider.model-mismatch`로 실패한다. Gemini/Grok effort-only는 계속 preflight에서 거부한다. 명시적 legacy Pro effort 호환은 유지한다. Work-only Model/Effort/Speed는 WP1 재프로브로 확정한 `--power N` 매핑을 전용 Work 진입점에서만 조작한다. |
 | Gemini | `fast`, `thinking`, `pro`, `deepthink` | `deepthink`는 tool alias로 취급 |
 | Grok | `auto`, `fast`, `expert`, `thinking`, `heavy` | source-audit 연구 흐름은 `expert`나 `heavy`를 우선 사용 |
 

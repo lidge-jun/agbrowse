@@ -729,6 +729,10 @@ ChatGPT current contract (2026-07-10):
 | `--family o3` | select o3 |
 | (omit `--family`) | preserve current UI family selection (zero submenu mutation) |
 
+`--family` is ChatGPT-only and preserves the checked tier. `--effort` without
+`--model` or `--family` targets the current ChatGPT tier; current Pro fails with
+`provider.model-mismatch`. Gemini and Grok continue to reject model-less effort.
+
 Legacy effort normalization: `light`, `low`, `standard`, `normal`, `regular`,
 `default` remap to `medium`. `extended` remaps to `high` and emits exactly one
 stderr warning. `heavy`, `extra-high`, `extra_high`, `extra high` remap to

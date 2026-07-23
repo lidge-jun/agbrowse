@@ -45,7 +45,7 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
 
 const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-gpt-"]';
 const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(?:ChatGPT|Instant(?:\s+5\.5)?|Medium|High|Extra High|Pro|Standard Pro|Extended Pro|GPT[-\s]?\d(?:\.\d+)?(?:\s+(?:Instant|Fast|Thinking|Pro)(?:\s+(?:Light|Standard|Extended|Heavy))?)?|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)$/i;
-const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Pro', 'Standard Pro', 'Extended Pro'];
+export const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Pro', 'Standard Pro', 'Extended Pro'];
 const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
     '[data-testid="composer-intelligence-pro-thinking-effort-trigger"]',
     '[data-testid*="thinking-effort"]',
@@ -360,7 +360,7 @@ export async function selectChatGptModel(page, model, options = {}) {
         // (standard/normal/regular/default/extended) resolve to effort=null + warning.
         const rawEffort = String(options.effort || options.reasoningEffort || '').trim().toLowerCase();
         if (targetModel === 'pro' && Object.keys(CHATGPT_MODEL_EFFORT_OPTIONS.pro?.efforts || {}).length === 0) {
-            if (PRO_UNENFORCED_LEGACY_EFFORTS.has(rawEffort)) {
+            if (requested === 'pro' && PRO_UNENFORCED_LEGACY_EFFORTS.has(rawEffort)) {
                 selectedEffort = { requested: requestedEffort, selected: null, changed: false };
                 warnings.push(`reasoning-effort-unenforced: Pro has no effort control; selected Pro for legacy effort ${rawEffort}`);
             } else {
@@ -388,12 +388,34 @@ export async function selectChatGptModel(page, model, options = {}) {
     }
     const afterEvidence = await readCheckedModelEvidence(page, targetModel);
     const after = afterEvidence?.choice || null;
+    let finalFamilyEvidence = familyEvidence;
+    if (requestedFamily) {
+        await openSimplifiedIntelligenceSubmenu(page, { forceFamily: true });
+        finalFamilyEvidence = await readVisibleChatGptFamilyEvidence(page);
+    }
     await closeModelMenu(page);
+    const proConflict = requestedFamily === 'gpt-5.6-sol'
+        ? await readActiveProComposerPill(page)
+        : null;
+    const expectedFamilyLabel = requestedFamily ? CHATGPT_FAMILY_OPTIONS[requestedFamily].label : null;
+    if (requestedFamily && (!finalFamilyEvidence?.verified || finalFamilyEvidence.label !== expectedFamilyLabel)) {
+        throw familyMismatch(requestedFamily, expectedFamilyLabel);
+    }
+    if (proConflict) {
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor: 'chatgpt',
+            retryHint: 'model-fallback',
+            message: `ChatGPT family verification failed: requested ${requestedFamily}; active composer state is ${proConflict}`,
+            evidence: { requestedFamily, expectedFamilyLabel, activeComposerLabel: proConflict },
+        });
+    }
     if (after !== targetModel) {
         usedFallbacks.push('model-verification-unavailable-current-model');
         warnings.push(`model ${targetModel} was not verified; current detected model is ${after || 'unknown'}`);
     }
-    const verified = after === targetModel;
+    const verified = after === targetModel && (!requestedFamily || finalFamilyEvidence?.verified === true);
     return {
         requested: requested || targetModel,
         selected: after,
@@ -406,7 +428,7 @@ export async function selectChatGptModel(page, model, options = {}) {
            requestedModel: requested || targetModel || null,
            resolvedLabel: afterEvidence?.label || after || null,
             surface: 'chat',
-            familyLabel: familyEvidence?.label || null,
+            familyLabel: finalFamilyEvidence?.label || null,
             tierLabel: afterEvidence?.label || after || null,
             normalizedModel: after,
             status: verified ? (modelChanged ? 'switched' : 'already-selected') : (modelChanged ? 'switched-best-effort' : 'unavailable'),
@@ -862,6 +884,24 @@ async function readVisibleChatGptFamilyEvidence(page) {
             const label = familyLabels.find(candidate => menuTextHasExactLine(text, candidate));
             if (label) return { label, changed: false, verified: false };
         }
+    }
+    return null;
+}
+
+/**
+ * Read only exact, observed Pro labels from an active composer pill.
+ * @param {Page} page
+ * @returns {Promise<string|null>}
+ */
+async function readActiveProComposerPill(page) {
+    const pills = await page.locator([
+        'button.__composer-pill',
+        '[role="button"].__composer-pill',
+    ].join(', ')).all().catch(() => /** @type {Locator[]} */ ([]));
+    for (const pill of pills) {
+        if (!(await pill.isVisible().catch(() => false))) continue;
+        const text = (await pill.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (CHATGPT_OBSERVED_PRO_PILL_LABELS.includes(text)) return text;
     }
     return null;
 }

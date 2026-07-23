@@ -23,7 +23,7 @@ import { maybeRecordChurn } from './churn-log.mjs';
 import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
-import { isChatGptEffortSupported, normalizeChatGptFamilyChoice } from './chatgpt-model.mjs';
+import { isChatGptEffortSupported, normalizeChatGptEffortChoice, normalizeChatGptFamilyChoice } from './chatgpt-model.mjs';
 import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
@@ -122,13 +122,14 @@ Provider:
                         Gemini  models: flash-lite, flash, pro
                         Gemini  tool:   deepthink
                         Grok:   auto, fast, expert, thinking, heavy
+  --family <alias>    ChatGPT family alias: gpt-5.6-sol, gpt-5.5, gpt-5.4,
+                      gpt-5.3, o3. Preserves the currently checked tier.
   --effort <alias>    ChatGPT reasoning effort. The reasoning-effort menu is
                       ONLY touched when this flag is provided; otherwise the
                       currently-checked effort in the browser is left as-is.
-                      Requires a model because legacy Pro/Thinking menus and the
-                      simplified Intelligence menu map efforts differently.
-                        Pro: standard, extended
-                        Thinking: light, standard, extended, heavy
+                      Without --model/--family, applies to the current ChatGPT
+                      tier and fails if that tier has no effort control (Pro).
+                        Thinking/current tier: medium, high, xhigh
   --reasoning-effort <alias>
                       Alias for --effort
   --timeout <sec>     Polling timeout. When omitted, the default scales by model tier:
@@ -607,6 +608,7 @@ async function runWebAiCliInner(argv = [], deps) {
             archive: { type: 'string' },
             'follow-up': { type: 'string', multiple: true },
             model: { type: 'string' },
+            family: { type: 'string' },
             effort: { type: 'string' },
             'reasoning-effort': { type: 'string' },
             'thinking-time': { type: 'string' },
@@ -721,6 +723,7 @@ async function runWebAiCliInner(argv = [], deps) {
         followUps: values['follow-up'] || [],
         thinkingTime: values['thinking-time'],
         model: values.model,
+        family: values.family,
         reasoningEffort: values.effort || values['reasoning-effort'],
         contextFromFiles: values['context-from-files'] || [],
         contextExclude: values['context-exclude'] || [],
@@ -1651,28 +1654,38 @@ function rejectFutureScope(values) {
             evidence: { model: values.model },
         });
     }
+    if (values.family && ((values.vendor || 'chatgpt') !== 'chatgpt' || !normalizeChatGptFamilyChoice(values.family))) {
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor: values.vendor || 'chatgpt',
+            retryHint: 'model-fallback',
+            message: `unsupported ${webAiVendorLabel(values.vendor || 'chatgpt')} family selection: ${values.family}`,
+            evidence: { family: values.family },
+        });
+    }
     const effort = values.effort || values['reasoning-effort'];
-    if (effort && !values.model) {
-        throw new WebAiError({
-            errorCode: 'provider.model-mismatch',
-            stage: 'provider-select-mode',
-            vendor: values.vendor || 'chatgpt',
-            retryHint: 'model-fallback',
-            message: `${webAiVendorLabel(values.vendor || 'chatgpt')} reasoning effort requires --model because effort menus differ by model`,
-            evidence: { effort },
-        });
-    }
-    if (effort && !isSupportedWebAiEffort(values.vendor || 'chatgpt', values.model, effort)) {
-        throw new WebAiError({
-            errorCode: 'provider.model-mismatch',
-            stage: 'provider-select-mode',
-            vendor: values.vendor || 'chatgpt',
-            retryHint: 'model-fallback',
-            message: `unsupported ${webAiVendorLabel(values.vendor || 'chatgpt')} reasoning effort: ${effort}`,
-            evidence: { effort },
-        });
-    }
     const vendor = values.vendor || 'chatgpt';
+    if (effort && !values.model && !values.family && vendor !== 'chatgpt') {
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor,
+            retryHint: 'model-fallback',
+            message: `${webAiVendorLabel(vendor)} reasoning effort requires --model`,
+            evidence: { effort },
+        });
+    }
+    if (effort && !isSupportedWebAiEffort(vendor, values.model, effort)) {
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor,
+            retryHint: 'model-fallback',
+            message: `unsupported ${webAiVendorLabel(vendor)} reasoning effort: ${effort}`,
+            evidence: { effort, model: values.model || null },
+        });
+    }
     const followUps = Array.isArray(values['follow-up']) ? values['follow-up'] : [];
     if (followUps.length > 0 && vendor !== 'chatgpt') {
         throw new WebAiError({
@@ -1730,6 +1743,7 @@ function isSupportedWebAiModel(vendor, model) {
  */
 function isSupportedWebAiEffort(vendor, model, effort) {
     if (String(vendor || 'chatgpt') !== 'chatgpt') return false;
+    if (!model) return Boolean(normalizeChatGptEffortChoice(effort));
     return isChatGptEffortSupported(model, effort);
 }
 
