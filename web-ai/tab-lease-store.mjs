@@ -66,11 +66,44 @@ const STORE_VERSION = 1;
 const LOCK_RETRY_MS = 25;
 const LOCK_RETRY_LIMIT = 200;
 const STALE_LOCK_MS = 30_000;
+
+/**
+ * Parse a decimal integer environment limit without accepting numeric prefixes.
+ * Pool limits may deliberately use zero to disable pooling; active limits may not.
+ *
+ * @param {unknown} value
+ * @param {number} fallback
+ * @param {{ allowZero?: boolean }} [options]
+ * @returns {number}
+ */
+export function parseProviderLimitEnv(value, fallback, options = {}) {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return fallback;
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed)) return fallback;
+    if (options.allowZero ? parsed < 0 : parsed <= 0) return fallback;
+    return parsed;
+}
+
 const DEFAULT_POOL_TTL_MS = parseDuration(process.env.AGBROWSE_PROVIDER_POOL_TTL || '30m');
-const DEFAULT_POOL_MAX_PER_KEY = parseInt(process.env.AGBROWSE_PROVIDER_POOL_MAX_PER_KEY || '3', 10);
-const DEFAULT_POOL_GLOBAL_MAX = parseInt(process.env.AGBROWSE_PROVIDER_POOL_GLOBAL_MAX || '8', 10);
-const DEFAULT_ACTIVE_MAX_PER_KEY = parseInt(process.env.AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY || '5', 10);
-const DEFAULT_ACTIVE_GLOBAL_MAX = parseInt(process.env.AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX || '14', 10);
+const DEFAULT_POOL_MAX_PER_KEY = parseProviderLimitEnv(
+    process.env.AGBROWSE_PROVIDER_POOL_MAX_PER_KEY,
+    3,
+    { allowZero: true },
+);
+const DEFAULT_POOL_GLOBAL_MAX = parseProviderLimitEnv(
+    process.env.AGBROWSE_PROVIDER_POOL_GLOBAL_MAX,
+    8,
+    { allowZero: true },
+);
+const DEFAULT_ACTIVE_MAX_PER_KEY = parseProviderLimitEnv(
+    process.env.AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY,
+    5,
+);
+const DEFAULT_ACTIVE_GLOBAL_MAX = parseProviderLimitEnv(
+    process.env.AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX,
+    14,
+);
 
 export class ProviderActiveCapacityError extends Error {
     /**

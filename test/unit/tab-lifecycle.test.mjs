@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
-import { checkoutPooledLease, cleanupLeasedTabs, listLeases, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
+import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitEnv, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 
 describe('tab lifecycle cleanup selection', () => {
     it('parses duration strings used by tab-cleanup UX', () => {
@@ -412,7 +412,112 @@ describe('tab lifecycle cleanup selection', () => {
             });
 
             expect(result.closed).toBe(0);
-            expect(await listLeases()).toEqual([]);
+           expect(await listLeases()).toEqual([]);
+       } finally {
+           if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+           else process.env.BROWSER_AGENT_HOME = previousHome;
+           temp.cleanup();
+       }
+   });
+});
+
+describe('provider lease env limit parsing', () => {
+    it.each([
+        ['whitespace around valid', ' 7 ', 7],
+        ['valid integer', '12', 12],
+        ['zero', '0', 5],
+        ['negative', '-1', 5],
+        ['decimal', '2.5', 5],
+        ['exponent', '1e2', 5],
+        ['suffix', '5junk', 5],
+        ['overflow', String(Number.MAX_SAFE_INTEGER + 1), 5],
+        ['empty', '   ', 5],
+        ['undefined', undefined, 5],
+    ])('%s for positive active limits', (_name, raw, expected) => {
+        expect(parseProviderLimitEnv(raw, 5)).toBe(expected);
+    });
+
+    it.each([
+        ['zero disables', '0', 0],
+        ['whitespace zero disables', ' 0 ', 0],
+        ['valid pool limit', '8', 8],
+        ['negative falls back', '-1', 3],
+        ['decimal falls back', '2.5', 3],
+        ['exponent falls back', '1e2', 3],
+        ['suffix falls back', '5tabs', 3],
+        ['overflow falls back', String(Number.MAX_SAFE_INTEGER + 1), 3],
+    ])('%s for non-negative pool limits', (_name, raw, expected) => {
+        expect(parseProviderLimitEnv(raw, 3, { allowZero: true })).toBe(expected);
+    });
+
+    it('routes all four provider limit envs through the strict parser', () => {
+        const source = readFileSync(join(process.cwd(), 'web-ai', 'tab-lease-store.mjs'), 'utf8');
+        expect(source).not.toMatch(/parseInt\(process\.env\.AGBROWSE_PROVIDER_/);
+        for (const name of [
+            'AGBROWSE_PROVIDER_POOL_MAX_PER_KEY',
+            'AGBROWSE_PROVIDER_POOL_GLOBAL_MAX',
+            'AGBROWSE_PROVIDER_ACTIVE_MAX_PER_KEY',
+            'AGBROWSE_PROVIDER_ACTIVE_GLOBAL_MAX',
+        ]) {
+            expect(source).toMatch(new RegExp(`parseProviderLimitEnv\\(\\s*process\\.env\\.${name}`));
+        }
+    });
+
+    it('closes instead of pooling when per-key pool limit is zero', async () => {
+        const temp = createTempBrowserEnv('agbrowse-pool-zero-perkey-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            const port = 65_529;
+            await recordActiveLease({
+                port,
+                vendor: 'chatgpt',
+                targetId: 'pool-zero-target',
+                sessionId: 'session-pool-zero',
+                url: 'https://chatgpt.com/c/pool-zero',
+            });
+            const result = await releaseCompletedLease(port, {
+                port,
+                vendor: 'chatgpt',
+                targetId: 'pool-zero-target',
+                sessionId: 'session-pool-zero',
+                url: 'https://chatgpt.com/c/pool-zero',
+                maxPerKey: 0,
+            });
+            expect(result.pooled).toBe(false);
+            const leases = await listLeases();
+            expect(leases.filter(row => row.state === 'pooled')).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('drains every pooled lease when the global pool limit is zero', async () => {
+        const temp = createTempBrowserEnv('agbrowse-pool-zero-global-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        try {
+            const port = 65_528;
+            await recordActiveLease({
+                port,
+                vendor: 'chatgpt',
+                targetId: 'pool-zero-global',
+                sessionId: 'session-pool-zero-global',
+                url: 'https://chatgpt.com/c/pool-zero-global',
+            });
+            await releaseCompletedLease(port, {
+                port,
+                vendor: 'chatgpt',
+                targetId: 'pool-zero-global',
+                sessionId: 'session-pool-zero-global',
+                url: 'https://chatgpt.com/c/pool-zero-global',
+                maxPerKey: 3,
+                globalMax: 0,
+            });
+            const leases = await listLeases();
+            expect(leases.filter(row => row.state === 'pooled')).toEqual([]);
         } finally {
             if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
             else process.env.BROWSER_AGENT_HOME = previousHome;
