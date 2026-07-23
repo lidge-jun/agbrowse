@@ -16,14 +16,11 @@ import {
 const temporaryDirectories = [];
 const suiteCwd = process.cwd();
 const suitePath = process.env.PATH;
-const suiteXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
 afterEach(async () => {
     process.chdir(suiteCwd);
     if (suitePath === undefined) delete process.env.PATH;
     else process.env.PATH = suitePath;
-    if (suiteXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = suiteXdgConfigHome;
     await Promise.all(temporaryDirectories.splice(0).map(directory => (
         rm(directory, { recursive: true, force: true, maxRetries: 3 })
     )));
@@ -133,7 +130,7 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
         });
     });
 
-    it('prefers the project-local package, records provenance, and returns a single output directly', async () => {
+    it('prefers the project-local package, records package provenance, and returns a single output directly', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
         const pathRoot = await mkdtemp(join(tmpdir(), 'agbrowse-path-repomix-decoy-'));
         temporaryDirectories.push(pathRoot);
@@ -162,7 +159,8 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
             version: '9.1.0-local',
             source: 'project-local',
             packagePath: local.packageRoot,
-            configPath: join(cwd, 'repomix.config.ts'),
+            configPath: null,
+            configResolution: 'repomix-auto',
             configuredOutputPath: 'reports/review-context.md',
         });
         expect(result.artifacts).toEqual([expect.objectContaining({
@@ -223,31 +221,25 @@ describe('buildRepomixArtifacts package and artifact contract', () => {
         });
     });
 
-    it('uses a project config before the global fallback', async () => {
+    it('delegates config resolution to Repomix without guessing a config path', async () => {
         const { cwd, stagingRoot } = await createTemporaryProject();
-        const globalRoot = await mkdtemp(join(tmpdir(), 'agbrowse-repomix-global-config-'));
-        temporaryDirectories.push(globalRoot);
-        const globalConfig = join(globalRoot, 'repomix', 'repomix.config.ts');
-        const localConfig = join(cwd, 'repomix.config.json');
-        await mkdir(join(globalRoot, 'repomix'), { recursive: true });
-        await writeFile(globalConfig, 'export default {};\n');
-        await writeFile(localConfig, '{}\n');
-        process.env.XDG_CONFIG_HOME = globalRoot;
-        const fake = await installProjectLocalFakeRepomix(cwd);
+        await writeFile(join(cwd, 'repomix.config.ts'), 'export default {};\n');
+        await writeFile(join(cwd, 'repomix.config.json'), '{}\n');
+        const fake = await installProjectLocalFakeRepomix(cwd, {
+            fileConfig: { output: { filePath: 'from-json.md' } },
+        });
 
-        const localResult = await buildRepomixArtifacts({ cwd, stagingRoot });
-        await rm(localConfig);
-        const globalStagingRoot = join(cwd, '.agbrowse-staging-global');
-        await mkdir(globalStagingRoot);
-        const globalResult = await buildRepomixArtifacts({ cwd, stagingRoot: globalStagingRoot });
+        const result = await buildRepomixArtifacts({ cwd, stagingRoot });
 
         const configLoads = (await readFakeRepomixEvents(fake.eventFile))
             .filter(event => event.type === 'loadFileConfig');
-        expect(configLoads.map(event => event.configPath)).toEqual([null, null]);
-        expect([localResult.repomix.configPath, globalResult.repomix.configPath]).toEqual([
-            localConfig,
-            globalConfig,
-        ]);
+        expect(configLoads).toEqual([expect.objectContaining({ cwd, configPath: null })]);
+        expect(result.repomix).toMatchObject({
+            configPath: null,
+            configResolution: 'repomix-auto',
+            configuredOutputPath: 'from-json.md',
+        });
+        expect(result.artifacts[0].displayPath).toBe('from-json.md');
     });
 
     it('preserves Repomix split-output order and original filenames', async () => {

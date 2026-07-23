@@ -24,6 +24,7 @@ const CHILD_OUTPUT_LIMIT = 32 * 1024;
  * @typedef {{
  *   artifactPaths: string[],
  *   configPath: string|null,
+ *   configResolution: 'repomix-auto',
  *   configuredOutputPath: string,
  *   totalFiles: number,
  *   totalCharacters: number,
@@ -124,6 +125,7 @@ export async function buildRepomixArtifacts(options) {
                 packagePath: provenance.packagePath,
                 entryPath: provenance.entryPath,
                 configPath: runnerResult.configPath,
+                configResolution: runnerResult.configResolution,
                 configuredOutputPath: runnerResult.configuredOutputPath,
                 totalFiles: runnerResult.totalFiles,
                 totalCharacters: runnerResult.totalCharacters,
@@ -405,12 +407,16 @@ function validateRunnerResult(value) {
     if (typeof result.configuredOutputPath !== 'string') {
         throw new TypeError('Repomix runner returned an invalid configured output path');
     }
-    if (result.configPath != null && typeof result.configPath !== 'string') {
+    if (result.configPath !== null) {
         throw new TypeError('Repomix runner returned an invalid config path');
+    }
+    if (result.configResolution !== 'repomix-auto') {
+        throw new TypeError('Repomix runner returned an invalid config resolution');
     }
     return /** @type {RepomixRunnerResult} */ ({
         artifactPaths: result.artifactPaths,
-        configPath: result.configPath ?? null,
+        configPath: null,
+        configResolution: result.configResolution,
         configuredOutputPath: result.configuredOutputPath,
         totalFiles: result.totalFiles,
         totalCharacters: result.totalCharacters,

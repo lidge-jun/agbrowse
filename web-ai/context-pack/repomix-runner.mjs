@@ -1,20 +1,9 @@
 // @ts-check
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const CONFIG_NAMES = Object.freeze([
-    'repomix.config.ts',
-    'repomix.config.mts',
-    'repomix.config.cts',
-    'repomix.config.js',
-    'repomix.config.mjs',
-    'repomix.config.cjs',
-    'repomix.config.json5',
-    'repomix.config.jsonc',
-    'repomix.config.json',
-]);
+const CONFIG_RESOLUTION = 'repomix-auto';
 
 /**
  * @typedef {{
@@ -42,10 +31,9 @@ export async function runRepomixJob(request) {
     const api = /** @type {RepomixApi} */ (repomix);
     api.setLogLevel(-1);
 
-    const configPath = await findConfigPath(request.cwd);
     try {
-        // Let the active Repomix version own config discovery semantics. The
-        // parallel path lookup is provenance only and never forces a filename.
+        // Let the active Repomix version own config discovery semantics. Its
+        // public API does not expose the selected path, so do not guess one.
         const fileConfig = await api.loadFileConfig(request.cwd, null);
         const config = await api.mergeConfigs(request.cwd, fileConfig, { enableFileProcessors: true });
         const configuredOutputPath = String(config.output.filePath);
@@ -91,7 +79,8 @@ export async function runRepomixJob(request) {
         const artifactPaths = outputFiles.map((/** @type {string} */ path) => resolve(config.cwd, path));
         return {
             artifactPaths,
-            configPath,
+            configPath: null,
+            configResolution: CONFIG_RESOLUTION,
             configuredOutputPath,
             totalFiles: finiteMetric(packResult.totalFiles, 'totalFiles'),
             totalCharacters: finiteMetric(packResult.totalCharacters, 'totalCharacters'),
@@ -99,7 +88,7 @@ export async function runRepomixJob(request) {
             warnings: buildPackWarnings(packResult),
         };
     } catch (error) {
-        attachConfigPathEvidence(error, configPath);
+        attachConfigResolutionEvidence(error);
         throw error;
     }
 }
@@ -113,42 +102,14 @@ function assertRepomixApi(repomix) {
     }
 }
 
-/** @param {unknown} error @param {string|null} configPath */
-function attachConfigPathEvidence(error, configPath) {
+/** @param {unknown} error */
+function attachConfigResolutionEvidence(error) {
     if (!error || typeof error !== 'object') return;
     const record = /** @type {Record<string, any>} */ (error);
     const details = record.details && typeof record.details === 'object'
         ? record.details
         : {};
-    record.details = { ...details, configPath };
-}
-
-/** @param {string} cwd */
-async function findConfigPath(cwd) {
-    const local = await firstConfigFile(cwd);
-    if (local) return local;
-    return firstConfigFile(globalConfigDirectory());
-}
-
-/** @param {string} directory */
-async function firstConfigFile(directory) {
-    for (const name of CONFIG_NAMES) {
-        const candidate = join(directory, name);
-        try {
-            if ((await fs.stat(candidate)).isFile()) return candidate;
-        } catch {
-            // Match Repomix discovery: unavailable candidates are skipped.
-        }
-    }
-    return null;
-}
-
-function globalConfigDirectory() {
-    if (process.platform === 'win32') {
-        return join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Repomix');
-    }
-    if (process.env.XDG_CONFIG_HOME) return join(process.env.XDG_CONFIG_HOME, 'repomix');
-    return join(homedir(), '.config', 'repomix');
+    record.details = { ...details, configResolution: CONFIG_RESOLUTION };
 }
 
 /** @param {any} config @param {RunnerRequest} request @param {string} configuredOutputPath @param {string|null} managedIgnorePattern */
