@@ -682,8 +682,33 @@ and `readAssistantSnapshotsSplit`'s inline import names the same type:
 + * @returns {Promise<{ wrapped: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[] }>}
 ```
 
-`isResponseFinished`'s `sample` parameter widens to accept either type, since it is
-called with both wrapped and wrapperless samples.
+`isResponseFinished` takes the CORRELATED type only — a union would need
+`'source' in sample` narrowing at every read, and its poll-loop caller now always
+supplies a correlated snapshot. Exact JSDoc diffs:
+
+```diff
+*** web-ai/chatgpt-response-dom.mjs
+ /**
+  * Browser-context. Single acquisition for both snapshot sources ...
+- * @returns {{ wrapped: any[], wrapperless: any[] }}
++ * @returns {{ wrapped: ChatGptCorrelatedSnapshot[], wrapperless: ChatGptCorrelatedSnapshot[] }}
+  */
+ export function readAssistantSnapshotSources({ ... }) {
+
+*** web-ai/chatgpt.mjs
+ /**
+  * @param {any} page
+- * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot} sample
++ * @param {import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot} sample
+  * @param {number} minTurnIndex
+  * @returns {Promise<{ finished: boolean, messageId: string|null, turnId: string|null, turnIndex: number }>}
+  */
+ async function isResponseFinished(page, sample, minTurnIndex) {
+```
+
+The only other `isResponseFinished` caller is the poll loop itself (`chatgpt.mjs:671`),
+which passes `latestSnapshot` from the split reader — already correlated — so no call
+site needs a cast.
 
 **Criterion 34 (revised):** scoped checkJs reports zero `TS2304` AND zero `TS2339`
 for `chatgpt.mjs` and `chatgpt-response-dom.mjs` beyond the pre-existing baseline.
