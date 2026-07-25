@@ -56,6 +56,8 @@ import { buildTargetMismatchResult } from './session-target-guard.mjs';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    anyStopButtonVisible,
+    isActiveState,
     readChatGptStreamingState,
     readTopLevelAssistantSnapshots,
     readTopLevelAssistantTextsFromLocators,
@@ -642,14 +644,23 @@ export async function pollWebAi(deps, input = {}) {
         const newSnapshots = snapshots.slice(baseline.assistantCount).filter(sample => isFinalAnswer(sample.text));
         const latestSnapshot = newSnapshots.at(-1) || null;
         const latest = latestSnapshot?.text || '';
-        const streaming = await isStreaming(page);
+        const activity = await readActivityState(page);
+        // `streaming` now means STRONG evidence only. Weak activity — a mounted
+        // sidecar still reading "Thinking", or a growing "Thought for 2s: …"
+        // trace — no longer freezes the stability window; it only demands a
+        // longer quiet period before we accept completion.
+        const streaming = activity.strength === 'strong';
+        const weakActive = activity.strength === 'weak';
         const now = Date.now();
         if ((streaming || latest) && now - lastHeartbeat >= 30_000) {
             const elapsed = Math.round((now - startedAt) / 1000);
-            process.stderr.write(`[poll] ${elapsed}s — ${streaming ? 'streaming' : 'stabilizing'}...\n`);
+            const phase = streaming ? 'streaming' : weakActive ? 'settling' : 'stabilizing';
+            process.stderr.write(`[poll] ${elapsed}s — ${phase}...\n`);
             lastHeartbeat = now;
         }
-        if (!streaming && latestSnapshot && session && input.outputImage !== undefined
+        // The image shortcut returns on the FIRST detected image with no terminal
+        // evidence, so it requires true quiet: weak activity is still activity.
+        if (activity.strength === 'none' && latestSnapshot && session && input.outputImage !== undefined
             && isImageOnlyGeneratedImageChromeText(latest)) {
             const imageResult = await collectGeneratedImageAnswer(deps, input, session, baseline);
             if (imageResult) {
@@ -681,7 +692,9 @@ export async function pollWebAi(deps, input = {}) {
         if (latest && !streaming) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
-                const minStableMs = 1000;
+                // A weak signal demands a longer quiet window before we treat it as
+                // stale, so a genuinely slow reasoning phase is never cut short.
+                const minStableMs = weakActive ? 5_000 : 1_000;
                 if (finished && elapsedStable >= minStableMs) {
                     const usedFallbacks = [];
                     const warnings = [];
@@ -979,31 +992,38 @@ export async function pollWebAi(deps, input = {}) {
 
 /**
  * @param {any} page
+ * @returns {Promise<import('./chatgpt-response-dom.mjs').ChatGptActivityState>}
  */
-async function isStreaming(page) {
+async function readActivityState(page) {
+    // The composer-scoped stop probe runs FIRST: it is the strongest, cheapest
+    // signal, and a page double whose `evaluate` cannot honor the options object
+    // would otherwise report `none` while a stop button is plainly visible.
     try {
-        const streaming = Boolean(await page.evaluate(
+        if (await anyStopButtonVisible(page)) return { strength: 'strong', evidence: 'stop-button' };
+    } catch { /* fall through to the DOM probe */ }
+    try {
+        const state = await page.evaluate(
             readChatGptStreamingState,
             {
                 assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
                 stopSelectors: CHATGPT_STOP_SELECTORS,
                 resolverSource: resolveTopLevelAssistantTurns.toString(),
             },
-        ));
-        if (streaming) return true;
-    } catch { /* page may be navigating or lack a complete DOM context */ }
-    // Keep a navigation/test-harness-safe fallback while preserving the shared
-    // composer-scoped selector contract.
-    try {
-        for (const selector of CHATGPT_STOP_SELECTORS) {
-            const first = page.locator?.(selector)?.first?.();
-            if (typeof first?.isVisible === 'function'
-                && await first.isVisible().catch(() => false)) return true;
+        );
+        if (state && typeof state === 'object' && typeof state.strength === 'string') return state;
+        // A legacy boolean from a stubbed page still means "strong or nothing".
+        if (typeof state === 'boolean') {
+            return state ? { strength: 'strong', evidence: 'stop-button' } : { strength: 'none', evidence: '' };
         }
-    } catch {
-        return false;
-    }
-    return false;
+    } catch { /* page may be navigating or lack a complete DOM context */ }
+    return { strength: 'none', evidence: '' };
+}
+
+/**
+ * @param {any} page
+ */
+async function isStreaming(page) {
+    return isActiveState(await readActivityState(page));
 }
 
 /**

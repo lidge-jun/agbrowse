@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    isActiveState,
     readChatGptStreamingState,
     readTopLevelAssistantSnapshots,
     readTopLevelAssistantTexts,
@@ -176,6 +179,77 @@ describe('ChatGPT streaming state', () => {
     });
 });
 
+describe('ChatGPT completed-reasoning grammar (G7/G9/G12)', () => {
+    const panel = (text) => `<aside data-testid="reasoning-sidecar">${text}</aside>`;
+    const strength = (text) => readActivityFixture(panel(text), { sidecar: true }).strength;
+
+    it.each([
+        ['Thought for 12s'],
+        ['Reasoning Thought for 12s'],
+        ['Pro thinking Thought for 1.5 minutes'],
+        ['Thought for 1m 5s'],
+        ['Thought for a moment'],
+        ['Thought for a few seconds'],
+        ['Thought for 12s Edit'],
+        ['Reasoning Thought for 2 hours Edit'],
+    ])('treats %s as a completed summary', (text) => {
+        expect(strength(text)).toBe('none');
+    });
+
+    it.each([
+        ['Thought for 2s: Searching…', 'panel-trace'],
+        ['Thought for 12s and still going through the sources it found', 'panel-trace'],
+        ['Thinking', 'panel-text'],
+        ['Reasoning', 'panel-text'],
+    ])('treats %s as weak live activity', (text, evidence) => {
+        const state = readActivityFixture(panel(text), { sidecar: true });
+        expect(state).toMatchObject({ strength: 'weak', evidence });
+    });
+});
+
+describe('ChatGPT activity strata (G8)', () => {
+    it('reports a visible stop button as strong', () => {
+        const html = '<form><button data-testid="stop-button">stop</button></form>';
+        expect(readActivityFixture(html)).toMatchObject({ strength: 'strong', evidence: 'stop-button' });
+    });
+
+    it('reports live progress inside a verified panel as strong', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thinking<progress value="1" max="10"></progress></aside>';
+        expect(readActivityFixture(html, { sidecar: true })).toMatchObject({ strength: 'strong', evidence: 'panel-progress' });
+    });
+
+    it('does not let a weak panel mask a later panel with live progress', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thinking</aside>'
+            + '<aside data-testid="thinking-sidecar">Reasoning<progress value="1" max="10"></progress></aside>';
+        expect(readActivityFixture(html, { sidecar: true }).strength).toBe('strong');
+    });
+
+    it('reports nothing as none', () => {
+        expect(readActivityFixture('<div>plain answer</div>')).toMatchObject({ strength: 'none' });
+    });
+
+    it('exposes a boolean view for legacy callers', () => {
+        expect(isActiveState(true)).toBe(true);
+        expect(isActiveState(false)).toBe(false);
+        expect(isActiveState(null)).toBe(false);
+        expect(isActiveState(undefined)).toBe(false);
+        expect(isActiveState({ strength: 'none', evidence: '' })).toBe(false);
+        expect(isActiveState({ strength: 'weak', evidence: 'panel-text' })).toBe(true);
+        expect(isActiveState({ strength: 'strong', evidence: 'stop-button' })).toBe(true);
+    });
+
+    it('keeps the poll loop honest about weak activity', () => {
+        // Source-shape guard for the behavioural change: weak activity must not
+        // count as `streaming`, must lengthen the stability window, and must not
+        // open the image shortcut.
+        const src = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
+        expect(src).toContain("const streaming = activity.strength === 'strong'");
+        expect(src).toContain("const weakActive = activity.strength === 'weak'");
+        expect(src).toContain('const minStableMs = weakActive ? 5_000 : 1_000');
+        expect(src).toContain("if (activity.strength === 'none' && latestSnapshot && session");
+    });
+});
+
 function fakeNode(text) {
     return {
         innerText: text,
@@ -208,7 +282,11 @@ function withDocument(nodesBySelector, fn) {
     }
 }
 
-function readStreamingFixture(html, { sidecar = false } = {}) {
+function readStreamingFixture(html, options = {}) {
+    return isActiveState(readActivityFixture(html, options));
+}
+
+function readActivityFixture(html, { sidecar = false } = {}) {
     const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
     const previous = {
         document: globalThis.document,

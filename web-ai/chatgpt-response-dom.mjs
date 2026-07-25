@@ -38,6 +38,14 @@ export async function anyStopButtonVisible(scope) {
                 if (typeof node?.isVisible === 'function'
                     && await node.isVisible().catch(() => false)) return true;
             }
+            if (nodes.length) continue;
+            // An empty `all()` with a visible `first()` only happens on partial
+            // locator doubles; with a real Playwright locator `first()` is not
+            // visible when there are no matches, so this costs nothing and keeps
+            // those doubles working.
+            const firstOfEmpty = locator.first?.();
+            if (typeof firstOfEmpty?.isVisible === 'function'
+                && await firstOfEmpty.isVisible().catch(() => false)) return true;
             continue;
         }
         // Fallback for locator shapes without `all()`: walk by index.
@@ -120,10 +128,28 @@ export function resolveTopLevelAssistantTurns(selectors) {
 /**
  * Browser-context helper. Returns whether the current ChatGPT response has
  * positive live-generation evidence.
- * @param {{ assistantSelectors: string[], stopSelectors: string[] }} options
- * @returns {boolean}
+ *
+ * Returns a STRENGTH, not a boolean: a visible stop button and a mounted sidecar
+ * that merely still reads "Thinking" are not the same evidence, and treating them
+ * alike lets a stale sidecar hang the poll loop forever.
+ *
+ * @typedef {'strong'|'weak'|'none'} ChatGptActivityStrength
+ * @typedef {{ strength: ChatGptActivityStrength, evidence: string }} ChatGptActivityState
+ * @param {{ assistantSelectors: string[], stopSelectors: string[], resolverSource?: string }} options
+ * @returns {ChatGptActivityState}
  */
 export function readChatGptStreamingState({ assistantSelectors, stopSelectors, resolverSource }) {
+    // Body-local: page.evaluate serializes this body, not the module.
+    const UNIT = '(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)';
+    const NUMERIC = `\\d+(?:\\.\\d+)?\\s*${UNIT}`;
+    // Whole-label completed-reasoning summary, ported from upstream 86d1fb2b with
+    // 57d4a7af's optional trailing "Edit". Anchoring is what keeps a growing trace
+    // like "Thought for 2s: Searching…" from being mistaken for completion.
+    const COMPLETED_SUMMARY = new RegExp(
+        '^(?:(?:reasoning|pro thinking)\\s*)?thought for '
+        + `(?:${NUMERIC}(?:\\s+${NUMERIC})*|(?:a|an) [a-z]+(?: [a-z]+){0,2})`
+        + '(?: edit)?$',
+    );
     const isVisible = (/** @type {Element} */ node) => {
         if (!(node instanceof HTMLElement)) return false;
         const rect = node.getBoundingClientRect();
@@ -164,7 +190,7 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors, r
         } catch {
             continue;
         }
-        if (Array.from(nodes).some(isVisible)) return true;
+        if (Array.from(nodes).some(isVisible)) return { strength: 'strong', evidence: 'stop-button' };
     }
 
     let assistantNodes = [];
@@ -176,7 +202,7 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors, r
     } catch { /* selector drift fails closed */ }
     const latestAssistant = assistantNodes.at(-1);
     if (latestAssistant) {
-        if (hasLiveProgress(latestAssistant)) return true;
+        if (hasLiveProgress(latestAssistant)) return { strength: 'strong', evidence: 'turn-progress' };
     }
 
     let panels;
@@ -185,8 +211,10 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors, r
             'aside, [role="complementary"], [role="dialog"], [data-testid*="thinking" i], [data-testid*="reasoning" i], [class*="sidecar" i]',
         );
     } catch {
-        return false;
+        return { strength: 'none', evidence: '' };
     }
+    /** @type {ChatGptActivityState|null} */
+    let weakVerdict = null;
     for (const panel of Array.from(panels)) {
         if (!isVisible(panel)) continue;
         const metadata = norm([
@@ -203,14 +231,33 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors, r
             && rect.width >= 180
             && rect.height >= 120;
         if (!rightSide) continue;
-        if (hasLiveProgress(panel)) return true;
+        // Strong evidence wins immediately; a weak hit is recorded and the scan
+        // continues, so a later panel with live progress is not masked.
+        if (hasLiveProgress(panel)) return { strength: 'strong', evidence: 'panel-progress' };
         const visibleText = norm(panel.textContent);
-        if (/^thought for \d+[a-z]*( seconds?| minutes?)?( edit)?$/i.test(visibleText)) continue;
+        if (COMPLETED_SUMMARY.test(visibleText)) continue;
+        // A trace that still mentions "thought for" is GROWING, hence live.
+        if (visibleText.includes('thought for ')) {
+            weakVerdict = weakVerdict || { strength: 'weak', evidence: 'panel-trace' };
+            continue;
+        }
         if (visibleText.includes('thinking')
             || visibleText.includes('reasoning')
-            || visibleText.includes('pro thinking')) return true;
+            || visibleText.includes('pro thinking')) {
+            weakVerdict = weakVerdict || { strength: 'weak', evidence: 'panel-text' };
+        }
     }
-    return false;
+    return weakVerdict || { strength: 'none', evidence: '' };
+}
+
+/**
+ * Back-compatible boolean view of an activity verdict.
+ * @param {ChatGptActivityState|boolean|null|undefined} state
+ * @returns {boolean}
+ */
+export function isActiveState(state) {
+    if (typeof state === 'boolean') return state;
+    return Boolean(state && state.strength !== 'none');
 }
 
 /**
