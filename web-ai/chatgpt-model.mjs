@@ -538,9 +538,19 @@ export function workSurfaceUnsupportedError(context = {}) {
 async function assertChatSurfaceForModelMutation(page) {
     const { detectChatGptComposerSurface } = await import('./product-surfaces.mjs');
     const surfaceDetection = await detectChatGptComposerSurface(page);
-    if (surfaceDetection.surface === 'work' || surfaceDetection.surface === 'ambiguous') {
+    const conversation = surfaceDetection.evidence?.conversation;
+    // Fail closed only when the URL says we ARE on a conversation but its mode
+    // could not be established: mutating the model of an unclassifiable session
+    // risks corrupting a Work conversation. Every unresolved reason that carries
+    // a conversationId was reached AFTER a positive URL match, so ordinary
+    // pages (and page doubles without a conversation URL) are never blocked.
+    const conversationUnresolved = conversation?.state === 'unresolved'
+        && Boolean(conversation.evidence?.conversationId);
+    if (surfaceDetection.surface === 'work'
+        || surfaceDetection.surface === 'ambiguous'
+        || conversationUnresolved) {
         throw workSurfaceUnsupportedError({
-            surface: surfaceDetection.surface,
+            surface: surfaceDetection.surface || 'conversation-unresolved',
             evidence: surfaceDetection,
         });
     }
