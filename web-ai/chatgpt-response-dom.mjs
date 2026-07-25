@@ -269,6 +269,103 @@ export function isActiveState(state) {
  */
 
 /**
+ * A snapshot carrying its provenance and a shared document-order coordinate.
+ * Produced only by `readAssistantSnapshotSources`, where both sources are read in
+ * ONE pass so `domOrder` is comparable across them.
+ * @typedef {ChatGptAssistantSnapshot & { source: 'wrapped'|'wrapperless', domOrder: number }} ChatGptCorrelatedSnapshot
+ */
+
+/**
+ * Browser-context. Single acquisition for both snapshot sources, sharing one
+ * document-order coordinate space.
+ *
+ * Wrapperless markdown only qualifies when it DOM-FOLLOWS the latest user node:
+ * without a turn index that is the only way to tell a new answer from an old one
+ * or from the user's own echo, so anything else is dropped rather than
+ * optimistically accepted.
+ *
+ * Declares every constant and helper in its own body: `page.evaluate` serializes
+ * the body, not the module.
+ *
+ * @param {{ assistantSelectors: string[], resolverSource?: string, userSelectors?: string[], markdownSelectors?: string[] }} options
+ * `ok` distinguishes a SUCCESSFUL empty acquisition from a failure: a caller must
+ * never fall back to a legacy reader after a successful empty read, or it will
+ * count whatever that reader happens to find.
+ *
+ * @returns {{ ok: true, wrapped: ChatGptCorrelatedSnapshot[], wrapperless: ChatGptCorrelatedSnapshot[] }}
+ */
+export function readAssistantSnapshotSources({ assistantSelectors, resolverSource, userSelectors, markdownSelectors }) {
+    const USER_SELECTORS = (userSelectors && userSelectors.length) ? userSelectors : [
+        '[data-message-author-role="user"]',
+        '[data-turn="user"]',
+    ];
+    const MARKDOWN_SELECTORS = (markdownSelectors && markdownSelectors.length) ? markdownSelectors : [
+        '.markdown',
+        '[data-message-content]',
+    ];
+    const WRAPPER_SELECTORS = [
+        '[data-message-author-role]',
+        '[data-turn]',
+        'article[data-testid^="conversation-turn"]',
+    ];
+
+    const FOLLOWING = document?.defaultView?.Node?.DOCUMENT_POSITION_FOLLOWING ?? 4;
+    const isVisible = (/** @type {any} */ node) => {
+        const rect = node.getBoundingClientRect?.();
+        return Boolean(rect) && rect.width > 0 && rect.height > 0;
+    };
+    const orderNodes = (/** @type {any[]} */ nodes) => {
+        const unique = Array.from(new Set(nodes));
+        unique.sort((a, b) => (a.compareDocumentPosition(b) & FOLLOWING) ? -1 : 1);
+        return unique;
+    };
+    const textOf = (/** @type {any} */ node) => String(node.innerText || node.textContent || '').trim();
+    const describe = (/** @type {any} */ node) => {
+        const messageNode = node.matches?.('[data-message-id]') ? node : node.querySelector?.('[data-message-id]');
+        const turnNode = node.matches?.('[data-testid^="conversation-turn"]')
+            ? node
+            : node.querySelector?.('[data-testid^="conversation-turn"]');
+        return {
+            text: textOf(node),
+            messageId: messageNode?.getAttribute?.('data-message-id') || null,
+            turnId: turnNode?.getAttribute?.('data-testid') || null,
+        };
+    };
+
+    /** @type {any[]} */
+    let wrappedNodes = [];
+    try {
+        const resolver = resolverSource ? (0, eval)(`(${resolverSource})`) : null;
+        wrappedNodes = resolver ? (resolver(assistantSelectors) || []) : [];
+    } catch { wrappedNodes = []; }
+
+    const userNodes = orderNodes(USER_SELECTORS.flatMap(
+        (selector) => Array.from(document.querySelectorAll(selector))));
+    const latestUser = userNodes[userNodes.length - 1] || null;
+
+    const wrapperlessNodes = orderNodes(MARKDOWN_SELECTORS.flatMap(
+        (selector) => Array.from(document.querySelectorAll(selector))))
+        .filter((node) => isVisible(node))
+        .filter((node) => !node.closest?.(WRAPPER_SELECTORS.join(', ')))
+        .filter((node) => Boolean(latestUser)
+            && (latestUser.compareDocumentPosition(node) & FOLLOWING) !== 0)
+        .filter((node) => textOf(node));
+
+    const order = new Map(orderNodes([...wrappedNodes, ...wrapperlessNodes])
+        .map((node, index) => [node, index]));
+
+    return {
+        ok: true,
+        wrapped: wrappedNodes.map((/** @type {any} */ node, /** @type {number} */ turnIndex) => ({
+            ...describe(node), turnIndex, source: 'wrapped', domOrder: order.get(node) ?? turnIndex,
+        })),
+        wrapperless: wrapperlessNodes.map((/** @type {any} */ node) => ({
+            ...describe(node), turnIndex: -1, source: 'wrapperless', domOrder: order.get(node) ?? 0,
+        })),
+    };
+}
+
+/**
  * Browser-context helper. Keep the body serialization-safe for page.evaluate.
  * @param {string[]|{ selectors: string[], resolverSource?: string }} input
  * @returns {ChatGptAssistantSnapshot[]}

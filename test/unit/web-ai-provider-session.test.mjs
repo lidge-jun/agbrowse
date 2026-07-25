@@ -459,6 +459,11 @@ function createCopyMarkdownDeferredChatGptPage(text) {
     return {
         url: () => 'https://chatgpt.com/c/copy-streaming',
         evaluate: async (fn, selectors) => {
+            // The split-source reader is a separate acquisition; it must not consume
+            // the first-call slot this fixture uses to stage its text sequence.
+            if (String(fn).startsWith('function readAssistantSnapshotSources')) {
+                return { ok: false, wrapped: [], wrapperless: [] };
+            }
             evaluateCount += 1;
             const currentNode = evaluateCount === 1 ? node : placeholderNode;
             const previous = globalThis.document;

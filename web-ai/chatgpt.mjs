@@ -58,6 +58,7 @@ import {
     CHATGPT_STOP_SELECTORS,
     anyStopButtonVisible,
     isActiveState,
+    readAssistantSnapshotSources,
     readChatGptStreamingState,
     readTopLevelAssistantSnapshots,
     readTopLevelAssistantTextsFromLocators,
@@ -640,8 +641,23 @@ export async function pollWebAi(deps, input = {}) {
                 };
             }
         }
-        const snapshots = await readAssistantSnapshots(page);
-        const newSnapshots = snapshots.slice(baseline.assistantCount).filter(sample => isFinalAnswer(sample.text));
+        const split = await readAssistantSnapshotsSplit(page);
+        // Only a FAILED acquisition falls back. A successful empty read means the
+        // page genuinely has nothing yet, and must keep polling rather than have a
+        // legacy reader invent candidates.
+        const wrapped = split.ok
+            ? split.wrapped
+            : (await readAssistantSnapshots(page)).map((sample, index) => ({
+                ...sample, source: 'wrapped', domOrder: index,
+            }));
+        const wrapperless = split.wrapperless;
+        // Wrapped turns are positional: slice against the pre-send count.
+        // Wrapperless blocks are already correlated by DOM-following the latest
+        // user node, so slicing them against a stale count would drop the answer.
+        // Merge by DOM order so `.at(-1)` means "last in the document".
+        const newSnapshots = [...wrapped.slice(baseline.assistantCount), ...wrapperless]
+            .sort((a, b) => (a.domOrder ?? 0) - (b.domOrder ?? 0))
+            .filter(sample => isFinalAnswer(sample.text));
         const latestSnapshot = newSnapshots.at(-1) || null;
         const latest = latestSnapshot?.text || '';
         const activity = await readActivityState(page);
@@ -685,7 +701,10 @@ export async function pollWebAi(deps, input = {}) {
         const finished = completion.finished === true;
         // G5: Turn ordering — ensure latest assistant turn follows latest user turn
         // before accepting as stable. Prevents stale historical text from being returned.
-        if (latest && !streaming) {
+        // A wrapperless candidate was ADMITTED only because it DOM-follows the latest
+        // user node, so it already carries the exact evidence this gate checks — and
+        // the gate structurally cannot see it, since it only knows turn wrappers.
+        if (latest && !streaming && latestSnapshot?.source !== 'wrapperless') {
             const ordered = await doesAssistantFollowUser(page).catch(() => true);
             if (!ordered) continue; // not ready yet — user's turn is still the latest
         }
@@ -1028,7 +1047,7 @@ async function isStreaming(page) {
 
 /**
  * @param {any} page
- * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot} sample
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot | import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot} sample
  * @param {number} minTurnIndex
  * @returns {Promise<{ finished: boolean, messageId: string|null, turnId: string|null, turnIndex: number }>}
  */
@@ -1067,6 +1086,15 @@ async function isResponseFinished(page, sample, minTurnIndex) {
                 turnId: sample.turnId || null,
                 turnIndex: sample.turnIndex,
             };
+        }
+        if (result && typeof result === 'object' && result.turnIndex >= 0) return result;
+        // A wrapperless candidate has no turn to carry terminal actions, so
+        // completion rests on text stability. The DOM-following filter applied at
+        // acquisition is what makes that safe: an old answer or a user echo never
+        // becomes a candidate. `in` narrowing keeps the recovery caller — which
+        // passes a base snapshot — on the ordinary path.
+        if ('source' in sample && sample.source === 'wrapperless') {
+            return { finished: true, messageId: null, turnId: null, turnIndex: minTurnIndex };
         }
         return result && typeof result === 'object'
             ? result
@@ -1350,6 +1378,15 @@ function persistResolverTraceForSession(session, traceCtx) {
  * @param {any} page
  */
 async function countAssistantMessages(page) {
+    // WRAPPED only: `baseline.assistantCount` is a positional count, and
+    // wrapperless blocks are correlated by DOM position instead, so counting them
+    // here would make the baseline incomparable across sends.
+    //
+    // A successful empty read returns 0 — falling back to the legacy locator
+    // reader there would count a user turn as an assistant message and shift the
+    // baseline by one, silently dropping the next real answer.
+    const split = await readAssistantSnapshotsSplit(page);
+    if (split.ok) return split.wrapped.length;
     return (await readAssistantMessages(page)).length;
 }
 
@@ -1398,6 +1435,33 @@ async function readAssistantSnapshots(page) {
             : sample);
     } catch {
         return [];
+    }
+}
+
+/**
+ * Read both snapshot sources in ONE page evaluation so they share a document-order
+ * coordinate space. Fails closed to empty lists — a probe failure must never look
+ * like "no answer yet AND no history", and a PARTIAL result would enter polling
+ * with a single coordinate source, which is what the shared pass exists to prevent.
+ *
+ * @param {any} page
+ * @returns {Promise<{ ok: boolean, wrapped: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[] }>}
+ */
+async function readAssistantSnapshotsSplit(page) {
+    // `ok:false` means the acquisition FAILED — distinct from a successful read
+    // that found nothing. Only the failure case may fall back to a legacy reader.
+    const failed = { ok: false, wrapped: [], wrapperless: [] };
+    try {
+        const result = await page.evaluate(readAssistantSnapshotSources, {
+            assistantSelectors: ASSISTANT_SELECTORS,
+            resolverSource: resolveTopLevelAssistantTurns.toString(),
+        });
+        if (!result || typeof result !== 'object'
+            || !Array.isArray(result.wrapped)
+            || !Array.isArray(result.wrapperless)) return failed;
+        return { ok: result.ok === true, wrapped: result.wrapped, wrapperless: result.wrapperless };
+    } catch {
+        return failed;
     }
 }
 

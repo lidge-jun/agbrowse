@@ -38,6 +38,9 @@ function makePage({ activity, text, finished }) {
                     ? { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }
                     : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
             }
+            if (source.startsWith('function readAssistantSnapshotSources')) {
+                return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+            }
             if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
             // Ordering probe (doesAssistantFollowUser) and anything else.
             return true;
@@ -145,4 +148,94 @@ describe('ChatGPT poll loop activity strata (G8 behavioural)', () => {
         const { result } = await poll(page, 2);
         expect(result.status).not.toBe('complete');
     });
+});
+
+describe('wrapperless completion through the poll loop (G11 behavioural)', () => {
+    /**
+     * The split reader returns ONLY a wrapperless candidate, the wrapped-turn
+     * lookup finds nothing (turnIndex -1), and the ordering probe returns FALSE —
+     * so this only completes if `isResponseFinished` honours wrapperless
+     * provenance AND the poll loop skips the ordering gate for it.
+     */
+    function makeWrapperlessPage({ finishedResult = { finished: false, messageId: null, turnId: null, turnIndex: -1 } } = {}) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const candidate = {
+            text: 'wrapperless answer',
+            messageId: null,
+            turnId: null,
+            turnIndex: -1,
+            source: 'wrapperless',
+            domOrder: 0,
+        };
+        return {
+            url: () => 'https://chatgpt.com/c/wrapperless',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return finishedResult;
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [], wrapperless: [candidate] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [];
+                // doesAssistantFollowUser: NO wrapped assistant turn exists, so the
+                // real helper would veto. Returning false proves the gate is skipped.
+                return false;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [] }),
+        };
+    }
+
+    it('completes on a wrapperless candidate the ordering gate would have vetoed', async () => {
+        const page = makeWrapperlessPage();
+        const { result } = await poll(page, 10);
+        expect(result).toMatchObject({ ok: true, status: 'complete', answerText: 'wrapperless answer' });
+    });
+
+    it('does not let a successful empty read reach the completion branch', async () => {
+        // ok:true with both lists empty means "nothing yet": the poll loop must
+        // keep polling instead of letting the legacy reader supply a candidate.
+        // (The post-timeout recovery path has its own readers and is out of scope
+        // here; what matters is that the LOOP never completes.)
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        let terminalProbes = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/empty',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) {
+                    terminalProbes += 1;
+                    return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) return { ok: true, wrapped: [], wrapperless: [] };
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    return [{ text: 'legacy invention', messageId: null, turnId: null, turnIndex: 0 }];
+                }
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [] }),
+        };
+
+        const { result } = await poll(page, 2);
+
+        expect(result.status).not.toBe('complete');
+        // The loop itself never had a candidate: with the old both-empty fallback
+        // it would have adopted the legacy one and probed for terminal evidence on
+        // EVERY iteration. Post-deadline recovery probes once, so a single probe
+        // proves the loop stayed empty.
+        expect(terminalProbes).toBeLessThanOrEqual(1);
+    });
+
 });
