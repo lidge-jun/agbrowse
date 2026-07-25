@@ -1174,3 +1174,58 @@ instant; non-blocking.
 
 With this fix the WP3 specification is **complete and audit-clean**: round 8 returned
 GO-WITH-FIXES with this as the only blocker, and it is now folded.
+
+## 13. Implementation-audit corrections (WP3 build, rounds 1-5)
+
+Five implementation-audit rounds followed the eight plan rounds. Every blocker was a real
+defect in code I had written, verified by the reviewer in real Chromium through the public
+`selectChatGptComposerTools` entry point.
+
+| Round | Blocker | Fix |
+|-------|---------|-----|
+| 1 | module-level `menuSnapshotToken` could cross tabs (agbrowse drives several provider pages per process) | pre-emptively fixed before the verdict; then removed entirely — see round 2 |
+| 2 | a token survived past its selection: clicking a tool closed the menu, an unrelated popover appeared, and the stale epoch handed it `appeared-on-open` → wrong row clicked | the epoch is no longer ambient at all: `openComposerPlusMenu` RETURNS the token and every resolution takes it as an explicit argument |
+| 2 | `Boolean(store)` did not narrow the optional registry (TS18048) | `store != null && ...` in one expression |
+| 2 | serialization safety had no committed test | NEW `test/integration/composer-menu-transport.test.mjs` runs both functions through real `page.evaluate` |
+| 3 | the keyboard-shortcut fallback still minted a token although it never confirms OUR menu opened | the shortcut path returns `null`; structural tiers only |
+| 3 | the open-check asked for the requested connector label, so a menu holding `More` but not `GitHub` read as "not open" and the plus button was clicked again — the More path was fully broken | `isComposerPlusMenuOpen` is ownership-only by construction and takes no labels |
+| 4 | an already-open menu had no epoch, so a portaled More submenu was unreachable | the More expansion mints its own epoch |
+| 4 | the shortcut regression test inserted its popover BEFORE the snapshot, so it could not detect the defect | the popover is now inserted from the mocked keyboard shortcut, after the snapshot; mutation-verified red |
+| 5 | hover minted causal ownership, so any popover appearing inside the hover window was clicked | hover resolves with a null token; causal ownership comes only from a confirmed click on the owned `More` row |
+
+### 13.1 Accepted capability trade (round 5, stated plainly)
+
+Refusing hover-based causal ownership means a hover-only connector submenu that carries
+**neither** composer-menu text **nor** plus-button `aria-controls` ownership is unreachable.
+The reviewer verified the boundary in Chromium:
+
+```json
+{"hover-portaled-with-menu-text": {"selectedPlugins":["github"]},
+ "hover-portaled-aria-controls-on-More-only": {"selectedPlugins":[],"githubClicks":0}}
+```
+
+An `aria-controls` relationship on the `More` row itself does not qualify, because the
+resolver reads `aria-controls` only from the composer plus button
+(`chatgpt-menu-resolver.mjs:98`).
+
+Is that shape real? **Unproven either way.** The repo's live probe
+(`devlog/_fin/260615_chatgpt_composer_tools_live_probe.md:47`) records the top-level `More`
+row but never captured the resulting submenu's structural attributes. In practice the
+observed submenu opens on click (the path that keeps full causal ownership), and hover-only
+expansion still works whenever the submenu carries composer-menu text. The trade is taken
+deliberately: a wrong-row click selects a connector the user did not ask for and silently
+changes what ChatGPT can access, while the failure mode here is the pre-existing
+`composer plugin not selected: <name>` warning. If a live probe later shows a hover-only,
+text-free, unowned submenu, the fix is to widen `aria-controls` reading to the triggering
+row — recorded as follow-up **G81b**.
+
+### 13.2 checkJs gate — corrected criterion
+
+§9.3 and §10.4 case 24 asserted `npm run typecheck:checkjs-dom` exits 0. That was wrong
+about the repo: the gate is red at baseline with 186 diagnostics, none of them in files this
+phase touches (measured 238 total lines of output with this phase's changes present, and the
+reviewer's scoped count for WP3 modules is 0).
+
+Corrected criterion: **zero diagnostics naming `web-ai/chatgpt-menu-resolver.mjs`,
+`web-ai/chatgpt-tools.mjs`, or this phase's tests**, with the repository-wide baseline
+unchanged. Repairing the global baseline is out of scope for an issue-#81 fix.

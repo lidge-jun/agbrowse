@@ -2,6 +2,14 @@
 /** @typedef {import('playwright-core').Page} Page */
 /** @typedef {import('playwright-core').Locator} Locator */
 
+import {
+    MENU_CONTAINER_SELECTOR,
+    MENU_ITEM_SELECTOR,
+    MENU_OPEN_TEXT_PATTERN,
+    resolveComposerMenuItem,
+    snapshotOpenMenus,
+} from './chatgpt-menu-resolver.mjs';
+
 const PLUS_BUTTON_SELECTORS = [
     '[data-testid="composer-plus-btn"]',
     'button[aria-label="파일 추가 및 기타"]',
@@ -135,77 +143,145 @@ export async function selectChatGptComposerTools(page, input = {}) {
 
 /** @param {Page} page @param {string[]} labels @param {string[]} usedFallbacks */
 async function selectMainComposerMenuItem(page, labels, usedFallbacks) {
-    await openComposerPlusMenu(page, usedFallbacks);
-    const item = await findVisibleMenuItemByLabels(page, labels);
+    const token = await openComposerPlusMenu(page, usedFallbacks);
+    const item = await resolveMenuItemLocator(page, labels, token);
     if (!item) return false;
-    const before = await checkedState(item);
-    if (before === 'true') return true;
-    return clickMenuItem(page, item);
+    if (item.checked === 'true') return true;
+    return clickMenuItem(page, item.locator);
 }
 
 /** @param {Page} page @param {string[]} labels @param {string[]} usedFallbacks */
 async function selectMoreComposerMenuItem(page, labels, usedFallbacks) {
-    await openComposerPlusMenu(page, usedFallbacks);
-    const more = await findVisibleMenuItemByLabels(page, ['더 보기', 'More']);
-    if (!more) return false;
-    await more.hover({ timeout: 1_000 }).catch(() => undefined);
-    await page.waitForTimeout(250).catch(() => undefined);
-    if (!(await anyMenuItemVisible(page, labels))) {
-        await more.click({ timeout: 2_000 }).catch(() => undefined);
-        await page.waitForTimeout(400).catch(() => undefined);
+    const token = await openComposerPlusMenu(page, usedFallbacks);
+    // Connectors are surfaced directly in the composer menu on the current UI;
+    // the More submenu is a fallback, not the entry point (issue #81).
+    const direct = await resolveMenuItemLocator(page, labels, token);
+    if (direct) {
+        if (direct.checked === 'true') return true;
+        return clickMenuItem(page, direct.locator);
     }
-    const item = await findVisibleMenuItemByLabels(page, labels);
+    const more = await resolveMenuItemLocator(page, ['더 보기', 'More'], token);
+    if (!more) return false;
+    // Expanding More can portal the submenu to a sibling root with no structural
+    // ownership of its own, so the expansion needs its own epoch. Hover is NOT a
+    // confirmed cause: any popover that happens to appear during the hover window
+    // would inherit the tier. Hover therefore resolves with a null token
+    // (structural tiers only), and causal ownership comes solely from a confirmed
+    // click on the owned More row.
+    await more.locator.hover({ timeout: 1_000 }).catch(() => undefined);
+    await page.waitForTimeout(250).catch(() => undefined);
+    let item = await resolveMenuItemLocator(page, labels, null);
+    if (!item) {
+        const clickEpoch = await snapshotMenuEpoch(page);
+        const clicked = await more.locator.click({ timeout: 2_000 }).then(() => true).catch(() => false);
+        await page.waitForTimeout(400).catch(() => undefined);
+        item = await resolveMenuItemLocator(page, labels, clicked ? clickEpoch : null);
+    }
     if (!item) return false;
-    if (await checkedState(item) === 'true') return true;
-    return clickMenuItem(page, item);
+    if (item.checked === 'true') return true;
+    return clickMenuItem(page, item.locator);
 }
 
-/** @param {Page} page @param {string[]} usedFallbacks */
+/**
+ * Mint a registry epoch for the containers currently open, returning the token
+ * or null when the snapshot could not run (which disables the causal tier).
+ * @param {Page} page
+ * @returns {Promise<number|null>}
+ */
+async function snapshotMenuEpoch(page) {
+    const snapshot = await page.evaluate(snapshotOpenMenus, {
+        containerSelector: MENU_CONTAINER_SELECTOR,
+    }).catch(() => null);
+    return snapshot?.ok ? snapshot.token : null;
+}
+
+/**
+ * Run the composer-menu resolver inside the page. Never throws.
+ *
+ * The epoch token is an explicit argument, never ambient state. It is minted by
+ * one confirmed plus-button activation and used only for the resolutions that
+ * belong to that activation: a token surviving into a later selection would let
+ * an unrelated popover — one that opened as a side effect of clicking the
+ * previous item — inherit the causal ownership tier and be clicked.
+ *
+ * @param {Page} page @param {string[]} labels @param {number|null} [token]
+ * @returns {Promise<any>}
+ */
+async function evaluateComposerMenu(page, labels, token = null) {
+    return page.evaluate(resolveComposerMenuItem, {
+        containerSelector: MENU_CONTAINER_SELECTOR,
+        itemSelector: MENU_ITEM_SELECTOR,
+        plusSelectors: PLUS_BUTTON_SELECTORS,
+        labels,
+        menuTextPattern: { source: MENU_OPEN_TEXT_PATTERN.source, flags: MENU_OPEN_TEXT_PATTERN.flags },
+        token,
+    }).catch(() => ({ index: -1, reason: 'no-open-menu' }));
+}
+
+/**
+ * @param {Page} page @param {string[]} labels @param {number|null} [token]
+ * @returns {Promise<{ locator: Locator, checked: string|null }|null>}
+ */
+async function resolveMenuItemLocator(page, labels, token = null) {
+    const result = await evaluateComposerMenu(page, labels, token);
+    if (!result || result.index < 0) return null;
+    return {
+        locator: page.locator(MENU_ITEM_SELECTOR).nth(result.index),
+        checked: result.checked ?? null,
+    };
+}
+
+/**
+ * Ensure the composer menu is open and return the epoch token for THIS
+ * activation, or null when the menu was already open or the plus click could
+ * not be confirmed. A null token simply disables the causal ownership tier;
+ * the structural tiers still apply.
+ *
+ * @param {Page} page @param {string[]} usedFallbacks
+ * @returns {Promise<number|null>}
+ */
 async function openComposerPlusMenu(page, usedFallbacks) {
-    if (await isComposerPlusMenuOpen(page)) return;
+    // Already open: there is no delta to attribute, so no causal token exists.
+    // The probe is ownership-only (empty labels): asking for the requested
+    // connector here would report "not open" for a perfectly good menu that
+    // merely keeps that connector behind More, and we would click plus again.
+    if (await isComposerPlusMenuOpen(page)) return null;
+    // Snapshot failure disables the causal ownership tier rather than enabling
+    // it: without a valid token every container would look newly opened.
+    const token = await snapshotMenuEpoch(page);
     for (const selector of PLUS_BUTTON_SELECTORS) {
         const loc = page.locator(selector).first();
         if (!(await loc.isVisible().catch(() => false))) continue;
-        await loc.click({ timeout: 3_000 }).catch(async () => {
+        const clicked = await loc.click({ timeout: 3_000 }).then(() => true).catch(async () => {
             const box = await loc.boundingBox().catch(() => null);
-            if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            if (!box) return false;
+            return page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+                .then(() => true).catch(() => false);
         });
+        // An unconfirmed activation must not mint causal ownership: a popover
+        // appearing for any other reason would inherit it.
+        if (!clicked) continue;
         await page.waitForTimeout(400).catch(() => undefined);
-        if (await isComposerPlusMenuOpen(page)) return;
+        if (await isComposerPlusMenuOpen(page, token)) return token;
     }
     usedFallbacks.push('composer-plus-shortcut');
     await chord(page, process.platform === 'darwin' ? 'Meta+u' : 'Control+u').catch(() => undefined);
     await page.waitForTimeout(400).catch(() => undefined);
-}
-
-/** @param {Page} page */
-async function isComposerPlusMenuOpen(page) {
-    return page.locator('[role="menu"]').evaluateAll((menus) => menus.some(menu => {
-        const text = /** @type {HTMLElement} */ (menu).innerText || menu.textContent || '';
-        return /사진 및 파일 추가|최근 파일|이미지 만들기|심층 리서치|웹 검색|Add photos|Create image|Deep research|Web search/i.test(text);
-    })).catch(() => false);
-}
-
-/** @param {Page} page @param {string[]} labels */
-async function findVisibleMenuItemByLabels(page, labels) {
-    const candidates = await page.locator('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').all().catch(() => /** @type {Locator[]} */ ([]));
-    for (const candidate of candidates) {
-        if (!(await candidate.isVisible().catch(() => false))) continue;
-        const text = normalizeUiText(await candidate.innerText({ timeout: 500 }).catch(() => ''));
-        if (!text) continue;
-        if (labels.some(label => textIncludesLabel(text, label))) return candidate;
-    }
+    // The shortcut is a blind keystroke with no confirmation that OUR menu
+    // opened, so it never grants causal ownership. Structural tiers still apply.
     return null;
 }
 
-/** @param {Page} page @param {string[]} labels */
-async function anyMenuItemVisible(page, labels) {
-    return Boolean(await findVisibleMenuItemByLabels(page, labels));
-}
-
-/** @param {Locator} loc */
-async function checkedState(loc) {
-    return loc.getAttribute('aria-checked').catch(() => null);
+/**
+ * Is a composer-OWNED menu currently open? Deliberately ownership-only: the
+ * question is "is our menu up", never "does it already show the row we want".
+ * @param {Page} page @param {number|null} [token]
+ */
+async function isComposerPlusMenuOpen(page, token = null) {
+    const result = await evaluateComposerMenu(page, [], token);
+    // The empty-label probe reports ownership via label-not-found when an owned
+    // container is open, and no-owned-menu / no-open-menu otherwise.
+    return result.reason === 'label-not-found' && Boolean(result.ownership);
 }
 
 /** @param {Page} page @param {Locator} item */
@@ -283,12 +359,6 @@ function normalizeUiText(text) {
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-}
-
-/** @param {string} haystack @param {string} label */
-function textIncludesLabel(haystack, label) {
-    const normalized = normalizeUiText(label);
-    return normalized && haystack.includes(normalized);
 }
 
 /** @param {string} prompt */
