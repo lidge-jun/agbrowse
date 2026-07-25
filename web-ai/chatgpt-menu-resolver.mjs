@@ -72,11 +72,11 @@ export function snapshotOpenMenus({ containerSelector, isVisible }) {
  * never a candidate, even when it is the only one holding the requested label,
  * and a tie inside one ownership tier fails closed rather than guessing.
  *
- * @param {{ containerSelector: string, itemSelector: string, plusSelectors: string[], labels: string[], menuTextPattern: { source: string, flags: string }, token?: number|null, isVisible?: (node: any) => boolean }} options
+ * @param {{ containerSelector: string, itemSelector: string, plusSelectors: string[], labels: string[], menuTextPattern: { source: string, flags: string }, token?: number|null, ownedContainerId?: string|null, isVisible?: (node: any) => boolean }} options
  * @returns {ResolvedMenuItem|UnresolvedMenuItem}
  */
 export function resolveComposerMenuItem({
-    containerSelector, itemSelector, plusSelectors, labels, menuTextPattern, token, isVisible,
+    containerSelector, itemSelector, plusSelectors, labels, menuTextPattern, token, ownedContainerId, isVisible,
 }) {
     /** @type {Record<string, number>} */
     const OWNERSHIP_RANK = { 'aria-controls': 3, 'appeared-on-open': 2, 'menu-text': 1 };
@@ -103,6 +103,14 @@ export function resolveComposerMenuItem({
             const target = id && document.getElementById(id);
             if (target && visible(target)) ownedByPlus.add(target);
         }
+    }
+    // Exactly ONE extra container may be conferred ownership: the one the caller
+    // OBSERVED a triggering row control (its aria-controls target). A selector
+    // would admit every row on the page — including an unrelated row pointing at
+    // an unrelated popover — and re-open the wrong-click hole.
+    if (ownedContainerId) {
+        const owned = document.getElementById(ownedContainerId);
+        if (owned && visible(owned)) ownedByPlus.add(owned);
     }
 
     const visibleContainers = Array.from(document.querySelectorAll(containerSelector)).filter(visible);

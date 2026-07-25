@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import {
     MENU_CONTAINER_SELECTOR,
@@ -213,5 +215,121 @@ describe('ChatGPT composer menu resolver (issue #81)', () => {
             expect(fn.toString()).toContain('__agbrowseComposerMenuEpoch');
         }
         expect(resolveComposerMenuItem.toString()).toContain('OWNERSHIP_RANK');
+    });
+});
+
+describe('triggering-row aria-controls ownership (G81b)', () => {
+    function resolveWithOwner(labels, { ownedContainerId = null, token = null } = {}) {
+        return resolveComposerMenuItem({
+            containerSelector: MENU_CONTAINER_SELECTOR,
+            itemSelector: MENU_ITEM_SELECTOR,
+            plusSelectors: PLUS_SELECTORS,
+            labels,
+            menuTextPattern: { source: MENU_OPEN_TEXT_PATTERN.source, flags: MENU_OPEN_TEXT_PATTERN.flags },
+            token,
+            ownedContainerId,
+            isVisible,
+        });
+    }
+
+    it('resolves a portaled submenu owned by the More row', () => {
+        // Hover-opened, no composer menu text, no causal token: only the
+        // triggering row's aria-controls can confer ownership.
+        mount(`
+            <form>${plusButton}</form>
+            <div class="popover"><div class="__menu-item" tabindex="0" data-fill aria-controls="submenu-x">More</div></div>
+            <div id="submenu-x" class="popover">${githubRow}</div>
+        `);
+        const result = resolveWithOwner(['GitHub'], { ownedContainerId: 'submenu-x' });
+        expect(result).toMatchObject({ ownership: 'aria-controls' });
+        expect(result.index).toBeGreaterThanOrEqual(0);
+    });
+
+    it('ignores an owned container that is hidden', () => {
+        mount(`
+            <form>${plusButton}</form>
+            <div id="submenu-x" class="popover" data-test-hidden>${githubRow}</div>
+        `);
+        // The row inside a hidden container is itself hidden, so `index: -1` alone
+        // would pass even if the visibility check on the CONTAINER were removed.
+        // Make the container visible but keep the row hidden — then only the
+        // container-level check can produce `no-owned-menu`.
+        expect(resolveWithOwner(['GitHub'], { ownedContainerId: 'submenu-x' }))
+            .toMatchObject({ index: -1, reason: 'no-open-menu' });
+    });
+
+    it('does not confer ownership on a hidden container holding a visible row', () => {
+        // Isolates the container visibility check: the row would otherwise be a
+        // perfectly good candidate.
+        mount(`
+            <form>${plusButton}</form>
+            <div id="submenu-x" class="popover" data-test-hidden><div class="__menu-item" tabindex="0" data-fill><span>GitHub</span></div></div>
+        `);
+        const doc = globalThis.document;
+        // Force the ROW visible while its container stays hidden.
+        doc.querySelector('#submenu-x .__menu-item').setAttribute('data-force-visible', '');
+        const result = resolveComposerMenuItem({
+            containerSelector: MENU_CONTAINER_SELECTOR,
+            itemSelector: MENU_ITEM_SELECTOR,
+            plusSelectors: PLUS_SELECTORS,
+            labels: ['GitHub'],
+            menuTextPattern: { source: MENU_OPEN_TEXT_PATTERN.source, flags: MENU_OPEN_TEXT_PATTERN.flags },
+            token: null,
+            ownedContainerId: 'submenu-x',
+            isVisible: (node) => node.hasAttribute('data-force-visible') || !node.hasAttribute('data-test-hidden'),
+        });
+        expect(result).toMatchObject({ index: -1, reason: 'no-open-menu' });
+    });
+
+    it('does NOT confer ownership on an unrelated row pointing elsewhere', () => {
+        // The blocker this row exists to prevent: passing a SELECTOR would have
+        // admitted this popover; passing the observed id does not.
+        mount(`
+            <form>${plusButton}</form>
+            <div class="popover"><div class="__menu-item" tabindex="0" data-fill aria-controls="unrelated">Settings</div></div>
+            <div id="unrelated" class="popover">${githubRow}</div>
+        `);
+        expect(resolveWithOwner(['GitHub'], { ownedContainerId: null }))
+            .toMatchObject({ index: -1, reason: 'no-owned-menu' });
+    });
+
+    it('confers ownership on EXACTLY the observed id, not on other aria-controls rows', () => {
+        // The sharper form: an observed id IS supplied, and a DIFFERENT row also
+        // carries aria-controls pointing at the popover holding the target. Only
+        // the observed container may be owned, so the target stays unreachable.
+        mount(`
+            <form>${plusButton}</form>
+            <div class="popover">
+                <div class="__menu-item" tabindex="0" data-fill aria-controls="submenu-x"><span>More</span></div>
+                <div class="__menu-item" tabindex="0" data-fill aria-controls="unrelated"><span>Settings</span></div>
+            </div>
+            <div id="submenu-x" class="popover"><div class="__menu-item" tabindex="0" data-fill><span>Canva</span></div></div>
+            <div id="unrelated" class="popover">${githubRow}</div>
+        `);
+        expect(resolveWithOwner(['GitHub'], { ownedContainerId: 'submenu-x' }))
+            .toMatchObject({ index: -1 });
+    });
+
+    it('ignores a nonexistent owned id without throwing', () => {
+        mount(`<form>${plusButton}</form><div class="popover">${githubRow}</div>`);
+        expect(resolveWithOwner(['GitHub'], { ownedContainerId: 'does-not-exist' }))
+            .toMatchObject({ index: -1, reason: 'no-owned-menu' });
+    });
+
+    it('behaves exactly as before when no owned id is supplied', () => {
+        mount(`
+            <form><button data-testid="composer-plus-btn" aria-controls="menu-x">Add</button></form>
+            <div id="menu-x" class="popover">${githubRow}</div>
+        `);
+        expect(resolveWithOwner(['GitHub'])).toMatchObject({ index: 0, ownership: 'aria-controls' });
+    });
+
+    it('wires the observed control id through the More path', () => {
+        const src = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt-tools.mjs'), 'utf8');
+        expect(src).toContain("more.locator.getAttribute('aria-controls')");
+        expect(src).toContain('resolveMenuItemLocator(page, labels, null, moreControls)');
+        expect(src).toContain('clicked ? clickEpoch : null, moreControls');
+        // A selector must NEVER be passed as the owned container.
+        expect(src).not.toMatch(/ownedContainerId: MENU_ITEM_SELECTOR/);
     });
 });

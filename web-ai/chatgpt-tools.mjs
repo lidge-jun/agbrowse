@@ -168,14 +168,17 @@ async function selectMoreComposerMenuItem(page, labels, usedFallbacks) {
     // would inherit the tier. Hover therefore resolves with a null token
     // (structural tiers only), and causal ownership comes solely from a confirmed
     // click on the owned More row.
+    // Read aria-controls from THIS row, never from a selector class: only the
+    // container the More row actually owns may inherit ownership.
+    const moreControls = await more.locator.getAttribute('aria-controls').catch(() => null);
     await more.locator.hover({ timeout: 1_000 }).catch(() => undefined);
     await page.waitForTimeout(250).catch(() => undefined);
-    let item = await resolveMenuItemLocator(page, labels, null);
+    let item = await resolveMenuItemLocator(page, labels, null, moreControls);
     if (!item) {
         const clickEpoch = await snapshotMenuEpoch(page);
         const clicked = await more.locator.click({ timeout: 2_000 }).then(() => true).catch(() => false);
         await page.waitForTimeout(400).catch(() => undefined);
-        item = await resolveMenuItemLocator(page, labels, clicked ? clickEpoch : null);
+        item = await resolveMenuItemLocator(page, labels, clicked ? clickEpoch : null, moreControls);
     }
     if (!item) return false;
     if (item.checked === 'true') return true;
@@ -204,10 +207,10 @@ async function snapshotMenuEpoch(page) {
  * an unrelated popover — one that opened as a side effect of clicking the
  * previous item — inherit the causal ownership tier and be clicked.
  *
- * @param {Page} page @param {string[]} labels @param {number|null} [token]
+ * @param {Page} page @param {string[]} labels @param {number|null} [token] @param {string|null} [ownedContainerId]
  * @returns {Promise<any>}
  */
-async function evaluateComposerMenu(page, labels, token = null) {
+async function evaluateComposerMenu(page, labels, token = null, ownedContainerId = null) {
     return page.evaluate(resolveComposerMenuItem, {
         containerSelector: MENU_CONTAINER_SELECTOR,
         itemSelector: MENU_ITEM_SELECTOR,
@@ -215,15 +218,16 @@ async function evaluateComposerMenu(page, labels, token = null) {
         labels,
         menuTextPattern: { source: MENU_OPEN_TEXT_PATTERN.source, flags: MENU_OPEN_TEXT_PATTERN.flags },
         token,
+        ownedContainerId,
     }).catch(() => ({ index: -1, reason: 'no-open-menu' }));
 }
 
 /**
- * @param {Page} page @param {string[]} labels @param {number|null} [token]
+ * @param {Page} page @param {string[]} labels @param {number|null} [token] @param {string|null} [ownedContainerId]
  * @returns {Promise<{ locator: Locator, checked: string|null }|null>}
  */
-async function resolveMenuItemLocator(page, labels, token = null) {
-    const result = await evaluateComposerMenu(page, labels, token);
+async function resolveMenuItemLocator(page, labels, token = null, ownedContainerId = null) {
+    const result = await evaluateComposerMenu(page, labels, token, ownedContainerId);
     if (!result || result.index < 0) return null;
     return {
         locator: page.locator(MENU_ITEM_SELECTOR).nth(result.index),

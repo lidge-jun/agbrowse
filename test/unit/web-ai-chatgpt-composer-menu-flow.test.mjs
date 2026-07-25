@@ -185,6 +185,41 @@ describe('ChatGPT composer menu selection flow (issue #81)', () => {
         expect(MENU_ITEM_SELECTOR).toContain('.popover .__menu-item');
     });
 
+    it('transports the observed More control id into the resolver payload (G81b)', async () => {
+        // Guards the PRODUCTION path: deleting `ownedContainerId` from the
+        // evaluate payload, or dropping the argument at the forwarding call,
+        // makes the feature inert while resolver-level tests stay green.
+        const payloads = [];
+        const harness = makePage(`<form>${plus}</form>`, {
+            onClick: (element, document) => {
+                if (element.matches('[data-testid="composer-plus-btn"]')) {
+                    document.body.insertAdjacentHTML('beforeend',
+                        '<div class="popover" id="composer-menu">'
+                        + '<div class="__menu-item" tabindex="0" data-fill aria-controls="submenu-x"><span>More</span></div>'
+                        + '</div>');
+                    return;
+                }
+                if (element.textContent.includes('More')) {
+                    document.body.insertAdjacentHTML('beforeend',
+                        `<div class="popover" id="submenu-x">${row('GitHub')}</div>`);
+                }
+            },
+        });
+        const originalEvaluate = harness.page.evaluate;
+        harness.page.evaluate = async (fn, arg) => {
+            if (arg && 'ownedContainerId' in arg) payloads.push(arg.ownedContainerId);
+            else if (arg && 'labels' in arg) payloads.push('MISSING-KEY');
+            return originalEvaluate(fn, arg);
+        };
+
+        await selectChatGptComposerTools(harness.page, { plugins: ['github'] });
+
+        // At least one resolution after the More row was observed must carry its
+        // aria-controls target, and none may report the key as absent.
+        expect(payloads).not.toContain('MISSING-KEY');
+        expect(payloads).toContain('submenu-x');
+    });
+
     it('expands More from an already-open menu into a portaled submenu', async () => {
         // The composer menu is already up, so there is no plus-click epoch.
         // The More expansion must mint its own, or the portaled submenu has no
