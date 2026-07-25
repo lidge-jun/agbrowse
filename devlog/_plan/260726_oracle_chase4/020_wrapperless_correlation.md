@@ -647,3 +647,43 @@ only the poll loop and `countAssistantMessages` move to the split reader, exactl
 | 32 | evaluate returns `{ wrapped: [x] }` with `wrapperless` missing | BOTH lists empty — partial results are rejected wholesale |
 | 33 | import block after the edit | still exports-in `readTopLevelAssistantSnapshots` (guards the round-6 near-miss) |
 | 34 | checkJs | no `TS2304` for `ChatGptAssistantSnapshot` (inline import type) |
+
+## 11. Correlated snapshot type (A-gate round 8)
+
+Importing the typedef correctly exposed that it does not describe what this phase
+produces: `ChatGptAssistantSnapshot` (`chatgpt-response-dom.mjs:217`) has only
+`text`, `messageId`, `turnId`, `turnIndex`, while WP3 reads `source` and `domOrder`.
+
+```text
+TS2339: Property 'source' does not exist on type 'ChatGptAssistantSnapshot'.
+TS2339: Property 'domOrder' does not exist on type 'ChatGptAssistantSnapshot'.
+```
+
+**Fix: a new exported type, leaving the existing one alone.** Extending the base
+typedef would force every existing producer (`readTopLevelAssistantSnapshots`) to
+populate fields it has no business knowing about.
+
+```diff
+*** web-ai/chatgpt-response-dom.mjs, beside the existing typedef
++/**
++ * A snapshot carrying its provenance and a shared document-order coordinate.
++ * Produced only by `readAssistantSnapshotSources`, where both sources are read in
++ * ONE pass so `domOrder` is comparable across them.
++ * @typedef {ChatGptAssistantSnapshot & { source: 'wrapped'|'wrapperless', domOrder: number }} ChatGptCorrelatedSnapshot
++ */
+```
+
+`readAssistantSnapshotSources` returns
+`{ wrapped: ChatGptCorrelatedSnapshot[], wrapperless: ChatGptCorrelatedSnapshot[] }`,
+and `readAssistantSnapshotsSplit`'s inline import names the same type:
+
+```diff
+- * @returns {Promise<{ wrapped: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[] }>}
++ * @returns {Promise<{ wrapped: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[] }>}
+```
+
+`isResponseFinished`'s `sample` parameter widens to accept either type, since it is
+called with both wrapped and wrapperless samples.
+
+**Criterion 34 (revised):** scoped checkJs reports zero `TS2304` AND zero `TS2339`
+for `chatgpt.mjs` and `chatgpt-response-dom.mjs` beyond the pre-existing baseline.
