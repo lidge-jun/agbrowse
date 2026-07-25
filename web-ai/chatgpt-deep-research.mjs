@@ -3,6 +3,7 @@ import { updateSession, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
 import { trySaveReport, appendArtifactRecord } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { chooseDeepResearchReportRead } from './chatgpt-deep-research-report.mjs';
+import { anyStopButtonVisible } from './chatgpt-response-dom.mjs';
 
 /**
  * @typedef {Object} DeepResearchResult
@@ -46,10 +47,6 @@ const DEEP_RESEARCH_SELECTORS = {
 };
 
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const STOP_SELECTORS = [
-    'button[data-testid="stop-button"]',
-    'button[aria-label*="Stop" i]',
-];
 
 /**
  * Count assistant messages on the page.
@@ -77,10 +74,7 @@ async function readLatestAssistant(page) {
  * @returns {Promise<boolean>}
  */
 async function isStreaming(page) {
-    for (const sel of STOP_SELECTORS) {
-        if (await page.locator(sel).first().isVisible().catch(() => false)) return true;
-    }
-    return false;
+    return anyStopButtonVisible(page);
 }
 
 /**

@@ -2,6 +2,7 @@
 import { updateSession } from './session.mjs';
 import { trySaveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
+import { anyStopButtonVisible } from './chatgpt-response-dom.mjs';
 
 /**
  * @typedef {Object} TurnResult
@@ -52,8 +53,7 @@ async function readLatestAssistant(page) {
  * @returns {Promise<boolean>}
  */
 async function isStreaming(page) {
-    const stop = await page.locator('[data-testid="stop-button"], button[aria-label="Stop generating"]').count();
-    return stop > 0;
+    return anyStopButtonVisible(page);
 }
 
 /**

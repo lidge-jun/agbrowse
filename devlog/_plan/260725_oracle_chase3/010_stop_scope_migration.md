@@ -200,3 +200,42 @@ scope lacks `.locator`). §2.3's `scopeToMain` is replaced by the exported
 Case 3 is the behavioral change the reviewer flagged as untested in the multi-turn poll
 loop: it is now asserted directly on the shared helper, which is the only predicate that
 loop consults after this phase.
+
+## 6. Implementation audit amendments (WP2 A-gate, reviewer Mill)
+
+The implementation audit returned GO-WITH-FIXES with 2 blockers, both accepted:
+
+### 6.1 Blocker 1 [High] — `.first()` only was a real regression
+
+The helper as first written inspected `locator(selector).first()`, so a hidden stop node
+rendered ahead of the live one reported idle. The reviewer's reproduction:
+
+```json
+{"helper":false,"oldMultiTurnCount":true,"firstVisible":false,"secondVisible":true}
+```
+
+The old `count() > 0` in `chatgpt-multi-turn.mjs` accepted that DOM, so this would have been
+an unintended regression — and multi-turn is the most exposed caller because, unlike Deep
+Research (`chatgpt-deep-research.mjs:288`), it has no positive completion proof: it would
+return a still-growing partial answer after 1.5s of stable text.
+
+Fix: `anyStopButtonVisible` now walks **every** match via `all()`, with a `count()`/`nth()`
+path and a `.first()` path as fallbacks for locator shapes that lack `all()`. New test case:
+"finds a visible stop node even when a hidden one precedes it".
+
+### 6.2 Blocker 2 [Medium] — the first test file was largely vacuous
+
+The original fake mapped whole selector strings to node arrays, so the dictation case tested
+an empty page, the form-scoped case keyed on the constant rather than a real form, the
+`main` fallback tested a shape real Playwright never produces (it returns a Locator matching
+zero elements, not `null`), and the source assertion passed on a bare import.
+
+The test file was rewritten around a **DOM-backed locator adapter** (jsdom + real
+`querySelectorAll`), so CSS semantics are genuinely exercised: the `:not()` dictation/voice/
+read-aloud exclusions, the `form`-scoping of the aria variant, and multiplicity. Visibility
+is modelled with a `data-hidden` attribute since jsdom has no layout. The source assertion
+now requires the exact call expressions at all four sites. 11 cases, all green.
+
+`scopeToMainRegion`'s doc comment now states that a real page always returns the `main`
+locator (matching zero elements when absent, so scoped probes fail closed) and that the page
+fallback exists only for locator-less test doubles.

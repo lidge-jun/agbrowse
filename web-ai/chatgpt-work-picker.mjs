@@ -12,6 +12,7 @@ import {
     detectChatGptComposerSurface,
     detectChatGptWorkAvailability,
 } from './product-surfaces.mjs';
+import { anyStopButtonVisible, scopeToMainRegion } from './chatgpt-response-dom.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
 
@@ -687,8 +688,9 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
             }
         }
 
-        const stopVisible = await page.locator('button[aria-label*="Stop" i]').first()
-            .isVisible().catch(() => false);
+        // Composer-scoped and main-scoped: a page-wide "Stop"-labelled control
+        // (dictation, sidebar) is not running evidence.
+        const stopVisible = await anyStopButtonVisible(scopeToMainRegion(page));
         const thinkingEl = page.getByText?.('Thinking', { exact: false });
         const thinkingVisible = thinkingEl
             ? await thinkingEl.first().isVisible().catch(() => false)
@@ -943,12 +945,8 @@ export async function readWorkTaskState(page) {
     // matching is poisoned by sidebar history titles (live 2026-07-10: a
     // conversation named "SMOKE_C3_THINKING_OK" matched getByText('Thinking')
     // and pinned the classifier to running forever).
-    const mainCandidate = page.locator('main');
-    const mainRegion = (mainCandidate && typeof mainCandidate.locator === 'function')
-        ? mainCandidate
-        : page;
-    const stopBtn = mainRegion.locator('button[aria-label*="Stop" i]').first();
-    const stopVisible = await stopBtn.isVisible().catch(() => false);
+    const mainRegion = scopeToMainRegion(page);
+    const stopVisible = await anyStopButtonVisible(mainRegion);
 
     const thinkingEl = mainRegion.getByText?.('Thinking', { exact: true });
     const thinkingVisible = thinkingEl ? await thinkingEl.first().isVisible().catch(() => false) : false;

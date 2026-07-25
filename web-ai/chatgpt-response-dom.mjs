@@ -12,6 +12,72 @@ export const CHATGPT_STOP_SELECTORS = [
 ];
 
 /**
+ * Node-side probe: is a composer-scoped stop button visible within `scope`?
+ *
+ * Visibility is REQUIRED — a present-but-hidden stop node is not generation
+ * evidence. This is the same semantic the main ChatGPT poll path uses, and it
+ * is the shared predicate every ChatGPT surface must consult so page-wide
+ * "any Stop-labelled button" matches (dictation, voice, read-aloud, sidebar)
+ * can never be mistaken for streaming.
+ *
+ * EVERY match is inspected, not just the first: ChatGPT can render a hidden
+ * stop node ahead of the live one, and a `.first()`-only probe would report
+ * idle mid-generation (premature completion in the multi-turn poll loop).
+ *
+ * @param {any} scope Playwright-like locator root (a page, or a `main` region locator).
+ * @returns {Promise<boolean>}
+ */
+export async function anyStopButtonVisible(scope) {
+    if (!scope || typeof scope.locator !== 'function') return false;
+    for (const selector of CHATGPT_STOP_SELECTORS) {
+        const locator = scope.locator(selector);
+        if (!locator) continue;
+        if (typeof locator.all === 'function') {
+            const nodes = await locator.all().catch(() => []);
+            for (const node of nodes) {
+                if (typeof node?.isVisible === 'function'
+                    && await node.isVisible().catch(() => false)) return true;
+            }
+            continue;
+        }
+        // Fallback for locator shapes without `all()`: walk by index.
+        const total = typeof locator.count === 'function'
+            ? await locator.count().catch(() => 0)
+            : 0;
+        for (let i = 0; i < total; i += 1) {
+            const node = locator.nth?.(i);
+            if (typeof node?.isVisible === 'function'
+                && await node.isVisible().catch(() => false)) return true;
+        }
+        if (total === 0) {
+            const first = locator.first?.();
+            if (typeof first?.isVisible === 'function'
+                && await first.isVisible().catch(() => false)) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Narrow a page to its main conversation region when it exposes one.
+ *
+ * Sidebar history titles poison page-wide text and control matching (live
+ * 2026-07-10: a conversation named "SMOKE_C3_THINKING_OK" matched
+ * getByText('Thinking') and pinned the Work classifier to running forever).
+ *
+ * With a real Playwright page this always returns the `main` locator (which
+ * matches zero elements when the page has no `<main>`, so probes scoped to it
+ * fail closed). The page fallback exists for locator-less test doubles.
+ *
+ * @param {any} page
+ * @returns {any} the `main` locator when available, else the page itself
+ */
+export function scopeToMainRegion(page) {
+    const main = page?.locator?.('main');
+    return (main && typeof main.locator === 'function') ? main : page;
+}
+
+/**
  * Resolve role-verified, top-level assistant turns in document order.
  * Browser-context helper; callers that serialize another helper may pass this
  * function's source and reconstruct it inside page.evaluate.
