@@ -77,10 +77,11 @@ describe('composer interstitial classification (G13b)', () => {
     });
 
     it('falls back to the real detector when the injected seam is not a function', async () => {
-        // A truthy non-function must not be called. The real detector runs
-        // against this bare page fake and simply finds nothing.
+        // A truthy non-function must not be called; the REAL detector runs. On an
+        // unsupported host it finds nothing, which is what proves the fallback
+        // happened rather than the seam being invoked.
         await expect(classifyComposerInterstitial(
-            { url: () => 'https://grok.com/', title: async () => '', innerText: async () => '' },
+            { url: () => 'https://example.com/', title: async () => '', innerText: async () => '' },
             'grok',
             cause,
             { detect: /** @type {any} */ (true) },

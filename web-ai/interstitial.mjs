@@ -47,6 +47,42 @@ export const INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER = Object.freeze({
 });
 
 export const CLOUDFLARE_SHORT_BODY_LENGTH = 600;
+
+// Hosts whose empty hydrated shell is a recognized failure mode.
+// ChatGPT keeps its historical SINGLE-SNAPSHOT judgment so its behavior is
+// unchanged; Grok and Gemini were added in round 5 behind a hydration grace,
+// because we have not characterized their loading behavior and turning a slow
+// load into a hard error would be worse than the imprecise hint it replaces.
+const EMPTY_SHELL_HOSTS_IMMEDIATE = new Set(['chatgpt.com', 'chat.openai.com']);
+const EMPTY_SHELL_HOSTS_GRACED = new Set(['grok.com', 'gemini.google.com']);
+
+/**
+ * Classify a URL's host for empty-shell purposes. Parsed, never pattern-matched:
+ * a bare regex would accept `notgrok.com` and any URL merely CONTAINING
+ * `x.com/i/grok` in a query string.
+ *
+ * @param {string} url
+ * @returns {'immediate'|'graced'|'none'}
+ */
+export function emptyShellHostKind(url) {
+    let parsed;
+    try {
+        parsed = new URL(String(url));
+    } catch {
+        return 'none';
+    }
+    // Provider pages are HTTP(S) only; an ftp:// URL naming the same host is not
+    // one of them.
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return 'none';
+    // A single terminal dot is a DNS-equivalent FQDN form ("grok.com." === "grok.com").
+    const host = parsed.hostname.replace(/\.$/, '').replace(/^www\./, '');
+    if (EMPTY_SHELL_HOSTS_IMMEDIATE.has(host)) return 'immediate';
+    if (EMPTY_SHELL_HOSTS_GRACED.has(host)) return 'graced';
+    // Grok on X lives at a specific path, not anywhere on the host. The bound
+    // matters: `/i/groking` is a different page.
+    if (host === 'x.com' && (parsed.pathname === '/i/grok' || parsed.pathname.startsWith('/i/grok/'))) return 'graced';
+    return 'none';
+}
 const CLOUDFLARE_HYDRATION_GRACE_MS = 12_000;
 const CLOUDFLARE_REPROBE_INTERVAL_MS = 500;
 const PROBE_TIMEOUT_MS = 250;
@@ -87,7 +123,7 @@ export function classifyInterstitial({ url = '', bodyText = '', hasComposer = fa
         const matched = LOGIN_PATTERNS.find((pattern) => lower.includes(pattern)) || 'login';
         return { kind: 'login-required', evidence: matched, url, retryHint: 'login' };
     }
-    if (/chatgpt\.com|chat\.openai\.com/.test(url) && !hasComposer && !hasTurns && bodyText.length < 500) {
+    if (!hasComposer && !hasTurns && bodyText.length < 500 && emptyShellHostKind(url) !== 'none') {
         return { kind: 'empty-shell', evidence: 'no composer and no turns', url, retryHint: 'wait-and-retry' };
     }
     return { kind: 'none', evidence: '', url, retryHint: 'none' };
@@ -115,7 +151,16 @@ export async function detectInterstitial(page, {
         const verdict = classifyCloudflareVerdict(signals);
         if (verdict.kind === 'strong') return cloudflareResult(url, verdict.evidence);
         if (verdict.kind === 'shell-vetoed') return classifyInterstitial(signals);
-        if (verdict.kind === 'none') return classifyInterstitial(signals);
+        if (verdict.kind === 'none') {
+            const result = classifyInterstitial(signals);
+            // Only the graced providers re-probe. ChatGPT returns immediately, so
+            // its behavior is byte-identical. `graced` never enters the verdict:
+            // the loop knows about the grace, the public result does not.
+            const graced = result.kind === 'empty-shell' && emptyShellHostKind(url) === 'graced';
+            if (!graced || scheduler.now() >= deadline) return result;
+            await scheduler.sleep(Math.min(boundedIntervalMs, Math.max(MIN_REPROBE_INTERVAL_MS, deadline - scheduler.now())));
+            continue;
+        }
         if (scheduler.now() >= deadline) return cloudflareResult(url, verdict.evidence);
         await scheduler.sleep(Math.min(boundedIntervalMs, Math.max(MIN_REPROBE_INTERVAL_MS, deadline - scheduler.now())));
     }

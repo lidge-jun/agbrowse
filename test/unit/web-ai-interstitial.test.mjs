@@ -4,6 +4,7 @@ import {
     classifyInterstitial,
     CLOUDFLARE_SHORT_BODY_LENGTH,
     detectInterstitial,
+    emptyShellHostKind,
     INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER,
     isPageDeathError,
 } from '../../web-ai/interstitial.mjs';
@@ -173,3 +174,182 @@ function snapshotPage(snapshots, now = () => Date.now()) {
         },
     };
 }
+
+describe('provider-aware empty shell (G13c)', () => {
+    /**
+     * A page whose shell stays empty until `hydrateAfterTitleReads` title reads
+     * have happened. `title()` is called exactly once per gather cycle, which
+     * makes it the reliable cycle counter — `now()` is called many times per
+     * cycle by the bounded-probe races and cannot be used for that.
+     */
+    function makePage(url, { hydrateAfterTitleReads = Infinity } = {}) {
+        const state = { cycles: 0, sleeps: 0 };
+        return {
+            state,
+            page: {
+                url: () => url,
+                title: async () => { state.cycles += 1; return ''; },
+                innerText: async () => '',
+                locator: (selector) => ({
+                    count: async () => (state.cycles > hydrateAfterTitleReads
+                        && !String(selector).includes('challenge') ? 1 : 0),
+                }),
+            },
+        };
+    }
+
+    /**
+     * Scheduler following this file's existing convention: a probe-timeout sleep
+     * (>= PROBE_TIMEOUT_MS) never resolves, so the real probe value wins the race;
+     * only the grace re-probe sleeps advance the clock.
+     */
+    function makeScheduler(state) {
+        let now = 0;
+        return {
+            scheduler: {
+                now: () => now,
+                sleep: (ms) => {
+                    if (ms >= 250) return new Promise(() => {});
+                    state.sleeps += 1;
+                    now += Math.max(ms, 1);
+                    return Promise.resolve();
+                },
+            },
+            get now() { return now; },
+        };
+    }
+
+    /** Same convention, for the one-off cases below. */
+    function raceSafeScheduler() {
+        let now = 0;
+        return {
+            now: () => now,
+            sleep: (ms) => {
+                if (ms >= 250) return new Promise(() => {});
+                now += Math.max(ms, 1);
+                return Promise.resolve();
+            },
+        };
+    }
+
+    it.each([
+        ['immediate', 'https://chatgpt.com/'],
+        ['immediate', 'https://chat.openai.com/'],
+        ['graced', 'https://grok.com/'],
+        ['graced', 'https://www.grok.com/'],
+        ['graced', 'https://gemini.google.com/app'],
+        ['graced', 'https://x.com/i/grok'],
+        ['none', 'https://notgrok.com/'],
+        ['none', 'https://x.com/home'],
+        ['none', 'https://evil.example/?u=https://x.com/i/grok'],
+        ['none', 'not a url at all'],
+        // Trailing-dot FQDNs are DNS-equivalent to their supported hosts.
+        ['graced', 'https://grok.com./'],
+        ['graced', 'https://www.grok.com./'],
+        ['graced', 'https://gemini.google.com./app'],
+        ['immediate', 'https://chatgpt.com./'],
+        // Path bound: /i/groking is a different page.
+        ['graced', 'https://x.com/i/grok/share'],
+        ['none', 'https://x.com/i/groking'],
+        // Provider pages are HTTP(S) only.
+        ['none', 'ftp://grok.com/'],
+    ])('classifies %s host for %s', (kind, url) => {
+        expect(emptyShellHostKind(url)).toBe(kind);
+    });
+
+    it('reports an empty shell for every supported host and none elsewhere', () => {
+        const empty = { hasComposer: false, hasTurns: false, bodyText: '' };
+        expect(classifyInterstitial({ ...empty, url: 'https://chatgpt.com/' }).kind).toBe('empty-shell');
+        expect(classifyInterstitial({ ...empty, url: 'https://grok.com/' }).kind).toBe('empty-shell');
+        expect(classifyInterstitial({ ...empty, url: 'https://gemini.google.com/app' }).kind).toBe('empty-shell');
+        expect(classifyInterstitial({ ...empty, url: 'https://notgrok.com/' }).kind).toBe('none');
+    });
+
+    it('never carries a graced flag into the public verdict', () => {
+        const verdict = classifyInterstitial({
+            url: 'https://grok.com/', hasComposer: false, hasTurns: false, bodyText: '',
+        });
+        expect('graced' in verdict).toBe(false);
+    });
+
+    it('decides ChatGPT on a SINGLE gather cycle', async () => {
+        // The byte-identical guard: ChatGPT must not enter the re-probe loop.
+        const harness = makePage('https://chatgpt.com/');
+        const clock = makeScheduler(harness.state);
+        const result = await detectInterstitial(harness.page, {
+            shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.chatgpt,
+            graceMs: 5_000,
+            // Below the never-resolving probe-timeout threshold, so a regression
+            // here fails on the cycle assertion instead of hanging the test.
+            intervalMs: 10,
+            scheduler: clock.scheduler,
+        });
+        expect(result.kind).toBe('empty-shell');
+        expect(harness.state.cycles).toBe(1);
+    });
+
+    it.each([
+        ['grok', 'https://grok.com/'],
+        ['gemini', 'https://gemini.google.com/app'],
+    ])('re-probes a %s empty shell until the grace expires', async (provider, url) => {
+        const harness = makePage(url);
+        const clock = makeScheduler(harness.state);
+        const result = await detectInterstitial(harness.page, {
+            shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER[provider],
+            // The bounded probe races consume the clock too, so the grace must
+            // exceed a few probe timeouts for the loop to get a second look.
+            graceMs: 5_000,
+            intervalMs: 10,
+            scheduler: clock.scheduler,
+        });
+        expect(result.kind).toBe('empty-shell');
+        // It re-probed rather than deciding on the first look.
+        expect(harness.state.cycles).toBeGreaterThan(1);
+        expect(harness.state.sleeps).toBeGreaterThan(0);
+    });
+
+    it('returns none when a graced provider hydrates during the grace', async () => {
+        // The deferral's stated fear, now a required test: a slow load must NOT
+        // become a hard error.
+        const harness = makePage('https://grok.com/', { hydrateAfterTitleReads: 2 });
+        const clock = makeScheduler(harness.state);
+        const result = await detectInterstitial(harness.page, {
+            shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.grok,
+            graceMs: 5_000,
+            intervalMs: 10,
+            scheduler: clock.scheduler,
+        });
+        expect(result.kind).toBe('none');
+        expect(harness.state.cycles).toBeGreaterThan(1);
+    });
+
+    it('lets a challenge win over an empty shell on a graced host', async () => {
+        const page = {
+            url: () => 'https://grok.com/',
+            title: async () => 'Just a moment...',
+            innerText: async () => 'Checking your browser',
+            locator: () => ({ count: async () => 0 }),
+        };
+        // The clock MUST advance: a frozen `now` never reaches the deadline and the
+        // re-probe loop would spin forever.
+        await expect(detectInterstitial(page, {
+            shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.grok,
+            graceMs: 10,
+            scheduler: raceSafeScheduler(),
+        })).resolves.toMatchObject({ kind: 'cloudflare-challenge' });
+    });
+
+    it('lets a login wall win over an empty shell on a graced host', async () => {
+        const page = {
+            url: () => 'https://gemini.google.com/app',
+            title: async () => '',
+            innerText: async () => 'Sign in to continue',
+            locator: () => ({ count: async () => 0 }),
+        };
+        await expect(detectInterstitial(page, {
+            shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.gemini,
+            graceMs: 10,
+            scheduler: raceSafeScheduler(),
+        })).resolves.toMatchObject({ kind: 'login-required' });
+    });
+});
