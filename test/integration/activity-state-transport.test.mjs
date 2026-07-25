@@ -8,6 +8,7 @@ import {
     resolveTopLevelAssistantTurns,
 } from '../../web-ai/chatgpt-response-dom.mjs';
 import { chromiumLaunchOptions } from './playwright-launch.mjs';
+import { __localeConsumersForTest as localeConsumers } from '../../web-ai/chatgpt-model.mjs';
 
 // `page.evaluate` serializes a function BODY, not its module bindings. The
 // completed-reasoning grammar and its unit alternation are declared inside
@@ -114,5 +115,52 @@ describe('snapshot source acquisition browser transport (G11)', () => {
         expect(result).toMatchObject({ ok: true });
         expect(result.wrapperless).toHaveLength(0);
         await page.close();
+    });
+});
+
+// `matchesModelText` is serialized into the page, so its locale patterns must
+// travel as DATA. A module-scoped constant would be `undefined` inside the page
+// and every zh label would silently stop matching.
+describe('locale pattern browser transport (G25)', () => {
+    let browser;
+
+    beforeAll(async () => {
+        browser = await chromium.launch(chromiumLaunchOptions());
+    });
+
+    afterAll(async () => {
+        await browser?.close();
+    });
+
+    /** A zh model row with an effort trigger aligned to its vertical centre. */
+    const zhMenu = (rowLabel) => `
+        <div role="menuitemradio" data-testid="model-switcher-gpt-5-5-thinking"
+             style="position:absolute;top:100px;left:0;width:300px;height:40px">${rowLabel}</div>
+        <button data-testid="composer-intelligence-pro-thinking-effort-trigger"
+                style="position:absolute;top:100px;left:320px;width:40px;height:40px">E</button>
+    `;
+
+    it('finds the effort trigger beside a zh model row through the PRODUCTION path', async () => {
+        // Drives findEffortTriggerBoxNearModelRow itself, so deleting
+        // `localePatterns` from its evaluate payload fails this test.
+        const page = await browser.newPage();
+        await page.setContent(zhMenu('极高'));
+        const box = await localeConsumers.effortTriggerBox(page, 'thinking');
+        expect(box).toMatchObject({ width: 40, height: 40 });
+        await page.close();
+    });
+
+    it('still finds it for an en row, and not for an unrelated one', async () => {
+        // `Thinking` is the en row label the pattern matches (effort words like
+        // "Extra High" identify the effort sub-menu, not the model row).
+        const page = await browser.newPage();
+        await page.setContent(zhMenu('GPT-5.5 Thinking'));
+        await expect(localeConsumers.effortTriggerBox(page, 'thinking')).resolves.toMatchObject({ width: 40 });
+        await page.close();
+
+        const other = await browser.newPage();
+        await other.setContent(zhMenu('Unrelated row'));
+        await expect(localeConsumers.effortTriggerBox(other, 'thinking')).resolves.toBeNull();
+        await other.close();
     });
 });

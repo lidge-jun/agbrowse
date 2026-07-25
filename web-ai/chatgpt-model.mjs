@@ -44,7 +44,141 @@ const CHATGPT_COMPOSER_MODEL_PILL_SELECTORS = [
 ];
 
 const CHATGPT_MODEL_MENU_ITEM_SELECTOR = '[data-testid^="model-switcher-gpt-"]';
-const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = /^(?:ChatGPT|Instant(?:\s+5\.5)?|Medium|High|Extra High|Pro|Standard Pro|Extended Pro|GPT[-\s]?\d(?:\.\d+)?(?:\s+(?:Instant|Fast|Thinking|Pro)(?:\s+(?:Light|Standard|Extended|Heavy))?)?|즉시|중간|높음|매우 높음|Pro 확장|프로 확장)$/i;
+
+// ── Canonical locale labels ─────────────────────────────────────────────────
+// FOUR sets, not one: they serve different vocabularies and flattening them
+// loses or invents matches.
+//  · model rows      — menu rows per model choice (selection + verification)
+//  · effort rows     — the thinking sub-menu
+//  · observed pills  — pill text, NOT menu rows ("Standard Pro" ≠ "Pro Standard")
+//  · selection alias — accepted as user input, never matched as button text
+// Every consumer below derives from these; adding a locale must never mean
+// editing five call sites.
+/** @type {Readonly<Record<string, readonly string[]>>} */
+const CHATGPT_MODEL_ROW_LABELS = Object.freeze({
+    instant: Object.freeze(['Instant', '즉시', '即时']),
+    thinking: Object.freeze(['Thinking', '思考']),
+    pro: Object.freeze(['Pro', 'Pro Standard', 'Pro Extended', 'Pro 확장', '프로 확장', 'Pro 扩展']),
+});
+/** @type {Readonly<Record<string, readonly string[]>>} */
+const CHATGPT_EFFORT_LABELS = Object.freeze({
+    medium: Object.freeze(['Medium', '중간', '中等']),
+    high: Object.freeze(['High', '높음', '高']),
+    xhigh: Object.freeze(['Extra High', '매우 높음', '极高']),
+});
+/** @param {...string} keys @returns {string[]} */
+const modelRowLabels = (...keys) => keys.flatMap((key) => [...(CHATGPT_MODEL_ROW_LABELS[key] || [])]);
+/** @param {...string} keys @returns {string[]} */
+const effortLabels = (...keys) => keys.flatMap((key) => [...(CHATGPT_EFFORT_LABELS[key] || [])]);
+const THINKING_EFFORT_LABELS = effortLabels('medium', 'high', 'xhigh');
+
+// ── Consumer projections ────────────────────────────────────────────────────
+// Each consumer sees the slice of the canonical sets its OLD literal contained,
+// plus that slice's locale variants. Spreading the full row set into every
+// consumer would newly admit `Pro Standard`/`Pro Extended` as pill and
+// menu-open evidence, which the four-set separation exists to prevent.
+// Three consumers historically carried DIFFERENT exact-line vocabularies, and one
+// shared projection cannot preserve all three: adding English `Thinking` to the
+// pill/menu-open sets changed 446 verdicts in the audit differential. Each list
+// below is its old literal PLUS only the locale variants of those same terms.
+/** `modelChoiceFromText` — old: Instant/즉시, effort labels, Pro/Pro 확장/프로 확장. */
+const CHOICE_FROM_TEXT_LABELS = Object.freeze({
+    instant: Object.freeze(['Instant', '즉시', '即时']),
+    thinking: Object.freeze([...THINKING_EFFORT_LABELS, '思考']),
+    pro: Object.freeze(['Pro', 'Pro 확장', '프로 확장', 'Pro 扩展']),
+});
+/**
+ * `isModelPillText` exact lines — old literal was English-only:
+ * Instant / Medium / High / Extra High / Pro. Korean standalone pills were (and
+ * remain) recognized by the anchored button pattern instead; promoting them to
+ * exact LINES newly accepted multiline text such as "ChatGPT\n즉시", so only the
+ * zh additions join the English set here.
+ */
+const PILL_EXACT_LABELS = Object.freeze([
+    'Instant', 'Medium', 'High', 'Extra High', 'Pro',
+    '即时', '中等', '高', '极高', '思考', 'Pro 扩展',
+]);
+/** `isSimplifiedIntelligenceMenuOpen` — old: en set plus the ko effort words. */
+const MENU_OPEN_LABELS = Object.freeze([
+    'Instant', '즉시', '即时',
+    ...THINKING_EFFORT_LABELS,
+    '思考',
+    'Pro', 'Pro 扩展',
+]);
+/** @param {string} key @returns {string[]} */
+const choiceFromTextLabels = (key) =>
+    [...(/** @type {Record<string, readonly string[]>} */ (CHOICE_FROM_TEXT_LABELS)[key] || [])];
+
+/**
+ * Default label set required by `isSimplifiedIntelligenceMenuOpen`. Shared with
+ * the test adapter so a production-only change cannot pass while the adapter
+ * keeps returning the old list.
+ * @returns {string[]}
+ */
+function simplifiedMenuOpenLabels() {
+    return [...MENU_OPEN_LABELS];
+}
+
+/**
+ * Per-choice matcher sources for the browser-context `matchesModelText`.
+ * The SHAPE is preserved from the original literals: ASCII terms keep `\b`
+ * boundaries (so "Fastball" and "Prologue" still miss), while CJK terms use
+ * Han-script boundaries because `\b` is meaningless for them — that lets
+ * "GPT-5.5即时" match while "超高" and a bare "高" inside "极高" do not.
+ * Passed as an evaluate ARGUMENT, never closed over.
+ */
+export const CHATGPT_MODEL_TEXT_PATTERNS = Object.freeze({
+    instant: '\\b(Instant|Fast)\\b|즉시|(?<!\\p{Script=Han})即时(?!\\p{Script=Han})',
+    thinking: '\\b(Thinking|Think)\\b|중간|높음|매우 높음|(?<!\\p{Script=Han})(思考|中等|极高|高)(?!\\p{Script=Han})',
+    pro: '\\b(Pro|Heavy)\\b|Pro 확장|프로 확장|(?<!\\p{Script=Han})Pro 扩展(?!\\p{Script=Han})',
+});
+
+/**
+ * Read-only view of the locale-derived predicates, for equivalence testing.
+ * The underlying functions stay private; this exposes only their verdicts so a
+ * refactor of the canonical tables can be diffed against the old literals.
+ */
+export const __localeConsumersForTest = Object.freeze({
+    /** @param {string} text */
+    buttonText: (text) => CHATGPT_MODEL_TEXT_BUTTON_PATTERN.test(text),
+    /** @param {string} text @param {string} choice */
+    modelText: (text, choice) => {
+        const source = /** @type {Record<string, string>} */ (CHATGPT_MODEL_TEXT_PATTERNS)[choice];
+        return source ? new RegExp(source, 'iu').test(text) : false;
+    },
+    /** @param {string} text */
+    choiceFromText: (text) => modelChoiceFromText(text),
+    /** @param {string} text */
+    pillText: (text) => isModelPillText(text),
+    /** @param {any} choice @param {string} text */
+    legacyLabel: (choice, text) => legacyModelLabelPattern(choice).test(text),
+    // Delegates to the SAME helper production uses, so a production-only edit
+    // cannot pass while the adapter keeps returning the old list.
+    /** @returns {string[]} */
+    menuOpenLabels: () => simplifiedMenuOpenLabels(),
+    /**
+     * Drives the REAL production evaluate wrapper so a missing `localePatterns`
+     * payload key fails behaviourally, not just structurally.
+     * @param {any} page @param {any} model
+     */
+    effortTriggerBox: (page, model) => findEffortTriggerBoxNearModelRow(page, model),
+});
+
+export const CHATGPT_MODEL_TEXT_BUTTON_PATTERN = new RegExp(
+    `^(?:ChatGPT|Instant(?:\\s+5\\.5)?|GPT[-\\s]?\\d(?:\\.\\d+)?(?:\\s+(?:Instant|Fast|Thinking|Pro)(?:\\s+(?:Light|Standard|Extended|Heavy))?)?|`
+    // Button TEXT vocabulary, which is narrower than the menu-row vocabulary:
+    // `Pro Standard`/`Pro Extended` are menu rows and `Thinking` is a row label,
+    // none of which ever appear as standalone button text. Only the effort
+    // labels, the plain choice names, the observed pills and the locale variants
+    // belong here.
+    + [...new Set([
+        ...THINKING_EFFORT_LABELS,
+        'Instant', '즉시', '即时',
+        'Pro', 'Pro 확장', '프로 확장', 'Pro 扩展',
+        'Standard Pro', 'Extended Pro',
+    ])].map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+    + ')$', 'i');
+
 export const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Pro', 'Standard Pro', 'Extended Pro'];
 const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
     '[data-testid="composer-intelligence-pro-thinking-effort-trigger"]',
@@ -61,15 +195,15 @@ const CHATGPT_EFFORT_TRIGGER_SELECTORS = [
 export const CHATGPT_MODEL_OPTIONS = {
     instant: {
         testIds: ['model-switcher-gpt-5-5', 'model-switcher-gpt-5-3'],
-        labels: ['Instant', '즉시'],
+        labels: modelRowLabels('instant'),
     },
     thinking: {
         testIds: ['model-switcher-gpt-5-5-thinking', 'model-switcher-gpt-5-5-thinking-thinking-effort'],
-        labels: ['Medium', 'High', 'Extra High', 'Thinking', '중간', '높음', '매우 높음'],
+        labels: [...THINKING_EFFORT_LABELS, ...modelRowLabels('thinking')],
     },
     pro: {
         testIds: ['model-switcher-gpt-5-5-pro', 'model-switcher-gpt-5-5-pro-thinking-effort'],
-        labels: ['Pro', 'Heavy', 'Pro Standard', 'Pro Extended', 'Pro 확장', '프로 확장'],
+        labels: [...modelRowLabels('pro'), 'Heavy'],
     },
 };
 
@@ -91,13 +225,13 @@ export const CHATGPT_MODEL_EFFORT_OPTIONS = {
 
 /** @type {Readonly<Record<ModelChoice, { defaultLabels: readonly string[], efforts: Readonly<Record<string, readonly string[]>> }>>} */
 const CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS = {
-    instant: { defaultLabels: ['Instant', '즉시'], efforts: {} },
+    instant: { defaultLabels: modelRowLabels('instant'), efforts: {} },
     thinking: {
-        defaultLabels: ['Medium', '중간'],
+        defaultLabels: effortLabels('medium'),
         efforts: {
-            medium: ['Medium', '중간'],
-            high: ['High', '높음'],
-            xhigh: ['Extra High', '매우 높음'],
+            medium: effortLabels('medium'),
+            high: effortLabels('high'),
+            xhigh: effortLabels('xhigh'),
         },
     },
     pro: {
@@ -1095,7 +1229,7 @@ async function dismissEffortMenuAndReopenModel(page, usedFallbacks) {
  */
 async function findEffortTriggerBoxNearModelRow(page, model) {
     const labels = CHATGPT_MODEL_OPTIONS[/** @type {ModelChoice} */ (model)]?.labels || [];
-    return page.evaluate(({ expectedLabels, modelChoice, triggerSelectors }) => {
+    return page.evaluate(({ expectedLabels, modelChoice, triggerSelectors, localePatterns }) => {
         const rows = Array.from(document.querySelectorAll('[role="menuitemradio"][data-testid^="model-switcher-"], [role="menuitemradio"]'));
         const row = rows.find((candidate) => {
             const text = (/** @type {HTMLElement} */ (candidate).innerText || candidate.textContent || '').trim();
@@ -1121,12 +1255,20 @@ async function findEffortTriggerBoxNearModelRow(page, model) {
          * @param {string[]} labelsForChoice
          */
         function matchesModelText(text, choice, labelsForChoice) {
-            if (choice === 'instant') return /\b(Instant|Fast)\b|즉시/i.test(text);
-            if (choice === 'thinking') return /\b(Thinking|Think)\b|중간|높음|매우 높음/i.test(text);
-            if (choice === 'pro') return /\b(Pro|Heavy)\b|Pro 확장|프로 확장/i.test(text);
+            // `localePatterns` arrives through the evaluate options; this function
+            // is serialized, so it must not reference a module constant.
+            const source = localePatterns
+                ? /** @type {Record<string, string>} */ (localePatterns)[choice]
+                : undefined;
+            if (source) return new RegExp(source, 'iu').test(text);
             return labelsForChoice.some(label => new RegExp(`(^|\\s)${label}\\b`, 'i').test(text));
         }
-    }, { expectedLabels: labels, modelChoice: model, triggerSelectors: CHATGPT_EFFORT_TRIGGER_SELECTORS }).catch(() => null);
+    }, {
+        expectedLabels: labels,
+        modelChoice: model,
+        triggerSelectors: CHATGPT_EFFORT_TRIGGER_SELECTORS,
+        localePatterns: CHATGPT_MODEL_TEXT_PATTERNS,
+    }).catch(() => null);
 }
 
 /**
@@ -1374,10 +1516,10 @@ function effortLabelPattern(label) {
  * @returns {ModelChoice | null}
  */
 function modelChoiceFromText(text) {
-    if (menuTextHasAnyExactLine(text, ['Instant', '즉시'])) return 'instant';
+    if (menuTextHasAnyExactLine(text, choiceFromTextLabels('instant'))) return 'instant';
     if (isLegacyProModelLabel(text)) return null;
-    if (menuTextHasAnyExactLine(text, ['Medium', 'High', 'Extra High', '중간', '높음', '매우 높음'])) return 'thinking';
-    if (menuTextHasAnyExactLine(text, ['Pro', 'Pro 확장', '프로 확장'])) return 'pro';
+    if (menuTextHasAnyExactLine(text, choiceFromTextLabels('thinking'))) return 'thinking';
+    if (menuTextHasAnyExactLine(text, choiceFromTextLabels('pro'))) return 'pro';
     // Legacy combined labels remain a fallback after current exact rows.
     if (/\b(Thinking|Think)\b/i.test(text)) return 'thinking';
     if (/\b(Pro|Pro Standard|Pro Extended|Standard Pro|Extended Pro|Heavy)\b|Pro 확장|프로 확장/i.test(text)) return 'pro';
@@ -1415,7 +1557,7 @@ async function findOptionByExactLabels(page, labels) {
 async function isSimplifiedIntelligenceMenuOpen(page, model, effort) {
     const requiredLabels = effort && model
         ? simplifiedEffortLabels(model, effort)
-        : ['Instant', 'Medium', 'High', 'Extra High', 'Pro', '즉시', '중간', '높음', '매우 높음'];
+        : simplifiedMenuOpenLabels();
     if (requiredLabels.length === 0) return false;
     const menu = chatGptComposerMenuRoot(page);
     const visible = await menu.isVisible().catch(() => false);
@@ -1499,9 +1641,16 @@ function exactMenuLinePattern(labels) {
  * @returns {RegExp}
  */
 function legacyModelLabelPattern(choice) {
-    if (choice === 'instant') return /\b(Instant|Fast)\b|즉시/i;
-    if (choice === 'thinking') return /\b(Thinking|Think|Medium|High|Extra High)\b|중간|높음|매우 높음/i;
-    if (choice === 'pro') return /\b(Pro|Heavy|Pro Standard|Pro Extended)\b|Pro 확장|프로 확장/i;
+    // Combined-row fallback used when no testId is present. ASCII boundaries are
+    // preserved exactly; the zh variants ride the same Han-boundary rule as the
+    // per-choice matcher so `GPT-5.5思考` resolves like `GPT-5.5 Thinking`.
+    /** @param {string[]} labels @returns {string} */
+    const HAN = (labels) => `(?<!\\p{Script=Han})(${labels.join('|')})(?!\\p{Script=Han})`;
+    if (choice === 'instant') return new RegExp(`\\b(Instant|Fast)\\b|즉시|${HAN(['即时'])}`, 'iu');
+    if (choice === 'thinking') {
+        return new RegExp(`\\b(Thinking|Think|Medium|High|Extra High)\\b|중간|높음|매우 높음|${HAN(['思考', '中等', '极高', '高'])}`, 'iu');
+    }
+    if (choice === 'pro') return new RegExp(`\\b(Pro|Heavy|Pro Standard|Pro Extended)\\b|Pro 확장|프로 확장|${HAN(['Pro 扩展'])}`, 'iu');
     return /(?!)/;
 }
 
@@ -1536,7 +1685,7 @@ function isLegacyProModelLabel(text) {
 
 /** @param {string} text @returns {boolean} */
 function isModelPillText(text) {
-    return menuTextHasAnyExactLine(text, ['Instant', 'Medium', 'High', 'Extra High', 'Pro'])
+    return menuTextHasAnyExactLine(text, [...PILL_EXACT_LABELS])
         || CHATGPT_MODEL_TEXT_BUTTON_PATTERN.test(text)
         || CHATGPT_OBSERVED_PRO_PILL_LABELS.includes(text)
         || isStandaloneEffortLabel(text);
