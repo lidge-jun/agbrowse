@@ -574,3 +574,67 @@ export function readAssistantSnapshotSources({ assistantSelectors, resolverSourc
 | 25 | newer `[data-message-author-role="user"]` and older `[data-turn="user"]` | the DOCUMENT-last user wins; an answer preceding it is rejected (blocker-3 reproduction) |
 | 26 | **transport** — real `page.evaluate(readAssistantSnapshotSources, …)` | returns both lists, no `ReferenceError` (blocker-1 reproduction) |
 | 27 | empty-text markdown node | excluded |
+
+## 10. Node-side bridge (A-gate round 6, blocker 1) — completes §9
+
+§9 defined the browser function and the call sites but never the function that
+connects them, so production would have failed on an undefined
+`readAssistantSnapshotsSplit` while criterion 26 (which evaluates the browser helper
+directly) passed. Full diff:
+
+```diff
+@@ web-ai/chatgpt.mjs import block (~:56)
+ import {
+     CHATGPT_ASSISTANT_SELECTORS,
+     CHATGPT_STOP_SELECTORS,
++    readAssistantSnapshotSources,
+     readChatGptStreamingState,
+     readTopLevelAssistantTexts,
+     readTopLevelAssistantTextsFromLocators,
+     resolveTopLevelAssistantTurns,
+ } from './chatgpt-response-dom.mjs';
+```
+
+```js
+/**
+ * Read both snapshot sources in ONE page evaluation so they share a document-order
+ * coordinate space. Fails closed to empty lists — a probe failure must never look
+ * like "no answer yet AND no history".
+ *
+ * @param {any} page
+ * @returns {Promise<{ wrapped: ChatGptAssistantSnapshot[], wrapperless: ChatGptAssistantSnapshot[] }>}
+ */
+async function readAssistantSnapshotsSplit(page) {
+    const empty = { wrapped: [], wrapperless: [] };
+    try {
+        const result = await page.evaluate(readAssistantSnapshotSources, {
+            assistantSelectors: ASSISTANT_SELECTORS,
+            resolverSource: resolveTopLevelAssistantTurns.toString(),
+        });
+        if (!result || typeof result !== 'object') return empty;
+        return {
+            wrapped: Array.isArray(result.wrapped) ? result.wrapped : [],
+            wrapperless: Array.isArray(result.wrapperless) ? result.wrapperless : [],
+        };
+    } catch {
+        return empty;
+    }
+}
+```
+
+`userSelectors` and `markdownSelectors` are omitted so the browser body's defaults
+apply; they exist as options purely for tests.
+
+The existing `readAssistantSnapshots(page)` (`chatgpt.mjs:1357`) stays as the
+text-oriented reader used by `readAssistantMessages` and keeps its locator fallback;
+only the poll loop and `countAssistantMessages` move to the split reader, exactly as
+§6.2 specifies.
+
+### 10.1 Added criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 28 | **production path** — drive `readAssistantSnapshotsSplit(page)` (not the browser helper directly) on a wrapperless page | returns the wrapperless list; the poll loop completes |
+| 29 | `page.evaluate` rejects | `{ wrapped: [], wrapperless: [] }`, no throw |
+| 30 | evaluate returns a non-object / partial shape | both lists default to `[]` |
+| 31 | import presence | `chatgpt.mjs` imports `readAssistantSnapshotSources` (source assertion, so a missing import fails the suite rather than production) |
