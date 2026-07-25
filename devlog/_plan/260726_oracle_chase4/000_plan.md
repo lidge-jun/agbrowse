@@ -36,9 +36,9 @@ two rows turn out to be already closed, and one is narrower than recorded.
 
 | Row | Recorded gap (round 3) | Current tree | New disposition |
 |-----|------------------------|--------------|-----------------|
-| G7 | over-broad `includes('thought for')` at `chatgpt.mjs:939-958` | that code is GONE — `5e59a9f` replaced it with `readChatGptStreamingState`, which uses a **visible-text** anchored predicate at `chatgpt-response-dom.mjs:208`: `/^thought for \d+[a-z]*( seconds?| minutes?)?( edit)?$/i` | **Covered** — the anchored, visible-text-only grammar the row asked for already exists |
-| G12 | no anchored `Thought for <duration> [Edit]` predicate | same line: the `( edit)?` group is present | **Covered** by the same predicate |
-| G9 | over-broad summary exclusion + unscoped busy signals | the exclusion is now anchored (above); busy/shimmer signals were never adopted, so there is no global-busy false positive to fix | **Partially covered**; the残 residue is the grammar's own strictness — see §3.1 |
+| G7 | over-broad `includes('thought for')` at `chatgpt.mjs:939-958` | that code is gone, but its replacement at `chatgpt-response-dom.mjs:208` is far NARROWER than upstream — see §3.1 | **Open (code debt)** — WP2 |
+| G12 | no anchored `Thought for <duration> [Edit]` predicate | the `( edit)?` group exists but only inside the too-narrow pattern | **Open** — WP2, same grammar |
+| G9 | over-broad summary exclusion + unscoped busy signals | busy/shimmer were never adopted (no global-busy false positive to fix), but the anchored grammar is missing upstream's live-trace re-entry rule | **Open** — WP2 |
 | G8 | single boolean `isStreaming`, text-only sidecar vetoes as hard as a stop button | still true: `readChatGptStreamingState` returns `boolean` (`chatgpt-response-dom.mjs:60`) and the text-only sidecar branch at `:209-211` returns the same `true` as the stop-button branch at `:90-99` | **Open** — WP2 |
 | G11 | wrapperless completion correlation | still true: `resolveTopLevelAssistantTurns` only resolves configured role wrappers (`chatgpt-response-dom.mjs:87-118`) and returns `[]` for wrapperless markdown | **Open** — WP3 |
 | G28 | DR wrapper placeholder recognition | still true: `isIncompleteDeepResearchText` matches only first-line status markers and a 120-char floor (`chatgpt-deep-research-report.mjs:10-45`); a tool-call wrapper placeholder is neither | **Open** — WP4 |
@@ -48,32 +48,76 @@ two rows turn out to be already closed, and one is narrower than recorded.
 | G16 | Work→Chat normalization | still true by design; round 4 recorded it as a product decision | **Decide** — WP7 |
 | G10 | weak-evidence aging | superseded upstream by `67da293a` | **Permanently not ported** (unchanged) |
 
-### 3.1 G9 residue
+### 3.1 G7/G9/G12 — the triage error, corrected (A-gate round 1, blocker 1)
 
-The anchored predicate at `chatgpt-response-dom.mjs:208` only skips a panel whose
-ENTIRE visible text is the completed summary. Upstream `86d1fb2b` additionally
-keeps `Thought for 2s: Searching…` classified as LIVE — which our predicate also
-does, because that string does not match the anchored pattern and falls through to
-the `includes('thinking')` branch. So the behavior matches; what is missing is a
-test proving it. G9's residue is therefore **test debt, not code debt**, and it is
-folded into WP2's matrix rather than getting its own cycle.
+The first draft of this triage called G7 and G12 **Covered**. That was wrong, and it
+was the most damaging error possible in this unit: it would have marked real work as
+done and shipped a still-broken grammar. The reviewer measured the actual behavior of
+`chatgpt-response-dom.mjs:208`:
 
-## 4. Revised work-phase map
-
-Triage collapses the original 7 implementation phases into 5:
-
-```
-WP1 (this triage) ──┬── WP2  G8 + G9-residue   activity strata
-                    ├── WP3  G11              wrapperless correlation
-                    ├── WP4  G28              DR wrapper placeholders
-                    ├── WP5  G13c             provider empty-shell
-                    ├── WP6  G81b + G25       menu ownership + locale decision
-                    └── WP7  G16              normalization decision
-                                    └──────── WP8 close-out
+```text
+Reasoning Thought for 12s     completed=false  (streaming=true)   <- WRONG, hangs forever
+Thought for 2 minutes         completed=true
+Thought for a moment          completed=false  <- worded duration unhandled
+Thought for 1m 5s             completed=false  <- compound duration unhandled
+Thought for 2s: Searching...  completed=false  and NOT live either <- worst case
 ```
 
-G7 and G12 need no cycle: they are Covered, and WP2's test matrix pins the
-behavior so a future edit cannot silently un-cover them.
+Upstream `86d1fb2b:src/browser/actions/thinkingStatus.ts:537-538` is much wider:
+
+```js
+/^(?:(?:reasoning|pro thinking)\s*)?thought for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)(?:\s+\d+(?:\.\d+)?\s*(?:...))*|(?:a|an) [a-z]+(?: [a-z]+){0,2})$/
+```
+
+— optional `reasoning`/`pro thinking` heading prefix, decimals, unit aliases,
+compound durations, and worded durations (`a moment`, `a few seconds`).
+
+And crucially `:618` adds the re-entry rule our port dropped entirely:
+
+```js
+if (isCompletedSummary(visible)) return false;
+if (visible.includes('thought for ')) return true;   // a GROWING trace is LIVE
+```
+
+That second line is what makes `Thought for 2s: Searching…` read as live. Our port
+has no such rule: the string fails the anchored test, then fails the
+`includes('thinking')` test, and the panel is reported as no activity at all.
+
+The existing test at `test/unit/web-ai-chatgpt-response-fragments.test.mjs:173` passes
+only because its fixture happens to contain the word `Reasoning` elsewhere — a
+false-confidence test, which is exactly why the triage was fooled.
+
+**G7, G9 and G12 are therefore Open code debt**, folded into WP2 alongside G8.
+
+## 4. Revised work-phase map (corrected, A-gate round 1 blocker 9)
+
+Six implementation phases, ordered by dependency rather than size:
+
+```
+WP1 (this triage)
+  │
+  ├─ WP2  G7+G9+G12+G8   activity grammar and strata      (owns chatgpt-response-dom activity)
+  │     └─ WP3  G11      wrapperless correlation           (needs WP2's transport test harness
+  │                                                         and touches the same module)
+  ├─ WP4  G28            DR wrapper placeholders           (independent module)
+  ├─ WP5  G13c           provider empty-shell              (independent module)
+  ├─ WP6  G81b           menu ownership                    (independent module)
+  ├─ WP7  G25            zh locale                         (independent module)
+  └─ WP8  G16            Work→Chat opt-in normalization    (independent module)
+        └────────────── WP9 close-out
+```
+
+**WP2 → WP3 is a real dependency**, not a preference: WP3's tests reuse the
+transport harness WP2 creates, and both edit the activity/completion path of
+`chatgpt-response-dom.mjs`. Running them in one B would violate the
+one-work-phase-one-cycle invariant; running WP3 first would mean writing its tests
+against a harness that does not exist.
+
+G81b and G25 were originally bundled as "two small rows". Size is not a dependency,
+so they are split into WP6 and WP7: they touch different modules
+(`chatgpt-menu-resolver.mjs` vs `chatgpt-model.mjs`) and share nothing.
+
+The goalplan `workPhases[]` is amended to match this map.
 
 ## 5. Constraints
 

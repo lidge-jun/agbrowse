@@ -103,3 +103,102 @@ Tests: extend `test/unit/web-ai-deep-research-report-selection.test.mjs`.
 IN: `chatgpt-deep-research-report.mjs`, its test file.
 OUT: `chatgpt-deep-research.mjs` polling/timeout logic, `DR_MIN_REPORT_CHARS`,
 the existing status markers, and the resume path's own selection rules.
+
+## 5. Audit amendments (A-gate round 1, blocker 4) — AUTHORITATIVE
+
+The reviewer built three false positives against §2.1's grammar, all legitimate
+reports classified as wrappers:
+
+```text
+{"name":"2026 Market Report","summary":"..."}              -> wrapper (WRONG)
+```json {"revenue":10} ``` followed by real analysis        -> wrapper (WRONG)
+{"title":"API Research","sections":[{"arguments":"..."}]}   -> wrapper (WRONG)
+```
+
+`"name"` and `"arguments"` are ordinary words; a report may legitimately open with a
+data block. Key-presence is not envelope evidence.
+
+### 5.1 Parse, then require envelope SHAPE
+
+```js
+// A tool-call envelope is a JSON object whose TOP LEVEL is essentially the call
+// itself: a callable identifier plus its arguments, and little else. Key presence
+// alone is not evidence — a report may legitimately contain any of these words.
+const ENVELOPE_NAME_KEYS = ['name', 'tool_name', 'function', 'recipient'];
+const ENVELOPE_ARG_KEYS = ['arguments', 'parameters', 'args', 'input'];
+const ENVELOPE_ID_KEYS = ['tool_call_id', 'call_id', 'function_call'];
+
+function isToolEnvelopeObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (!keys.length || keys.length > 6) return false;          // envelopes are small
+    const has = (list) => keys.some((k) => list.includes(k));
+    if (has(ENVELOPE_ID_KEYS)) return true;                      // unambiguous
+    // name + arguments together, and nothing that looks like report prose
+    if (has(ENVELOPE_NAME_KEYS) && has(ENVELOPE_ARG_KEYS)) {
+        const name = value.name ?? value.tool_name ?? value.function ?? value.recipient;
+        // A tool identifier is a token, not a title: no spaces, dotted or snake.
+        return typeof name === 'string' && /^[\w.:-]+$/.test(name);
+    }
+    return false;
+}
+```
+
+`{"name":"2026 Market Report", "summary":...}` now fails twice: no argument key, and
+the name contains spaces. `{"title":"API Research","sections":[...]}` fails: no name
+key at top level, and `arguments` is nested, not top-level.
+
+### 5.2 Whole-payload requirement for fences and channels
+
+```js
+export function looksLikeDeepResearchWrapper(text) {
+    const norm = normalizeDeepResearchReportText(text);
+    if (!norm) return false;
+
+    // 1. The ENTIRE payload is one JSON value that is a tool envelope.
+    if (/^[[{]/.test(norm)) {
+        try {
+            const parsed = JSON.parse(norm);
+            if (isToolEnvelopeObject(parsed)) return true;
+            if (Array.isArray(parsed) && parsed.length && parsed.every(isToolEnvelopeObject)) return true;
+        } catch { /* not whole-payload JSON — fall through, a report may open with a snippet */ }
+    }
+
+    // 2. The ENTIRE payload is one fenced block whose body is a tool envelope.
+    const fence = /^```(?:json|tool|tool_call)?\s*\n([\s\S]*?)\n```$/.exec(norm);
+    if (fence) {
+        try {
+            const parsed = JSON.parse(fence[1].trim());
+            if (isToolEnvelopeObject(parsed)) return true;
+        } catch { /* a fenced non-envelope is just a code block */ }
+    }
+
+    // 3. Channel/recipient marker as the whole first line, nothing else before it.
+    if (/^(?:<\|)?(?:tool|assistant|analysis|commentary)(?:\|>)?\s*to=\S+/i.test(norm)) return true;
+    // 4. XML-ish tool wrapper opening the payload AND closing it.
+    if (/^<(tool_call|function_call|invoke)\b[\s\S]*<\/\1>\s*$/i.test(norm)) return true;
+
+    return false;
+}
+```
+
+The `$` anchors are what fix the fence case: a fenced snippet followed by analysis no
+longer matches, because the payload does not END at the fence.
+
+### 5.3 Added accept criteria (supersede §3 rows 1-5)
+
+| # | Input | Expected |
+|---|-------|----------|
+| 1 | `{"name":"web.search","arguments":{...}}` (whole payload) | wrapper |
+| 2 | `{"tool_call_id":"call_1", ...}` | wrapper |
+| 3 | `[{"name":"web.run","arguments":{}}, {...}]` | wrapper |
+| 4 | fenced json envelope as the ENTIRE payload | wrapper |
+| 5 | `assistant to=web.run` first line | wrapper |
+| 6 | `<tool_call>...</tool_call>` whole payload | wrapper |
+| 7 | **`{"name":"2026 Market Report","summary":"..."}`** | NOT a wrapper (blocker-4 case 1) |
+| 8 | **fenced json snippet followed by real analysis** | NOT a wrapper (case 2) |
+| 9 | **`{"title":"API Research","sections":[{"arguments":"..."}]}`** | NOT a wrapper (case 3) |
+| 10 | a report whose body quotes `tool_call_id` mid-paragraph | NOT a wrapper |
+| 11 | malformed JSON opening the payload | NOT a wrapper (parse failure falls through) |
+| 12 | a 5000-key JSON object with `name` + `arguments` | NOT a wrapper (key-count ceiling) |
+| 13-16 | the original selection cases (wrapper target + complete frame, etc.) | as in §3 rows 8-11 |

@@ -154,3 +154,107 @@ case joins the new `test/integration/activity-state-transport.test.mjs`.
 IN: the new helper, the `isResponseFinished` fallback, its Node reader, tests.
 OUT: `resolveTopLevelAssistantTurns` itself (the wrapper contract is unchanged),
 the text-extraction readers, and the copy-markdown fallback path.
+
+## 5. Audit amendments (A-gate round 1, blocker 3) — AUTHORITATIVE
+
+### 5.1 The fallback as designed was a dead path
+
+Verified: on a wrapperless DOM the resolver returns `[]`, so
+`readTopLevelAssistantSnapshots` (`chatgpt-response-dom.mjs:229-235`) returns `[]`,
+so `latestSnapshot` is `null` at `chatgpt.mjs:643`, so `isResponseFinished` is never
+called at all (`:671` requires `latestSnapshot`). Putting the fallback inside
+`isResponseFinished` guarantees it never runs in exactly the case it was written for.
+
+**Corrected insertion point: snapshot acquisition.** The wrapperless candidate must
+become a snapshot, so the SAME candidate carries text stability and terminal
+evidence through the existing loop rather than being bolted onto the tail.
+
+### 5.2 Revised change map
+
+**(a)** `readWrapperlessAssistantBlocks` keeps its shape but returns snapshot-shaped
+records and is realm-safe (blocker 3's second half — `Node` is undefined as a global
+under jsdom):
+
+```diff
+-            const following = Boolean(latestUser)
+-                && (latestUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+-            blocks.push({ text: ..., following });
++            // Realm-safe: `Node` is not a global in jsdom's default context, and a
++            // cross-realm document would use a different constructor anyway.
++            const view = node.ownerDocument?.defaultView;
++            const FOLLOWING = view?.Node?.DOCUMENT_POSITION_FOLLOWING ?? 4;
++            const following = Boolean(latestUser)
++                && (latestUser.compareDocumentPosition(node) & FOLLOWING) !== 0;
++            if (!following) continue;   // fail closed: only new content qualifies
++            blocks.push({
++                text: (node.innerText || node.textContent || '').trim(),
++                messageId: null,
++                turnId: null,
++                turnIndex: -1,        // caller assigns; see (b)
++            });
+```
+
+**(b)** `readAssistantSnapshots` (`chatgpt.mjs:1358`) gains the fallback, mirroring
+the shape it already uses for text:
+
+```diff
+ async function readAssistantSnapshots(page) {
+     const snapshots = await page.evaluate(readTopLevelAssistantSnapshots, {...});
+-    return snapshots;
++    if (Array.isArray(snapshots) && snapshots.length) return snapshots;
++    // No recognized turn wrapper anywhere: fall back to wrapperless markdown that
++    // DOM-follows the latest user message. Indices continue from 0 so the
++    // existing baseline.assistantCount slicing keeps working.
++    const blocks = await page.evaluate(readWrapperlessAssistantBlocks, {}).catch(() => []);
++    return Array.isArray(blocks)
++        ? blocks.map((block, turnIndex) => ({ ...block, turnIndex }))
++        : [];
+ }
+```
+
+**(c)** `isResponseFinished` needs the matching relaxation, because a wrapperless
+snapshot has no identity and no real turn:
+
+```diff
+                 const hasIdentity = Boolean(sample.messageId || sample.turnId);
+                 ...
+-            return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
++            return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+@@ after the evaluate
++        if (result && typeof result === 'object' && result.turnIndex < 0 && !sample.messageId && !sample.turnId) {
++            // Wrapperless candidate: there is no turn to carry terminal actions, so
++            // completion rests on text stability alone. The DOM-following filter in
++            // the reader is what makes that safe — an old answer or user echo never
++            // becomes a candidate in the first place.
++            return { finished: true, messageId: null, turnId: null, turnIndex: minTurnIndex };
++        }
+```
+
+This is the one place the design accepts weaker evidence, and it is bounded: it only
+applies when the page has NO wrappers at all, and the candidate already proved it
+follows the latest user node.
+
+### 5.3 Revised accept criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | wrapperless markdown following the latest user node | becomes a snapshot; poll loop stabilizes and completes |
+| 2 | wrapperless markdown BEFORE the latest user node | not a snapshot — `[]`, loop keeps polling |
+| 3 | user's own echoed markdown | excluded by the wrapper check |
+| 4 | markdown inside a recognized assistant wrapper | normal path; fallback never consulted |
+| 5 | no user node | `[]` — fail closed |
+| 6 | hidden markdown node | excluded |
+| 7 | two following blocks | both returned, indices 0..n, `latestSnapshot` is the last |
+| 8 | wrappers present | `readAssistantSnapshots` returns them; fallback not called (assert call count) |
+| 9 | `page.evaluate` rejects in the fallback | `[]`, no throw |
+| 10 | `isResponseFinished` on a wrapperless sample | `finished: true` at `minTurnIndex` |
+| 11 | `isResponseFinished` on a wrapped sample with no match | unchanged `{finished:false, turnIndex:-1}` |
+| 12 | **jsdom realm** — helper called directly with no global `Node` | works via `ownerDocument.defaultView` |
+| 13 | **transport** real Chromium | blocks returned, no `ReferenceError` |
+
+### 5.4 Corrected scope
+
+IN: `readWrapperlessAssistantBlocks`, the `readAssistantSnapshots` fallback, the
+`isResponseFinished` wrapperless branch, tests.
+OUT: `resolveTopLevelAssistantTurns`, the copy-markdown fallback, and the text-only
+reader at `chatgpt.mjs:1358-1361` (which already has its own locator fallback).

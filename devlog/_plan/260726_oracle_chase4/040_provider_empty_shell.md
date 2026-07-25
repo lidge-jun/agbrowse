@@ -116,3 +116,79 @@ IN: `interstitial.mjs` host set + grace loop, its test file, the two fixtures.
 OUT: `CLOUDFLARE_SHORT_BODY_LENGTH`, the challenge/login grammars, the provider
 shell-selector tables, and `composer-interstitial.mjs` (its wiring is unchanged —
 it simply starts receiving a verdict it previously never saw).
+
+## 6. Audit amendments (A-gate round 1, blocker 5) — AUTHORITATIVE
+
+§3.2 put ALL empty-shell verdicts into the grace loop, which silently changes
+ChatGPT: today a ChatGPT empty shell is decided on the first snapshot
+(`interstitial.mjs:113` returns immediately when the Cloudflare verdict is `none`),
+and under the proposal a ChatGPT shell that hydrates during the 12s window would flip
+from `empty-shell` to `none`. That directly contradicts this phase's own
+"ChatGPT byte-identical" criterion.
+
+**Corrected: the grace applies to the NEW hosts only.**
+
+```diff
+-const EMPTY_SHELL_HOSTS = /chatgpt\.com|chat\.openai\.com|grok\.com|x\.com\/i\/grok|gemini\.google\.com/;
++// ChatGPT keeps its historical single-snapshot judgment (byte-identical).
++const EMPTY_SHELL_HOSTS_IMMEDIATE = /chatgpt\.com|chat\.openai\.com/;
++// Providers added in round 5 are judged only after a hydration grace, because we
++// have not characterized their loading behavior and a slow load must not become a
++// hard error.
++const EMPTY_SHELL_HOSTS_GRACED = /grok\.com|x\.com\/i\/grok|gemini\.google\.com/;
+```
+
+`classifyInterstitial` reports which kind it found:
+
+```diff
+-    if (EMPTY_SHELL_HOSTS.test(url) && !hasComposer && !hasTurns && bodyText.length < 500) {
+-        return { kind: 'empty-shell', ... };
+-    }
++    if (!hasComposer && !hasTurns && bodyText.length < 500) {
++        if (EMPTY_SHELL_HOSTS_IMMEDIATE.test(url)) {
++            return { kind: 'empty-shell', evidence: 'no composer and no turns', url, retryHint: 'wait-and-retry' };
++        }
++        if (EMPTY_SHELL_HOSTS_GRACED.test(url)) {
++            return { kind: 'empty-shell', evidence: 'no composer and no turns', url, retryHint: 'wait-and-retry', graced: true };
++        }
++    }
+```
+
+and `detectInterstitial` re-probes only the graced flavor:
+
+```diff
+         if (verdict.kind === 'none') {
+-            return classifyInterstitial(signals);
++            const result = classifyInterstitial(signals);
++            // Only the graced providers re-probe; ChatGPT returns immediately, so
++            // its behavior is unchanged in every case.
++            if (result.kind !== 'empty-shell' || !result.graced) return result;
++            if (scheduler.now() >= deadline) return { ...result, graced: undefined };
++            await scheduler.sleep(Math.min(boundedIntervalMs, Math.max(MIN_REPROBE_INTERVAL_MS, deadline - scheduler.now())));
++            continue;
+         }
+```
+
+`graced` is stripped from the returned verdict so the public shape is unchanged; it
+is a loop-internal flag only. The `deadline` is the one already computed at `:110`
+from `graceMs`, so no new timing constant appears and the loop is bounded by the
+same monotonic scheduler the tests already inject.
+
+### 6.1 Corrected accept criteria (supersede §4 rows 1-6)
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | grok.com, empty past the grace | `empty-shell`, no `graced` field on the returned object |
+| 2 | gemini, empty past the grace | `empty-shell` |
+| 3 | grok, composer appears mid-grace | `none` — re-probe saw it |
+| 4 | gemini, turns appear mid-grace | `none` |
+| 5 | **chatgpt.com empty shell** | `empty-shell` on the FIRST probe; scheduler.sleep called ZERO times (byte-identical, asserted by call count) |
+| 6 | chatgpt.com that would hydrate later | still `empty-shell` immediately — unchanged, and the assertion proves we did not silently improve it |
+| 7 | unrelated host, empty | `none` |
+| 8 | grok challenge copy present | `cloudflare-challenge` — challenge still wins |
+| 9 | grok login copy present | `login-required` |
+| 10 | grace expiry | exactly one sleep per interval, loop terminates at the deadline |
+| 11 | **behavioural** `grokSendWebAi` vs a persistently empty shell | throws `provider.interstitial`, `evidence.kind === 'empty-shell'` |
+
+Row 5's zero-sleep assertion is the guard that keeps this phase honest about the
+byte-identical claim.

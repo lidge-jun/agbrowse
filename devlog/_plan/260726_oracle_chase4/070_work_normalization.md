@@ -1,4 +1,4 @@
-# WP7 — G16: Work→Chat normalization
+# WP8 — G16: Work→Chat normalization
 
 Row: **G16** (upstream `80ebcf86`). Deferred in round 3 on a rationale that round 4
 proved wrong, then re-deferred in round 4 as a product decision. This round it gets
@@ -114,3 +114,91 @@ parsing, docs the gates require (README/SKILL/CAPABILITY_TRUTH_TABLE if they
 enumerate flags), the work-picker test file.
 OUT: making normalization a default, navigating away from a conversation,
 Work→Chat for the Work send path, and any change to `ensureWorkSurface`.
+
+## 6. Audit amendments (A-gate round 1, blocker 8) — AUTHORITATIVE
+
+§3.2's snippet was not implementable: there is no `warnings` array in that scope,
+the error helper is not imported where the plan puts it, and the insertion point was
+unspecified relative to the model guard. Corrected against the real code:
+
+### 6.1 Import (the helper lives in `chatgpt-model.mjs`)
+
+`workSurfaceUnsupportedError` is defined at `chatgpt-model.mjs:521` and re-exported
+by `product-surfaces.mjs:187`. `chatgpt-work-picker.mjs` currently imports neither.
+`ensureChatSurface` therefore imports it from `product-surfaces.mjs`, matching the
+module's existing import block (`chatgpt-work-picker.mjs:11-14`):
+
+```diff
+ import {
+     detectChatGptComposerSurface,
+     detectChatGptWorkAvailability,
++    workSurfaceUnsupportedError,
+ } from './product-surfaces.mjs';
+```
+
+### 6.2 Insertion point: BEFORE model selection
+
+`selectChatGptModel` runs at `chatgpt.mjs:312` and its surface guard
+(`chatgpt-model.mjs:280`) throws on a Work surface. Normalization must therefore run
+FIRST, or the guard rejects the very state the flag exists to fix:
+
+```diff
+@@ chatgpt.mjs, immediately before the selectChatGptModel call (~:312)
++    /** @type {string[]} */
++    const surfaceWarnings = [];
++    if (input.normalizeSurface === true) {
++        const { ensureChatSurface } = await import('./chatgpt-work-picker.mjs');
++        const normalized = await ensureChatSurface(page);
++        if (normalized.switched) surfaceWarnings.push('composer surface normalized: work -> chat');
++    }
+     const selectedModel = await selectChatGptModel(page, input.model, {
+```
+
+The dynamic import mirrors the existing pattern at `chatgpt-model.mjs:539`, which
+uses it to avoid a static cycle with `product-surfaces.mjs`.
+
+### 6.3 Warning merge (there is no `warnings` variable)
+
+The send result assembles warnings as a literal at `chatgpt.mjs:452-460`. The new
+array joins it there:
+
+```diff
+             usedFallbacks: [...usedFallbacks, ...(selectedModel?.usedFallbacks || []), ...(selectedTools?.usedFallbacks || [])],
++            ...(surfaceWarnings.length ? { warnings: [...(selectedTools?.warnings || []), ...surfaceWarnings] } : {}),
+```
+
+B verifies the exact existing `warnings` key composition at that return and merges
+into it rather than replacing it — the diff above is the shape, and the precise
+spread depends on what that literal already carries.
+
+### 6.4 CLI plumbing
+
+Two concrete sites, both confirmed present:
+
+```diff
+@@ web-ai/cli.mjs parseArgs options (~:571)
+             vendor: { type: 'string', default: 'chatgpt' },
++            'normalize-surface': { type: 'boolean', default: false },
+@@ web-ai/cli.mjs input mapping (~:684)
+         vendor: (command === 'watch' && !vendorExplicit) ? null : values.vendor,
++        normalizeSurface: values['normalize-surface'] === true,
+```
+
+plus a help-text line wherever the command's flags are enumerated, since
+`docs:drift` checks documented flags against the parser.
+
+### 6.5 The legacy branch is correct as written (non-blocking observation, confirmed)
+
+Round 4 made `surface` non-null on conversation pages, so `ui === 'legacy'` can now
+co-occur with `surface === 'chat'`. `ensureChatSurface` checks `surface === 'chat'`
+FIRST and returns, so that combination never reaches the legacy throw. No change.
+
+### 6.6 Added accept criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 8 | `--normalize-surface` present | `input.normalizeSurface === true` reaches the send path |
+| 9 | flag absent | `false`; no dynamic import, no detection call (assert call count) |
+| 10 | Work active + flag, then a model request | normalization runs BEFORE `selectChatGptModel`, so the model guard does not throw |
+| 11 | `ui:'legacy', surface:'chat'` conversation + flag | returns `switched:false`, no throw |
+| 12 | the emitted warning | appears in the send result's `warnings` array |

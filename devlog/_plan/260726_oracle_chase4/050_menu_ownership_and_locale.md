@@ -1,7 +1,9 @@
-# WP6 — G81b (triggering-row aria-controls) + G25 (zh locale)
+# WP6 — G81b: triggering-row `aria-controls`
 
-Two small independent rows sharing one cycle because each is a single-table change
-with its own test set.
+> **Split notice (A-gate round 1, blocker 9):** this doc originally bundled G25 (zh
+> locale) into the same cycle on a size argument. Size is not a dependency, so G25
+> moved to its own phase and its own document, `060_zh_locale.md`. Part B below is
+> superseded by that file and retained only for its measured findings.
 
 ## Part A — G81b: read `aria-controls` from the triggering row
 
@@ -143,3 +145,71 @@ pass-through, `chatgpt-model.mjs` label tables (+ matcher guard if needed), the
 three test files.
 OUT: other locales, the effort-menu trigger testIds, and any change to how testId
 matching is ordered.
+
+## Audit amendments (A-gate round 1, blocker 6) — AUTHORITATIVE
+
+### A.4 The proposed change granted ownership far too widely
+
+`plusSelectors.concat(triggerSelector)` with `triggerSelector: MENU_ITEM_SELECTOR`
+iterates EVERY menu row on the page and honors any `aria-controls` it finds. After a
+`More` expansion, an unrelated row pointing at an unrelated popover would hand that
+popover the STRONGEST ownership tier — re-opening precisely the wrong-click hole
+round 4 spent five audit rounds closing.
+
+**Corrected: pass the resolved control id, not a selector.**
+
+```diff
+ export function resolveComposerMenuItem({
+-    containerSelector, itemSelector, plusSelectors, labels, menuTextPattern, token, isVisible, triggerSelector,
++    containerSelector, itemSelector, plusSelectors, labels, menuTextPattern, token, isVisible, ownedContainerId,
+ }) {
+@@
+     const ownedByPlus = new Set();
+     for (const selector of plusSelectors) {
+         ...unchanged plus-button collection...
+     }
++    // Exactly one extra container may be conferred ownership: the one the caller
++    // OBSERVED the triggering row control (its aria-controls target). A selector
++    // would admit every row on the page; an id admits the one we actually clicked.
++    if (ownedContainerId) {
++        const target = document.getElementById(ownedContainerId);
++        if (target && visible(target)) ownedByPlus.add(target);
++    }
+```
+
+`chatgpt-tools.mjs` reads the attribute from the specific `more.locator` it already
+holds and passes the value through only on the post-`More` resolutions:
+
+```diff
+     const more = await resolveMenuItemLocator(page, ['더 보기', 'More'], token);
+     if (!more) return false;
++    // Read aria-controls from THIS row, not from a selector class.
++    const moreControls = await more.locator.getAttribute('aria-controls').catch(() => null);
+     await more.locator.hover({ timeout: 1_000 }).catch(() => undefined);
+     await page.waitForTimeout(250).catch(() => undefined);
+-    let item = await resolveMenuItemLocator(page, labels, null);
++    let item = await resolveMenuItemLocator(page, labels, null, moreControls);
+```
+
+with `resolveMenuItemLocator(page, labels, token, ownedContainerId)` forwarding it
+into the evaluate options. The initial (pre-`More`) lookup passes nothing, so an
+arbitrary control can never confer ownership on the first pass.
+
+### A.5 Revised accept criteria (supersede A.3)
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | hover-opened portaled submenu, `aria-controls` on the `More` row, no menu text, no token | resolved, `ownership: 'aria-controls'` |
+| 2 | same but the target is hidden | not owned |
+| 3 | **an UNRELATED row carries `aria-controls` pointing at a GitHub popover; the `More` row does not** | NOT owned — only the observed id is honored (blocker-6 case) |
+| 4 | `ownedContainerId` absent (initial lookup) | behaves exactly as round 4 |
+| 5 | `ownedContainerId` names a nonexistent id | ignored, no throw |
+| 6 | round-4 regressions (unrelated-only, nested, hidden-preceding, cloneNode replacement, stale token, ambiguity) | all unchanged |
+| 7 | confirmed-click submenu path | still works via the causal epoch |
+
+### A.6 Corrected scope
+
+IN: `chatgpt-menu-resolver.mjs` (`ownedContainerId` option), `chatgpt-tools.mjs`
+(read + forward), `test/unit/web-ai-chatgpt-menu-resolver.test.mjs`,
+`test/unit/web-ai-chatgpt-composer-menu-flow.test.mjs`.
+OUT: everything in `chatgpt-model.mjs` (moved to `060_zh_locale.md`).
