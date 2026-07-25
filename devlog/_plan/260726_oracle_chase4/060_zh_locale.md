@@ -262,3 +262,82 @@ withdrawn.
 | 25 | `极高` | thinking | true (new) |
 | 26 | `即时` | instant | true (new) |
 | 27 | every en/ko token, old vs new | identical verdicts (table-driven equivalence) |
+
+## 8. Audit amendments (A-gate round 4, blockers 3 and 4)
+
+### 8.1 Blocker 3 — `localePatterns` was never plumbed
+
+§7.1 declared a fourth parameter but changed neither the call site
+(`chatgpt-model.mjs:1102`) nor the evaluate payload (`:1129`). Implemented literally,
+`localePatterns[choice]` throws on every invocation and the surrounding
+`.catch(() => null)` turns it into a silent effort-trigger failure. Both diffs, in full:
+
+```diff
+@@ web-ai/chatgpt-model.mjs — inside the evaluated function (~:1102)
+-        function matchesModelText(text, choice, labelsForChoice) {
++        function matchesModelText(text, choice, labelsForChoice, localePatterns) {
++            const source = localePatterns && localePatterns[choice];
++            if (source && new RegExp(source, 'iu').test(text)) return true;
+-            if (choice === 'instant') return /\b(Instant|Fast)\b|즉시/i.test(text);
+-            if (choice === 'thinking') return /\b(Thinking|Think)\b|중간|높음|매우 높음/i.test(text);
+-            if (choice === 'pro') return /\b(Pro|Heavy)\b|Pro 확장|프로 확장/i.test(text);
+             return labelsForChoice.some(label => new RegExp(`(^|\\s)${label}\\b`, 'i').test(text));
+         }
+@@ every call to it inside that evaluate body
+-            matchesModelText(text, modelChoice, expectedLabels)
++            matchesModelText(text, modelChoice, expectedLabels, localePatterns)
+@@ the evaluate argument object (~:1129)
+-        }, { expectedLabels, modelChoice, triggerSelectors });
++        }, { expectedLabels, modelChoice, triggerSelectors, localePatterns });
+@@ and its destructuring at the top of the evaluated function
+-        ({ expectedLabels, modelChoice, triggerSelectors }) => {
++        ({ expectedLabels, modelChoice, triggerSelectors, localePatterns }) => {
+```
+
+`localePatterns` is built on the Node side (§7.1) and travels as data — the round-4
+serialization rule, since a module constant would be `undefined` in the page.
+
+A transport test is mandatory: run the real `page.evaluate` and assert a zh row
+matches, so a missing plumbing line fails loudly instead of silently.
+
+### 8.2 Blocker 4 — whitespace is the wrong CJK boundary
+
+Measured with the §7.1 guards:
+
+```text
+即时          true
+GPT-5.5即时   false   <- WRONG: a real row label
+GPT-5极高     false   <- WRONG
+极高          true
+超高          false   (correct)
+```
+
+`matchesModelText` reads a whole row's `innerText`, where CJK routinely adjoins ASCII
+with no space. The correct boundary is "not adjacent to another Han character":
+
+```diff
+-    instant:  '\\b(Instant|Fast)\\b|즉시|(^|\\s)即时(\\s|$)',
+-    thinking: '\\b(Thinking|Think)\\b|중간|높음|매우 높음|(^|\\s)(思考|中等|高|极高)(\\s|$)',
+-    pro:      '\\b(Pro|Heavy)\\b|Pro 확장|프로 확장|(^|\\s)Pro 扩展(\\s|$)',
++    // (?<!\p{Script=Han}) / (?!\p{Script=Han}) is the CJK analogue of \b: it lets
++    // "GPT-5.5即时" match while still preventing 高 from matching inside 极高 or 超高.
++    // Requires the 'u' flag, hence `new RegExp(source, 'iu')` above.
++    instant:  '\\b(Instant|Fast)\\b|즉시|(?<!\\p{Script=Han})即时(?!\\p{Script=Han})',
++    thinking: '\\b(Thinking|Think)\\b|중간|높음|매우 높음|(?<!\\p{Script=Han})(思考|中等|极高|高)(?!\\p{Script=Han})',
++    pro:      '\\b(Pro|Heavy)\\b|Pro 확장|프로 확장|(?<!\\p{Script=Han})Pro 扩展(?!\\p{Script=Han})',
+```
+
+`极高` is listed BEFORE `高` in the alternation so the longer term wins; the trailing
+lookahead then rejects a bare `高` inside `极高`/`超高` regardless of order.
+
+### 8.3 Added criteria
+
+| # | Input | Choice | Expected |
+|---|-------|--------|----------|
+| 28 | `GPT-5.5即时` | instant | **true** (adjoining ASCII) |
+| 29 | `GPT-5极高` | thinking | **true** |
+| 30 | `超高` | thinking | false (not a supported label) |
+| 31 | `极高` | thinking | true, and `高`-only patterns do not claim it |
+| 32 | `GPT-5Pro 扩展` | pro | true |
+| 33 | **transport** — a zh row through the real `page.evaluate` | matches; `localePatterns` arrived |
+| 34 | Node <16.4 / no lookbehind support | documented requirement: the repo targets Node 24 (`package.json` engines), where lookbehind is available |

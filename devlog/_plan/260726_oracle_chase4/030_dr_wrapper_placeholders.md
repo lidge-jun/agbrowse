@@ -350,3 +350,108 @@ is no longer an envelope at all — a discriminant is mandatory.
 | 28 | `{"tool_call_id":"c1","name":"web.run","arguments":"{}"}` | wrapper (schema B) |
 | 29 | `{"role":"tool","recipient":"web.run","arguments":{}}` | wrapper (schema C) |
 | 30 | `{"role":"assistant","name":"Quarterly Review","input":{…}}` | NOT a wrapper (name not token-shaped, no recipient) |
+
+## 8. Audit amendments (A-gate round 4, blocker 2) — REPLACES §2, §5, §6, §7
+
+I was solving the wrong problem. The reviewer read the actual upstream commit; I had
+inferred the shape instead of opening it. `e7526efa:src/cli/sessionDisplay.ts:66-88`:
+
+```ts
+const DEEP_RESEARCH_TOOL_CALL_MARKERS = [
+  "called tool", "used tool", "użyto narzędzia", "narzędzie wywołane",
+];
+
+export function isDeepResearchPlaceholderCapture(metadata, logText) {
+  const answer = trimBeforeFirstAnswer(logText)
+    .replace(/^Answer:\s*/i, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return DEEP_RESEARCH_TOOL_CALL_MARKERS.some((marker) => answer.startsWith(marker));
+}
+```
+
+with the commit's own comment explaining WHY: the ChatGPT "Deep Research App"
+connector emits a multi-line wrapper beginning `Called tool / Deep Research App / …
+Response { session_id: … }`, which is longer than the old `outputTokens <= 8` gate
+allowed — so it matches structurally on the LEADING MARKER, not on a token count and
+not on JSON shape.
+
+Every JSON schema in §2/§5/§6/§7 was speculative. It is deleted. Three audit rounds
+were spent hardening a detector for a payload upstream never claimed to see, and the
+reviewer's escapes (a minimal `{name, arguments}` envelope missed; an addressed
+report falsely flagged) are symptoms of designing against an imagined input.
+
+### 8.1 The actual change — MODIFY `chatgpt-deep-research-report.mjs`
+
+```diff
++// Leading markers of a tool-call placeholder capture. Ported verbatim from
++// upstream e7526efa: the ChatGPT "Deep Research App" connector emits a
++// multi-line wrapper starting with one of these, which is far longer than a
++// length gate would catch — so match the leading marker structurally.
++const DR_TOOL_CALL_MARKERS = [
++    'called tool',
++    'used tool',
++    'użyto narzędzia',
++    'narzędzie wywołane',
++];
++
++/**
++ * True when the text is a tool-call wrapper placeholder rather than a report.
++ * @param {unknown} text
++ * @returns {boolean}
++ */
++export function looksLikeDeepResearchToolCallCapture(text) {
++    const answer = normalizeDeepResearchReportText(text)
++        .replace(/^Answer:\s*/i, '')
++        .toLowerCase()
++        .replace(/\s+/g, ' ')
++        .trim();
++    return DR_TOOL_CALL_MARKERS.some((marker) => answer.startsWith(marker));
++}
+
+ export function isIncompleteDeepResearchText(text) {
+     const norm = normalizeDeepResearchReportText(text);
+     if (norm.length < DR_MIN_REPORT_CHARS) return true;
++    if (looksLikeDeepResearchToolCallCapture(norm)) return true;
+     const firstLine = norm.split('\n', 1)[0].trim();
+     return DR_INCOMPLETE_MARKERS.some((re) => re.test(firstLine));
+ }
+```
+
+Note the length check runs FIRST, exactly as today, so a bare `called tool` stub is
+already caught by the 120-char floor; this addition is what catches the LONG
+multi-line wrapper — which is precisely the case upstream's commit message names.
+
+`normalizeDeepResearchReportText` is reused instead of upstream's
+`trimBeforeFirstAnswer` because our text arrives already extracted from the DOM
+rather than from a session log; the `^Answer:` strip is kept for parity with captures
+that carry it.
+
+### 8.2 Final accept criteria (REPLACE all earlier tables)
+
+| # | Input | Expected |
+|---|-------|----------|
+| 1 | the multi-line `Called tool / Deep Research App / … Response { session_id: … }` wrapper, 400+ chars | incomplete |
+| 2 | `Used tool …` long wrapper | incomplete |
+| 3 | `Użyto narzędzia …` long wrapper | incomplete (pl parity) |
+| 4 | `Narzędzie wywołane …` long wrapper | incomplete |
+| 5 | `Answer: Called tool …` | incomplete (prefix stripped) |
+| 6 | `CALLED TOOL …` mixed case | incomplete (lowercased) |
+| 7 | `Called   tool\n\nDeep Research App` irregular whitespace | incomplete (collapsed) |
+| 8 | a genuine report that MENTIONS "called tool" mid-body | **complete** — `startsWith`, not `includes` |
+| 9 | a genuine report opening with a JSON block | **complete** — no JSON heuristics remain |
+| 10 | a genuine report opening with a fenced code block | complete |
+| 11 | short text | incomplete (unchanged 120-char floor) |
+| 12 | existing status-marker cases | unchanged |
+| 13 | wrapper target + complete frame | frame chosen, `completed: true` |
+| 14 | wrapper target + wrapper frame | longer returned, `completed: false` |
+
+Rows 8-10 are the false-positive guards that the speculative version kept failing.
+
+### 8.3 Corrected scope
+
+IN: `chatgpt-deep-research-report.mjs` (marker list + predicate + one insertion),
+`test/unit/web-ai-deep-research-report-selection.test.mjs`.
+OUT: everything JSON-shaped. If a real JSON envelope is ever CAPTURED in practice,
+that is a new row with a fixture behind it — not a guess.

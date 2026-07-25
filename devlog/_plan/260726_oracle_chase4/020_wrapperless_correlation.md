@@ -388,3 +388,59 @@ assumed.
 | 16 | wrapperless answer AFTER a wrapped turn | `at(-1)` is the wrapperless one |
 | 17 | a node matching both `.markdown` and `[data-message-content]` | appears ONCE |
 | 18 | wrapped-only page | ordering byte-identical to today |
+
+## 8. Audit amendments (A-gate round 4, blocker 1) — AUTHORITATIVE over §7
+
+§7 gave each reader its OWN `ordered` array, so `domOrder` was source-local:
+wrapped `0` and wrapperless `0` are different document positions, and no sort can
+repair incomparable coordinates. Reproduced:
+
+```text
+wrapped-after: local0/actual20, wrapperless-before: local0/actual10
+selected -> wrapperless-before   (WRONG)
+```
+
+### 8.1 One acquisition, one coordinate space
+
+Both lists come from a SINGLE `page.evaluate` that builds one deduplicated union in
+document order and indexes it through one `Map`:
+
+```js
+/**
+ * Browser-context. Single acquisition for both snapshot sources, so every record
+ * shares one document-order coordinate space. Serialization-safe.
+ * @param {{ assistantSelectors: string[], resolverSource: string, userSelectors?: string[], markdownSelectors?: string[] }} options
+ * @returns {{ wrapped: any[], wrapperless: any[] }}
+ */
+export function readAssistantSnapshotSources({ assistantSelectors, resolverSource, userSelectors, markdownSelectors }) {
+    const resolver = (0, eval)(`(${resolverSource})`);
+    const wrappedNodes = resolver(assistantSelectors) || [];
+    const wrapperlessNodes = collectWrapperlessNodes(userSelectors, markdownSelectors); // §5.2 logic, node list only
+
+    // ONE union, deduplicated by node identity, sorted once in document order.
+    const union = Array.from(new Set([...wrappedNodes, ...wrapperlessNodes]));
+    const FOLLOWING = union[0]?.ownerDocument?.defaultView?.Node?.DOCUMENT_POSITION_FOLLOWING ?? 4;
+    union.sort((a, b) => (a.compareDocumentPosition(b) & FOLLOWING) ? -1 : 1);
+    const order = new Map(union.map((node, index) => [node, index]));
+
+    return {
+        wrapped: wrappedNodes.map((node, turnIndex) => ({ ...describeWrapped(node), turnIndex, source: 'wrapped', domOrder: order.get(node) })),
+        wrapperless: wrapperlessNodes.map((node) => ({ ...describeWrapperless(node), turnIndex: -1, source: 'wrapperless', domOrder: order.get(node) })),
+    };
+}
+```
+
+`readAssistantSnapshotsSplit` becomes the thin Node wrapper around this one call, so
+there is no second evaluate and no chance of two coordinate spaces. The reviewer
+confirmed `compareDocumentPosition` is a consistent total order for connected nodes
+including containment, and the shared `Map` also removes §7's quadratic
+`indexOf` (measured 7.2 ms at 10k nodes — not fatal, but gone for free).
+
+### 8.2 Added criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 19 | wrapped-after@20 + wrapperless-before@10 | `at(-1)` is the WRAPPED one (blocker-1 reproduction) |
+| 20 | a node appearing in BOTH source lists | one union entry; both records share its `domOrder` |
+| 21 | distinct nodes from different sources | never share a `domOrder` (tie assertion) |
+| 22 | containment (a wrapper enclosing a markdown node) | consistent order, no comparator instability |
