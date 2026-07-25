@@ -1,0 +1,156 @@
+# WP3 — G11: wrapperless completion correlation
+
+Row: **G11** (upstream `7b107769`).
+
+## 1. Problem
+
+`resolveTopLevelAssistantTurns` (`chatgpt-response-dom.mjs:87`) resolves turns
+ONLY from two role selectors:
+
+```js
+const roleSelectors = ['[data-message-author-role="assistant"]', '[data-turn="assistant"]'];
+```
+
+When ChatGPT renders markdown without those wrappers, the resolver returns `[]`.
+Downstream, `isResponseFinished` (`chatgpt.mjs:1015-1035`) iterates that empty
+list and returns `{ finished: false, turnIndex: -1 }`, while the text readers
+return nothing — so the poll loop has no turn identity to correlate against.
+
+Upstream `7b107769` addressed the dangerous half of this: in the wrapperless
+markdown fallback it requires the candidate node to be **DOM-following the latest
+user node**, instead of treating "no turns" as "automatically after
+`minTurnIndex`". Without that, an old answer, a user echo, or stray markdown can
+be accepted as the new response.
+
+The `hasIdentity ? !identityMatches : turnIndex < minTurnIndex` branch at
+`chatgpt.mjs:1032` is exactly the shape upstream warns about: with no identity and
+no turns, the ordering check never runs at all.
+
+## 2. Change map
+
+### 2.1 NEW browser-context helper in `chatgpt-response-dom.mjs`
+
+```js
+/**
+ * Browser-context. Resolve wrapperless assistant markdown: content blocks that
+ * are not inside any recognized turn wrapper AND that DOM-follow the latest user
+ * message. Serialization-safe — declares every constant in its own body.
+ *
+ * The DOM-following requirement is the whole point: without a turn index there is
+ * no other way to tell a NEW answer from an old one or from the user's own echo,
+ * so a candidate that precedes the latest user node is rejected rather than
+ * optimistically accepted.
+ *
+ * @param {{ userSelectors?: string[], markdownSelectors?: string[] }} options
+ * @returns {{ text: string, following: boolean }[]}
+ */
+export function readWrapperlessAssistantBlocks({ userSelectors, markdownSelectors } = {}) {
+    const USER_SELECTORS = userSelectors && userSelectors.length ? userSelectors : [
+        '[data-message-author-role="user"]',
+        '[data-turn="user"]',
+    ];
+    const MARKDOWN_SELECTORS = markdownSelectors && markdownSelectors.length ? markdownSelectors : [
+        '.markdown',
+        '[data-message-content]',
+    ];
+    const WRAPPER_SELECTORS = [
+        '[data-message-author-role]',
+        '[data-turn]',
+        'article[data-testid^="conversation-turn"]',
+    ];
+    const isVisible = (node) => {
+        const rect = node.getBoundingClientRect?.();
+        return Boolean(rect) && rect.width > 0 && rect.height > 0;
+    };
+
+    let latestUser = null;
+    for (const selector of USER_SELECTORS) {
+        for (const node of Array.from(document.querySelectorAll(selector))) latestUser = node;
+    }
+
+    const blocks = [];
+    for (const selector of MARKDOWN_SELECTORS) {
+        for (const node of Array.from(document.querySelectorAll(selector))) {
+            if (!isVisible(node)) continue;
+            // Inside a recognized wrapper? Then the normal turn path owns it.
+            if (node.closest && node.closest(WRAPPER_SELECTORS.join(', '))) continue;
+            const following = Boolean(latestUser)
+                && (latestUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+            blocks.push({ text: (node.innerText || node.textContent || '').trim(), following });
+        }
+    }
+    return blocks;
+}
+```
+
+`latestUser === null` yields `following: false` for every block — fail closed. A
+page with no user node cannot prove a block is new.
+
+### 2.2 MODIFY `chatgpt.mjs` — consult the fallback only when turns are absent
+
+```diff
+ async function isResponseFinished(page, sample, minTurnIndex) {
+     ...existing evaluate...
+-        return result && typeof result === 'object'
+-            ? result
+-            : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
++        if (result && typeof result === 'object' && result.turnIndex >= 0) return result;
++        // No recognized turn wrapper: fall back to wrapperless markdown, which
++        // only counts when it DOM-follows the latest user message.
++        const wrapperless = await readWrapperlessFollowingText(page);
++        if (wrapperless) {
++            return { finished: true, messageId: null, turnId: null, turnIndex: minTurnIndex };
++        }
++        return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+ }
+```
+
+with the Node-side reader:
+
+```js
+/**
+ * @param {any} page
+ * @returns {Promise<string|null>} the newest wrapperless answer text, or null
+ */
+async function readWrapperlessFollowingText(page) {
+    try {
+        const blocks = await page.evaluate(readWrapperlessAssistantBlocks, {});
+        if (!Array.isArray(blocks)) return null;
+        const following = blocks.filter(block => block.following && block.text);
+        return following.length ? following[following.length - 1].text : null;
+    } catch {
+        return null;
+    }
+}
+```
+
+**Deliberate narrowness.** This does NOT change the normal wrapper path in any
+way — it only fires when `turnIndex < 0`, i.e. when today's code already returns
+"not finished" and the loop would otherwise poll to timeout. The worst case is
+unchanged behavior; the best case is a recovered answer that today times out.
+
+## 3. Accept criteria (activation-grounded)
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | wrapperless `.markdown` after the latest user node | `following: true`, text returned |
+| 2 | wrapperless `.markdown` BEFORE the latest user node (old answer) | `following: false`, rejected |
+| 3 | the user's own echoed markdown (inside a user wrapper) | excluded by the wrapper check |
+| 4 | markdown inside a recognized assistant wrapper | excluded — the turn path owns it |
+| 5 | no user node at all | every block `following: false` — fail closed |
+| 6 | hidden markdown node | excluded |
+| 7 | two following blocks | the LAST one is returned |
+| 8 | `isResponseFinished` with turns present | unchanged; the fallback never runs |
+| 9 | `isResponseFinished` with no turns and a following block | `finished: true` at `minTurnIndex` |
+| 10 | `isResponseFinished` with no turns and only a preceding block | `finished: false` (today's behavior preserved) |
+| 11 | `page.evaluate` rejects | `null`, no throw escapes |
+| 12 | **transport**: real Chromium `page.evaluate(readWrapperlessAssistantBlocks, {})` | returns blocks, no `ReferenceError` |
+
+Tests: extend `test/unit/web-ai-chatgpt-response-fragments.test.mjs`; transport
+case joins the new `test/integration/activity-state-transport.test.mjs`.
+
+## 4. Scope boundary
+
+IN: the new helper, the `isResponseFinished` fallback, its Node reader, tests.
+OUT: `resolveTopLevelAssistantTurns` itself (the wrapper contract is unchanged),
+the text-extraction readers, and the copy-markdown fallback path.
