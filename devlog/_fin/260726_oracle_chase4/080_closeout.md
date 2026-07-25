@@ -148,7 +148,21 @@ touched files**, measured rather than asserted: the WP8 files
 
 ## 4. Push
 
-_(`git push origin dev` output plus `rev-parse dev` / `rev-parse origin/dev`.)_
+```
+$ git push origin dev
+To https://github.com/lidge-jun/agbrowse.git
+   e5623a0..defb7cc  dev -> dev
+
+$ git fetch origin dev && git rev-parse dev
+defb7ccd0369e8917a9b44051efda584b0907ba4
+$ git rev-parse origin/dev
+defb7ccd0369e8917a9b44051efda584b0907ba4
+```
+
+20 commits, `e5623a0..defb7cc`: the round-4 push was the previous remote tip. No
+force-push, no PR, `dev` only. `defb7cc` is this close-out commit itself; the §4
+block above is therefore recorded in the follow-up commit that carries the push
+evidence, since a commit cannot contain its own successor's SHA.
 
 ## 5. Next round
 
