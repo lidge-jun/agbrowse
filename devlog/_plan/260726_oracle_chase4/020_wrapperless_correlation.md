@@ -583,17 +583,21 @@ connects them, so production would have failed on an undefined
 directly) passed. Full diff:
 
 ```diff
-@@ web-ai/chatgpt.mjs import block (~:56)
+@@ web-ai/chatgpt.mjs import block (:56-63) — context verified against the file
  import {
      CHATGPT_ASSISTANT_SELECTORS,
      CHATGPT_STOP_SELECTORS,
 +    readAssistantSnapshotSources,
      readChatGptStreamingState,
-     readTopLevelAssistantTexts,
+     readTopLevelAssistantSnapshots,
      readTopLevelAssistantTextsFromLocators,
      resolveTopLevelAssistantTurns,
  } from './chatgpt-response-dom.mjs';
 ```
+
+`readTopLevelAssistantSnapshots` is RETAINED — it is still used at
+`chatgpt.mjs:1370`. (Round-6 draft wrote `readTopLevelAssistantTexts` here, a symbol
+that is not in this block; applying it literally would have deleted a live import.)
 
 ```js
 /**
@@ -602,7 +606,7 @@ directly) passed. Full diff:
  * like "no answer yet AND no history".
  *
  * @param {any} page
- * @returns {Promise<{ wrapped: ChatGptAssistantSnapshot[], wrapperless: ChatGptAssistantSnapshot[] }>}
+ * @returns {Promise<{ wrapped: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[] }>}
  */
 async function readAssistantSnapshotsSplit(page) {
     const empty = { wrapped: [], wrapperless: [] };
@@ -611,11 +615,13 @@ async function readAssistantSnapshotsSplit(page) {
             assistantSelectors: ASSISTANT_SELECTORS,
             resolverSource: resolveTopLevelAssistantTurns.toString(),
         });
-        if (!result || typeof result !== 'object') return empty;
-        return {
-            wrapped: Array.isArray(result.wrapped) ? result.wrapped : [],
-            wrapperless: Array.isArray(result.wrapperless) ? result.wrapperless : [],
-        };
+        // BOTH lists must be present: a partial result would enter polling with a
+        // single coordinate source, which is exactly what the shared document-order
+        // pass exists to prevent. Fail closed on anything malformed.
+        if (!result || typeof result !== 'object'
+            || !Array.isArray(result.wrapped)
+            || !Array.isArray(result.wrapperless)) return empty;
+        return { wrapped: result.wrapped, wrapperless: result.wrapperless };
     } catch {
         return empty;
     }
@@ -638,3 +644,6 @@ only the poll loop and `countAssistantMessages` move to the split reader, exactl
 | 29 | `page.evaluate` rejects | `{ wrapped: [], wrapperless: [] }`, no throw |
 | 30 | evaluate returns a non-object / partial shape | both lists default to `[]` |
 | 31 | import presence | `chatgpt.mjs` imports `readAssistantSnapshotSources` (source assertion, so a missing import fails the suite rather than production) |
+| 32 | evaluate returns `{ wrapped: [x] }` with `wrapperless` missing | BOTH lists empty — partial results are rejected wholesale |
+| 33 | import block after the edit | still exports-in `readTopLevelAssistantSnapshots` (guards the round-6 near-miss) |
+| 34 | checkJs | no `TS2304` for `ChatGptAssistantSnapshot` (inline import type) |
