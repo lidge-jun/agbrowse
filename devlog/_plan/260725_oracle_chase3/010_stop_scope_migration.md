@@ -131,3 +131,72 @@ IN: the three modules above, the new test file.
 OUT: `chatgpt.mjs` (already migrated), the DR progress-indicator probe, any change to
 `CHATGPT_STOP_SELECTORS` itself, capability-registry probes at `chatgpt.mjs:126-134`
 (already on the shared constant).
+
+## 5. Audit amendments (A-gate round 1, reviewer Schrodinger)
+
+**Blocker 8 [Medium] accepted — no testable seam.** The three `isStreaming` functions are
+module-private (`chatgpt-deep-research.mjs:79`, `chatgpt-multi-turn.mjs:54`, and the
+proposed work-picker helper), so the planned test could not drive them. Amendment: the
+shared helper is **exported from `web-ai/chatgpt-response-dom.mjs`** and all three callers
+delegate to it. The test drives the exported helper plus a source-shape assertion that
+each caller uses it.
+
+```diff
+*** web-ai/chatgpt-response-dom.mjs (append after CHATGPT_STOP_SELECTORS)
++/**
++ * Visible-stop-button probe against the shared composer-scoped selector set.
++ * `scope` is any Playwright-like locator root (page, or a `main` region locator).
++ * Visibility is required: a present-but-hidden stop node is not generation
++ * evidence (this is the semantic the main ChatGPT path uses at chatgpt.mjs:996-1003).
++ * @param {any} scope
++ * @returns {Promise<boolean>}
++ */
++export async function anyStopButtonVisible(scope) {
++    if (!scope || typeof scope.locator !== 'function') return false;
++    for (const selector of CHATGPT_STOP_SELECTORS) {
++        const first = scope.locator(selector)?.first?.();
++        if (typeof first?.isVisible === 'function'
++            && await first.isVisible().catch(() => false)) return true;
++    }
++    return false;
++}
++
++/**
++ * Narrow a page to its main conversation region when it exposes one.
++ * Extraction of the inline pattern at chatgpt-work-picker.mjs:944-949, whose
++ * rationale is the 2026-07-10 sidebar-title poisoning incident.
++ * @param {any} page
++ * @returns {any}
++ */
++export function scopeToMainRegion(page) {
++    const main = page?.locator?.('main');
++    return (main && typeof main.locator === 'function') ? main : page;
++}
+```
+
+**Blocker 9 [Medium] accepted — helper diffs were prose.** The two helpers above are now
+given in full (implementation, input/output contract, and the fallback behavior when the
+scope lacks `.locator`). §2.3's `scopeToMain` is replaced by the exported
+`scopeToMainRegion`; §2.1/§2.2/§2.3 call sites all become `await anyStopButtonVisible(...)`:
+
+| Call site | Replacement |
+|-----------|-------------|
+| `chatgpt-deep-research.mjs:79-84` | `return anyStopButtonVisible(page);` |
+| `chatgpt-multi-turn.mjs:54-57` | `return anyStopButtonVisible(page);` |
+| `chatgpt-work-picker.mjs:690-691` | `const stopVisible = await anyStopButtonVisible(scopeToMainRegion(page));` |
+| `chatgpt-work-picker.mjs:950-951` | `const stopVisible = await anyStopButtonVisible(mainRegion);` (mainRegion already computed at `:944-949`, now via `scopeToMainRegion`) |
+
+**Revised accept criteria.** Test file `test/unit/web-ai-chatgpt-stop-scope.test.mjs` (NEW):
+
+| # | Scenario | Assertion |
+|---|----------|-----------|
+| 1 | dictation-only page (`aria-label="Stop dictation"`, outside `form`) | `anyStopButtonVisible(page) === false` |
+| 2 | visible `button[data-testid="stop-button"]` | `true` |
+| 3 | stop node present but `isVisible()` false | `false` (the `count()>0` regression class) |
+| 4 | stop button outside `main` | `anyStopButtonVisible(scopeToMainRegion(page)) === false` while page-wide is `true` |
+| 5 | scope without `.locator` | `false`, no throw |
+| 6 | source shape | each of the three modules imports and calls `anyStopButtonVisible` |
+
+Case 3 is the behavioral change the reviewer flagged as untested in the multi-turn poll
+loop: it is now asserted directly on the shared helper, which is the only predicate that
+loop consults after this phase.

@@ -123,3 +123,166 @@ OUT: refactoring `chatgpt.mjs:490-508` onto the shared helper (its behavior is a
 correct and covered; a rewrite would add regression risk for zero user-visible gain —
 recorded here as a deliberate rebuttal, not an oversight), poll-path interstitial
 detection, and any change to `interstitial.mjs` classification logic.
+
+## 5. Audit amendments (A-gate round 1, reviewer Schrodinger)
+
+**Blocker 5 [Medium] accepted — two of the four wiring sites are dead for the stated
+scenario.** Verified in source:
+
+- `grok-live.mjs:396-397`: `openFreshGrokChat` returns early when `countResponses(page)`
+  is 0, so a challenge page (zero turns) never reaches the new-chat error at `:398-405`.
+- `gemini-live.mjs:839-840`: same shape — `if ((await countResponses(page)) === 0) return;`
+  guards the new-chat error at `:841-848`.
+- And if turns *do* exist, `classifyCloudflareVerdict` vetoes at `interstitial.mjs:62`
+  (`if (hasComposer || hasTurns) return { kind: 'shell-vetoed' }`), so the detector would
+  return `none` anyway.
+
+**Amendment: drop the new-chat-control wiring entirely.** §2.2's second site and §2.3's
+`:840-848` site are removed from the change map. Only the two post-`openFresh*`
+composer-miss sites remain — `grok-live.mjs:155-162` and `gemini-live.mjs:201-208` — and
+those are reachable exactly as the plan describes: on a challenge page `findFirstSelector`
+times out with no composer, the detector sees `hasComposer:false, hasTurns:false`, and
+`classifyCloudflareVerdict` can return `strong`.
+
+**Blocker 5b [Medium] accepted — a source-string assertion proves nothing.** The planned
+"contains `classifyComposerInterstitial`" check passes on an unused import, which is the
+same unconsumed-detector failure Round 3's WP5 audit caught. Amendment: the wiring is
+proven behaviorally. `grokSendWebAi` / `geminiSendWebAi` accept an injectable detector
+through their existing deps/options object, and the test drives the real send path with a
+page fake whose composer selectors never resolve.
+
+```diff
+*** web-ai/grok-live.mjs (composer miss site)
+-    if (!composerSel) throw new WebAiError({ ...composer-not-visible... });
++    if (!composerSel) {
++        const notVisible = new WebAiError({
++            errorCode: 'provider.composer-not-visible',
++            stage: 'composer-prereq',
++            vendor: 'grok',
++            retryHint: 're-snapshot',
++            message: 'grok composer not visible',
++            selectorsTried: COMPOSER_SELECTORS,
++        });
++        throw (await classifyComposerInterstitial(page, 'grok', notVisible, {
++            detect: input.__detectInterstitial,   // undefined in production -> real detector
++        })) || notVisible;
++    }
+```
+
+The injection seam is the same one `waitForChatGptComposerReady` already uses
+(`chatgpt.mjs:490`, `{ detect = detectInterstitial } = {}`), and
+`test/unit/web-ai-chatgpt-interstitial.test.mjs:13-32` is the precedent for driving it.
+
+**Blocker 10 [Low] accepted — §1's `rg` claim.** The command names three files, not two:
+`chatgpt.mjs` (the one runtime consumer) plus `errors.mjs` and `failure-diagnostics.mjs`
+(error-code and stage vocabulary). §1 should read "one runtime consumer plus two
+vocabulary files."
+
+**Revised accept criteria.** Test file `test/unit/web-ai-composer-interstitial.test.mjs`:
+
+| # | Scenario | Assertion |
+|---|----------|-----------|
+| 1 | `classifyComposerInterstitial(page,'grok',cause,{detect:()=>challenge})` | returns `WebAiError` with `errorCode:'provider.interstitial'`, `stage:'provider-interstitial'`, `vendor:'grok'`, `retryHint:'wait-and-retry'`, `evidence.kind:'cloudflare-challenge'`, `cause` preserved |
+| 2 | gemini + `{ kind:'login-required', retryHint:'login' }` | same shape, `vendor:'gemini'`, `retryHint:'login'` |
+| 3 | detector returns `{ kind:'none' }` | returns `null` (caller throws the original error unchanged) |
+| 4 | detector rejects | returns `null`; no probe error escapes |
+| 5 | unknown vendor | returns `null` |
+| 6 | **behavioral**: `grokSendWebAi` against a page fake with no composer + injected challenge detector | the thrown error is `provider.interstitial`, not `provider.composer-not-visible` |
+| 7 | **behavioral**: same for `geminiSendWebAi` | same |
+
+Cases 6-7 replace the rejected string-presence assertion: they fail if the helper is
+imported but not called.
+
+## 6. Audit amendments (A-gate round 2, same reviewer)
+
+### 6.1 Blocker 4 [Medium] accepted — the seam was both unsafe and untestable as written
+
+Two real defects:
+
+1. `detect(page, ...).catch(...)` assumes the injected detector returns a promise. §5's own
+   test case 1 injects `() => challenge` (a plain object), so `.catch` would throw
+   `TypeError` — the test could not pass. A synchronous throw would likewise escape,
+   violating the helper's "never replace the real error with a probe error" contract.
+2. Threading the seam through `input.__detectInterstitial` puts a test hook on the public
+   caller-supplied input object: any truthy non-function value from an unvalidated caller
+   turns a composer error into a `TypeError`.
+
+**Amendment: validate the injection and normalize the call.**
+
+```diff
+ export async function classifyComposerInterstitial(page, vendor, cause, { detect = detectInterstitial } = {}) {
+     const shellSelectors = INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER[vendor];
+     if (!shellSelectors) return null;
+-    const verdict = await detect(page, { shellSelectors }).catch(() => null);
++    const probe = typeof detect === 'function' ? detect : detectInterstitial;
++    const verdict = await Promise.resolve()
++        .then(() => probe(page, { shellSelectors }))
++        .catch(() => null);
+     if (!verdict || verdict.kind === 'none') return null;
+```
+
+`Promise.resolve().then(...)` accepts a sync-returning detector, a promise-returning one, a
+rejected promise, and a synchronous throw — all four collapse to `null` or a verdict, never
+to an escaping `TypeError`.
+
+**Seam relocation.** The provider wiring no longer reads `input`. `grokSendWebAi` /
+`geminiSendWebAi` take the override from their existing internal deps object:
+
+```diff
+-        throw (await classifyComposerInterstitial(page, 'grok', notVisible, {
+-            detect: input.__detectInterstitial,
+-        })) || notVisible;
++        throw (await classifyComposerInterstitial(page, 'grok', notVisible, {
++            detect: deps?.detectInterstitial,   // internal test seam; undefined in production
++        })) || notVisible;
+```
+
+`deps` is the module-internal dependency bag the send paths already receive, which is not
+user-facing input. A non-function value there is neutralized by the `typeof` guard above.
+
+### 6.2 Revised test matrix (supersedes §5)
+
+| # | Scenario | Assertion |
+|---|----------|-----------|
+| 1 | detector returns a plain object (sync) | verdict honored; no `TypeError` |
+| 2 | detector returns a promise | verdict honored |
+| 3 | detector returns a rejected promise | `null` returned; original error preserved |
+| 4 | detector throws synchronously | `null` returned; original error preserved |
+| 5 | `detect` injected as a non-function (e.g. `true`) | falls back to the real detector; no throw |
+| 6 | `{ kind: 'none' }` | `null` |
+| 7 | unknown vendor | `null`; detector never called |
+| 8 | grok challenge verdict | `provider.interstitial` / `provider-interstitial` / `vendor:'grok'` / `retryHint:'wait-and-retry'` / `cause` preserved |
+| 9 | gemini login verdict | same with `vendor:'gemini'`, `retryHint:'login'` |
+| 10 | **behavioral** `grokSendWebAi`, composer never resolves, deps-injected challenge detector | thrown error is `provider.interstitial`, not `provider.composer-not-visible` |
+| 11 | **behavioral** `geminiSendWebAi`, same | same |
+
+## 7. Scope correction (audit round 4, reviewer Mill)
+
+**Blocker 7 [Medium] accepted.** §1 named "a Gemini page returns an empty shell" as a
+motivating case, but `interstitial.mjs:90-92` gates the `empty-shell` verdict on the host:
+
+```js
+if (/chatgpt\.com|chat\.openai\.com/.test(url) && !hasComposer && !hasTurns && bodyText.length < 500) {
+    return { kind: 'empty-shell', ... };
+}
+```
+
+So a hydrated-but-empty Grok or Gemini page returns `kind: 'none'` and this phase changes
+nothing for it. Two options were available: widen `empty-shell` to be provider-aware, or
+narrow the phase's claim.
+
+**Decision: narrow the claim.** Widening `empty-shell` to Grok/Gemini means asserting "no
+composer + short body = broken" for two providers whose loading behavior we have not
+characterized, on a detector whose Cloudflare path already carries a 12-second hydration
+grace (`interstitial.mjs:50`) precisely because that judgment is delicate. A false
+`empty-shell` would convert a slow load into a hard error — a worse failure than the
+`re-snapshot` hint we are replacing. That work needs its own characterization pass and is
+recorded as a follow-up row, not smuggled into this phase.
+
+**Corrected §1 claim:** this phase makes Grok and Gemini surface **Cloudflare challenges and
+login walls** (the two verdicts their shell selectors can already produce) as
+`provider.interstitial` instead of `provider.composer-not-visible`. Empty-shell handling for
+non-ChatGPT hosts is **G13c — deferred**, tracked for a future unit.
+
+The §6.2 test matrix is unchanged: cases 8 and 9 already exercise exactly the challenge and
+login verdicts this corrected scope claims, and no case asserted empty-shell behavior.
