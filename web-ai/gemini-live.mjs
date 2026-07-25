@@ -32,6 +32,7 @@ import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
+import { classifyComposerInterstitial } from './composer-interstitial.mjs';
 
 const GEMINI_HOSTS = new Set(['gemini.google.com']);
 const INPUT_SELECTORS = [
@@ -198,14 +199,21 @@ export async function geminiSendWebAi(deps, input = {}) {
 
     await openFreshGeminiChat(page, warnings);
     const inputSel = await findFirstSelector(page, INPUT_SELECTORS, 10_000);
-    if (!inputSel) throw new WebAiError({
-        errorCode: 'provider.composer-not-visible',
-        stage: 'composer-prereq',
-        vendor: 'gemini',
-        retryHint: 're-snapshot',
-        message: 'gemini composer not visible',
-        selectorsTried: INPUT_SELECTORS,
-    });
+    if (!inputSel) {
+        const notVisible = new WebAiError({
+            errorCode: 'provider.composer-not-visible',
+            stage: 'composer-prereq',
+            vendor: 'gemini',
+            retryHint: 're-snapshot',
+            message: 'gemini composer not visible',
+            selectorsTried: INPUT_SELECTORS,
+        });
+        // A challenge or login wall is why the composer never appeared;
+        // `re-snapshot` would be the wrong instruction for both.
+        throw (await classifyComposerInterstitial(page, 'gemini', notVisible, {
+            detect: deps?.detectInterstitial,
+        })) || notVisible;
+    }
 
     const selectedModel = await selectGeminiModel(page, input.model);
     if (selectedModel) {

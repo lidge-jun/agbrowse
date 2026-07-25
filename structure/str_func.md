@@ -25,13 +25,13 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 912 | bundled agent workflow skill |
-| `web-ai/` | 118 | 30202 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 119 | 30266 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 10 | 1809 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 150 | 20509 | deterministic module tests |
+| `test/unit/` | 151 | 20670 | deterministic module tests |
 | `test/integration/` | 22 | 3699 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
@@ -85,8 +85,8 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/chatgpt.mjs` | 1510 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
 | `web-ai/chatgpt-response-dom.mjs` | 293 | shared ChatGPT assistant DOM extraction plus the Node-side composer-scoped stop probe |
 | `web-ai/chatgpt-response-observer.mjs` | 169 | ChatGPT observer wake signal and timeout recovery metadata |
-| `web-ai/gemini-live.mjs` | 1010 | Gemini provider send/poll/query/status |
-| `web-ai/grok-live.mjs` | 594 | Grok provider send/poll/query/status |
+| `web-ai/gemini-live.mjs` | 1018 | Gemini provider send/poll/query/status |
+| `web-ai/grok-live.mjs` | 602 | Grok provider send/poll/query/status |
 | `web-ai/mcp-server.mjs` | 467 | stdio JSON-RPC MCP bridge |
 | `web-ai/tool-schema.mjs` | 208 | MCP and AI SDK schema source |
 | `web-ai/answer-artifact.mjs` | 153 | provider poll result artifact normalization |

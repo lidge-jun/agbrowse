@@ -24,6 +24,7 @@ import { WebAiError } from './errors.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
+import { classifyComposerInterstitial } from './composer-interstitial.mjs';
 
 export const GROK_CONTEXT_PACK_WARNING = 'grok-context-pack-not-recommended: prefer inline prompts plus optional --file uploads for Grok; ChatGPT or Gemini handle context packages more reliably.';
 import { attachLocalFileLive, fileInfoFromPath } from './chatgpt-attachments.mjs';
@@ -152,14 +153,21 @@ export async function grokSendWebAi(deps, input = {}) {
 
     await openFreshGrokChat(page, warnings);
     const composerSel = await findFirstSelector(page, COMPOSER_SELECTORS, 10_000);
-    if (!composerSel) throw new WebAiError({
-        errorCode: 'provider.composer-not-visible',
-        stage: 'composer-prereq',
-        vendor: 'grok',
-        retryHint: 're-snapshot',
-        message: 'grok composer not visible',
-        selectorsTried: COMPOSER_SELECTORS,
-    });
+    if (!composerSel) {
+        const notVisible = new WebAiError({
+            errorCode: 'provider.composer-not-visible',
+            stage: 'composer-prereq',
+            vendor: 'grok',
+            retryHint: 're-snapshot',
+            message: 'grok composer not visible',
+            selectorsTried: COMPOSER_SELECTORS,
+        });
+        // A challenge or login wall is why the composer never appeared;
+        // `re-snapshot` would be the wrong instruction for both.
+        throw (await classifyComposerInterstitial(page, 'grok', notVisible, {
+            detect: deps?.detectInterstitial,
+        })) || notVisible;
+    }
     const selectedModel = await selectGrokModel(page, input.model);
 
     const assistantCount = await countResponses(page);

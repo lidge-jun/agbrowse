@@ -6,7 +6,7 @@
  * @typedef {'strong'|'shell-vetoed'|'weak'|'none'} CloudflareEvidenceKind
  * @typedef {{ kind: CloudflareEvidenceKind, evidence: string }} CloudflareVerdict
  * @typedef {{ url: string, title: string, bodyText: string, hasComposer: boolean, hasTurns: boolean, hasChallengeWidget: boolean, hasChallengeScript: boolean }} InterstitialSignals
- * @typedef {{ composer: string[], turns: string[] }} ShellSelectors
+ * @typedef {{ composer: readonly string[], turns: readonly string[] }} ShellSelectors
  * @typedef {{ now: () => number, sleep: (ms: number) => Promise<void> }} Scheduler
  */
 
