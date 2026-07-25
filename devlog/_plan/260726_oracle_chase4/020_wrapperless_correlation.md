@@ -333,3 +333,58 @@ a historical wrapped turn no longer suppresses the wrapperless read.
 | 10 | `isResponseFinished` on `source:'wrapperless'` | `finished: true` at `minTurnIndex` |
 | 10b | wrapped sample with null ids whose DOM vanished | `finished: false` — provenance is explicit (defect 3) |
 | 14 | old wrapperless blocks existed before the send | baseline unaffected (wrapped-only count); the new block still surfaces |
+
+## 7. Audit amendments (A-gate round 3, blocker 1)
+
+Concatenating `[...wrapped, ...wrapperless]` makes `newSnapshots.at(-1)`
+(`chatgpt.mjs:643`) pick by LIST POSITION, not by document position. Reproduced:
+
+```text
+planned order: wrapped-newer@30, wrapperless-older@20
+at(-1)  -> wrapperless-older   (WRONG)
+actual newest -> wrapped-newer
+```
+
+### 7.1 Both sources carry a comparable DOM order
+
+Each reader records the node's index in a single document-order walk, and the
+wrapperless reader deduplicates nodes that match more than one markdown selector:
+
+```diff
+ // both readers, inside the browser context
++    // One document-order pass over the union of candidate nodes gives every
++    // snapshot a comparable `domOrder`; a Set kills duplicates from overlapping
++    // selectors before ordering.
++    const ordered = Array.from(new Set(candidates));
++    ordered.sort((a, b) =>
++        (a.compareDocumentPosition(b) & FOLLOWING) ? -1 : 1);
+-        return { text, messageId, turnId, turnIndex, source };
++        return { text, messageId, turnId, turnIndex, source, domOrder: ordered.indexOf(node) };
+```
+
+For the wrapped path `domOrder` can simply reuse the existing `turnIndex` ordering
+walk; what matters is that both lists are measured against the SAME document.
+
+### 7.2 Merge by DOM order, not by list
+
+```diff
+-        const newSnapshots = [
+-            ...wrapped.slice(baseline.assistantCount),
+-            ...wrapperless,
+-        ].filter(sample => isFinalAnswer(sample.text));
++        const newSnapshots = [...wrapped.slice(baseline.assistantCount), ...wrapperless]
++            .sort((a, b) => a.domOrder - b.domOrder)
++            .filter(sample => isFinalAnswer(sample.text));
+```
+
+`.at(-1)` then means "last in the document", which is what the loop has always
+assumed.
+
+### 7.3 Added criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 15 | wrapped answer AFTER a wrapperless block | `at(-1)` is the wrapped one (blocker-1 case) |
+| 16 | wrapperless answer AFTER a wrapped turn | `at(-1)` is the wrapperless one |
+| 17 | a node matching both `.markdown` and `[data-message-content]` | appears ONCE |
+| 18 | wrapped-only page | ordering byte-identical to today |

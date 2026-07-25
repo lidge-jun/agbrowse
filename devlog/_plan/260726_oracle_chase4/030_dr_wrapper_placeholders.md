@@ -277,3 +277,76 @@ so `{"tool_call_id":..., "title":"Incident report"}` fails on the allowlist anyw
 | 20 | prose quoting `Analysis to=web.run is the literal syntax…` | NOT a wrapper |
 | 21 | `assistant to=web.run` followed by a JSON envelope | wrapper |
 | 22 | `assistant to=web.run` alone on its line | wrapper |
+
+## 7. Audit amendments (A-gate round 3, blocker 2) — AUTHORITATIVE
+
+The vocabulary allowlist was still too generous. Reproduced false positive:
+
+```json
+{"type":"report","role":"assistant","id":"report-2026","index":1,
+ "name":"market.summary","input":{"findings":["Demand rose"],"sources":["Q2 filing"]}}
+```
+
+Every key is in the vocabulary and `name` is token-shaped, so a legitimate
+whole-payload JSON report classified as a tool envelope — reachable any time Deep
+Research is asked to answer in JSON. The nested branch was worse: it accepted any
+object with a `function.name`, without requiring `type: 'function'` or arguments.
+
+### 7.1 Explicit schemas, not a vocabulary
+
+A payload is an envelope only if it matches ONE of three named shapes:
+
+```js
+const ARG_KEYS = ['arguments', 'parameters', 'args', 'input'];
+const ID_KEYS = ['tool_call_id', 'call_id'];
+const TOOL_NAME = /^[\w.:-]+$/;
+const TOOL_ROLES = new Set(['tool', 'function', 'assistant']);
+
+const hasArgs = (o) => ARG_KEYS.some((k) => k in o);
+const tokenName = (v) => typeof v === 'string' && TOOL_NAME.test(v);
+
+/** @param {any} v @returns {boolean} */
+function isToolEnvelopeObject(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+    const keys = new Set(Object.keys(v));
+
+    // Schema A — OpenAI nested function call.
+    if (v.type === 'function' && v.function && typeof v.function === 'object') {
+        const f = v.function;
+        const inner = Object.keys(f);
+        return tokenName(f.name)
+            && hasArgs(f)
+            && inner.every((k) => ['name', 'arguments', 'parameters', 'description'].includes(k));
+    }
+
+    // Schema B — flat call with an explicit tool-call id.
+    if (ID_KEYS.some((k) => keys.has(k))) {
+        return (tokenName(v.name ?? v.tool_name ?? v.recipient) || v.type === 'function')
+            && hasArgs(v);
+    }
+
+    // Schema C — channel/recipient form: a TOOL ROLE plus a token name plus args.
+    if (typeof v.role === 'string' && TOOL_ROLES.has(v.role) && (v.recipient || v.tool_name)) {
+        return tokenName(v.recipient ?? v.tool_name) && hasArgs(v);
+    }
+
+    return false;
+}
+```
+
+The reviewer's report fails all three: no `type:'function'`, no id key, and `role`
+alone without `recipient`/`tool_name` is not schema C. A bare `{name, input}` object
+is no longer an envelope at all — a discriminant is mandatory.
+
+### 7.2 Added criteria
+
+| # | Input | Expected |
+|---|-------|----------|
+| 23 | the reviewer's `{"type":"report","role":"assistant","id":…,"name":"market.summary","input":{…}}` | NOT a wrapper |
+| 24 | `{"name":"web.run","input":{…}}` with no discriminant | NOT a wrapper (a discriminant is required) |
+| 25 | `{"type":"function","function":{"name":"web.run","arguments":"{}"}}` | wrapper (schema A) |
+| 26 | `{"type":"function","function":{"name":"web.run"}}` — no args | NOT a wrapper |
+| 27 | `{"function":{"name":"x","arguments":{},"notes":"…"}}` — stray nested key | NOT a wrapper (nested allowlist) |
+| 28 | `{"tool_call_id":"c1","name":"web.run","arguments":"{}"}` | wrapper (schema B) |
+| 29 | `{"role":"tool","recipient":"web.run","arguments":{}}` | wrapper (schema C) |
+| 30 | `{"role":"assistant","name":"Quarterly Review","input":{…}}` | NOT a wrapper (name not token-shaped, no recipient) |

@@ -248,3 +248,37 @@ function emptyShellHostKind(url) {
 | 16 | malformed url | `none`, no throw |
 | 17 | returned verdict object | has NO `graced` key at all (`'graced' in verdict === false`) |
 | 5' | ChatGPT empty shell | exactly ONE gather cycle, no re-probe (replaces the zero-sleep assertion) |
+
+## 8. Audit amendments (A-gate round 3, blocker 3)
+
+Runtime stripping works, but `classifyInterstitial` is typed
+`@returns {InterstitialResult}` (`interstitial.mjs:5,76`) and that typedef has no
+`graced` field, so the literal fails checkJs:
+
+```text
+TS2353: Object literal may only specify known properties,
+and 'graced' does not exist in type 'InterstitialResult'.
+```
+
+**Fix: `classifyInterstitial` stays purely public.** The host kind is computed in
+`detectInterstitial`, where the loop already has the url:
+
+```diff
+ // classifyInterstitial — unchanged shape, no `graced` anywhere
+     if (!hasComposer && !hasTurns && bodyText.length < 500 && emptyShellHostKind(url) !== 'none') {
+         return { kind: 'empty-shell', evidence: 'no composer and no turns', url, retryHint: 'wait-and-retry' };
+     }
+
+ // detectInterstitial — the loop, not the verdict, knows about grace
+         if (verdict.kind === 'none') {
+             const result = classifyInterstitial(signals);
++            const graced = result.kind === 'empty-shell' && emptyShellHostKind(url) === 'graced';
+             if (!graced || scheduler.now() >= deadline) return result;
+             await scheduler.sleep(...);
+             continue;
+         }
+```
+
+No destructuring, no private typedef, no new field on the public result — the
+distinction lives entirely in the loop. Criterion 17 becomes: the verdict object has
+no `graced` key by construction, and `classifyInterstitial`'s signature is unchanged.

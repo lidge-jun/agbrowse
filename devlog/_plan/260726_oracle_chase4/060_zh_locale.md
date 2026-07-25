@@ -195,3 +195,70 @@ const CHATGPT_SELECTION_ALIASES = Object.freeze({ instant: ['Fast'], pro: ['Heav
 
 Row 13/14 are generated from the CURRENT literals captured before the change, so the
 test fails if the refactor alters any existing verdict.
+
+## 7. Audit amendments (A-gate round 3, blocker 4) — AUTHORITATIVE
+
+Replacing the regex branches with `text.includes(label)` changed six verdicts:
+
+```text
+"Fastball"      instant:  old=false proposed=true    <- embedded token
+"thinking"      thinking: old=true  proposed=false   <- lost case-insensitivity
+"Thinkingness"  thinking: old=false proposed=true
+"Medium"        thinking: old=false proposed=true    <- behavior EXPANSION
+"Prologue"      pro:      old=false proposed=true
+"heavy"         pro:      old=true  proposed=false
+```
+
+And my §6.2 claim that `Medium/High/Extra High` match here today was simply wrong —
+they are not in the current `thinking` branch at all.
+
+### 7.1 Preserve the predicate SHAPE, extend only the alternation
+
+`matchesModelText` keeps word-bounded, case-insensitive regexes; the locale terms are
+injected into the same alternation rather than replacing the mechanism:
+
+```js
+// Browser context. `localePatterns` arrives as an evaluate ARGUMENT: per choice, a
+// pre-built case-insensitive source string. The SHAPE is unchanged from today —
+// ASCII terms keep \b boundaries (so "Fastball" and "Prologue" still miss), and CJK
+// terms use exact-segment matching because \b is meaningless for them.
+function matchesModelText(text, choice, labelsForChoice, localePatterns) {
+    const pattern = localePatterns[choice];
+    if (pattern && new RegExp(pattern, 'i').test(text)) return true;
+    return labelsForChoice.some(label => new RegExp(`(^|\\s)${label}\\b`, 'i').test(text));
+}
+```
+
+with the Node side building, per choice, exactly today's source plus the zh terms:
+
+```js
+const localePatterns = {
+    instant:  '\\b(Instant|Fast)\\b|즉시|(^|\\s)即时(\\s|$)',
+    thinking: '\\b(Thinking|Think)\\b|중간|높음|매우 높음|(^|\\s)(思考|中等|高|极高)(\\s|$)',
+    pro:      '\\b(Pro|Heavy)\\b|Pro 확장|프로 확장|(^|\\s)Pro 扩展(\\s|$)',
+};
+```
+
+Each ASCII alternative is byte-identical to the current branch, so every one of the
+six reproduced verdicts returns to its old value. Only the zh alternatives are new.
+
+**`Medium/High/Extra High` are NOT added here.** They do not match today, and adding
+them would be an unrelated behavior expansion smuggled into a locale row. `高`/`极高`
+appear only as zh effort terms in the `thinking` alternation, mirroring how `중간`/
+`높음`/`매우 높음` already do — that is parity, not expansion. Criterion 16 is
+withdrawn.
+
+### 7.2 Corrected criteria (supersede §6.3 row 16)
+
+| # | Input | Choice | Expected |
+|---|-------|--------|----------|
+| 18 | `Fastball` | instant | false (word boundary preserved) |
+| 19 | `Prologue` | pro | false |
+| 20 | `Thinkingness` | thinking | false |
+| 21 | `thinking` (lowercase) | thinking | true (case-insensitive preserved) |
+| 22 | `heavy` (lowercase) | pro | true |
+| 23 | `Medium` | thinking | **false** — unchanged from today |
+| 24 | `中等` | thinking | true (new) |
+| 25 | `极高` | thinking | true (new) |
+| 26 | `即时` | instant | true (new) |
+| 27 | every en/ko token, old vs new | identical verdicts (table-driven equivalence) |
