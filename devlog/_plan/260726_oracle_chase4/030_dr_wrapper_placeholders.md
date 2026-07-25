@@ -449,6 +449,24 @@ that carry it.
 
 Rows 8-10 are the false-positive guards that the speculative version kept failing.
 
+### 8.2b Test correction (A-gate round 5, blocker 4)
+
+The 120-char floor runs before the new predicate, so short fixtures prove nothing:
+
+```text
+len=11  looks=true  incomplete=true  "Called tool"   <- incomplete via LENGTH, not the marker
+```
+
+Criteria 5-7 therefore split into two assertions each:
+
+| # | Assertion |
+|---|-----------|
+| 5a/6a/7a | `looksLikeDeepResearchToolCallCapture(<short fixture>)` is true — the predicate itself, unmediated |
+| 5b/6b/7b | `isIncompleteDeepResearchText(<same marker padded past 120 chars>)` is true — proves the marker path fires when length cannot mask it |
+
+Row 8's "mentions called tool mid-body" fixture must also exceed 120 chars, or it
+would pass for the wrong reason.
+
 ### 8.3 Corrected scope
 
 IN: `chatgpt-deep-research-report.mjs` (marker list + predicate + one insertion),

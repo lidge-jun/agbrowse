@@ -444,3 +444,133 @@ including containment, and the shared `Map` also removes §7's quadratic
 | 20 | a node appearing in BOTH source lists | one union entry; both records share its `domOrder` |
 | 21 | distinct nodes from different sources | never share a `domOrder` (tie assertion) |
 | 22 | containment (a wrapper enclosing a markdown node) | consistent order, no comparator instability |
+
+## 9. Audit amendments (A-gate round 5, blockers 1-3) — AUTHORITATIVE
+
+### 9.1 Blocker 2 first: the ordering gate would have vetoed every wrapperless answer
+
+This is the one that would have made the whole phase inert. `doesAssistantFollowUser`
+(`chatgpt.mjs:543-562`) searches ONLY `[data-testid^="conversation-turn"]` wrappers
+and returns `false` when it finds a user turn but no wrapped assistant turn
+(`:557-558`). The poll loop calls it for every non-streaming candidate (`:677`), so a
+correctly correlated wrapperless answer is rejected forever. Reproduced:
+
+```text
+<article data-testid="conversation-turn-1"><div data-message-author-role="user">q</div></article>
+<div class="markdown">wrapperless answer</div>
+  -> ordered=false; user=true assistant=false
+```
+
+**Fix: the gate is redundant for a wrapperless candidate, so skip it.**
+
+```diff
+@@ chatgpt.mjs (~:677)
+-        if (latest && !streaming) {
++        // A wrapperless candidate was ADMITTED only because it DOM-follows the
++        // latest user node, so it already carries the exact evidence this gate
++        // exists to check — and the gate cannot see it, because it only knows
++        // conversation-turn wrappers.
++        if (latest && !streaming && latestSnapshot?.source !== 'wrapperless') {
+             const ordered = await doesAssistantFollowUser(page).catch(() => true);
+             if (!ordered) continue;
+         }
+```
+
+### 9.2 Blocker 3: latest-user selection by selector order is wrong
+
+The §5 loop assigns `latestUser` while iterating selectors, so an older
+`[data-turn="user"]` processed after a newer `[data-message-author-role="user"]`
+wins. Reproduced: an OLD answer then reads as "following". Since §8 already builds a
+shared document-order pass, the user nodes join it:
+
+```diff
+-    let latestUser = null;
+-    for (const selector of USER_SELECTORS) {
+-        for (const node of Array.from(document.querySelectorAll(selector))) latestUser = node;
+-    }
++    // Union of ALL user selectors, deduplicated, ordered in the SAME document pass
++    // as the answer candidates — selector iteration order is not document order.
++    const userNodes = orderNodes(USER_SELECTORS.flatMap(
++        (selector) => Array.from(document.querySelectorAll(selector))));
++    const latestUser = userNodes[userNodes.length - 1] || null;
+```
+
+### 9.3 Blocker 1: the evaluated function must be self-contained
+
+§8.1 referenced `collectWrapperlessNodes`, `describeWrapped` and `describeWrapperless`
+without defining them; serialized, it throws `ReferenceError: collectWrapperlessNodes
+is not defined`. Full body — every helper declared inside, per the round-4
+serialization rule:
+
+```js
+/**
+ * Browser-context. Single acquisition for both snapshot sources sharing one
+ * document-order coordinate space. Declares every constant and helper in its own
+ * body: `page.evaluate` serializes the body, not the module.
+ * @param {{ assistantSelectors: string[], resolverSource: string, userSelectors?: string[], markdownSelectors?: string[] }} options
+ * @returns {{ wrapped: any[], wrapperless: any[] }}
+ */
+export function readAssistantSnapshotSources({ assistantSelectors, resolverSource, userSelectors, markdownSelectors }) {
+    const USER_SELECTORS = userSelectors?.length ? userSelectors
+        : ['[data-message-author-role="user"]', '[data-turn="user"]'];
+    const MARKDOWN_SELECTORS = markdownSelectors?.length ? markdownSelectors
+        : ['.markdown', '[data-message-content]'];
+    const WRAPPER_SELECTORS = ['[data-message-author-role]', '[data-turn]', 'article[data-testid^="conversation-turn"]'];
+
+    const anyNode = document.body;
+    const FOLLOWING = anyNode?.ownerDocument?.defaultView?.Node?.DOCUMENT_POSITION_FOLLOWING ?? 4;
+    const isVisible = (node) => {
+        const rect = node.getBoundingClientRect?.();
+        return Boolean(rect) && rect.width > 0 && rect.height > 0;
+    };
+    const orderNodes = (nodes) => {
+        const unique = Array.from(new Set(nodes));
+        unique.sort((a, b) => (a.compareDocumentPosition(b) & FOLLOWING) ? -1 : 1);
+        return unique;
+    };
+    const textOf = (node) => String(node.innerText || node.textContent || '').trim();
+    const describe = (node) => {
+        const messageNode = node.matches?.('[data-message-id]') ? node : node.querySelector?.('[data-message-id]');
+        const turnNode = node.matches?.('[data-testid^="conversation-turn"]') ? node : node.querySelector?.('[data-testid^="conversation-turn"]');
+        return {
+            text: textOf(node),
+            messageId: messageNode?.getAttribute?.('data-message-id') || null,
+            turnId: turnNode?.getAttribute?.('data-testid') || null,
+        };
+    };
+
+    let wrappedNodes = [];
+    try {
+        const resolver = (0, eval)(`(${resolverSource})`);
+        wrappedNodes = resolver(assistantSelectors) || [];
+    } catch { wrappedNodes = []; }
+
+    const userNodes = orderNodes(USER_SELECTORS.flatMap((s) => Array.from(document.querySelectorAll(s))));
+    const latestUser = userNodes[userNodes.length - 1] || null;
+
+    const wrapperlessNodes = orderNodes(MARKDOWN_SELECTORS.flatMap((s) => Array.from(document.querySelectorAll(s))))
+        .filter((node) => isVisible(node))
+        .filter((node) => !node.closest?.(WRAPPER_SELECTORS.join(', ')))
+        .filter((node) => Boolean(latestUser)
+            && (latestUser.compareDocumentPosition(node) & FOLLOWING) !== 0)
+        .filter((node) => textOf(node));
+
+    const order = new Map(orderNodes([...wrappedNodes, ...wrapperlessNodes]).map((node, index) => [node, index]));
+    return {
+        wrapped: wrappedNodes.map((node, turnIndex) => ({ ...describe(node), turnIndex, source: 'wrapped', domOrder: order.get(node) })),
+        wrapperless: wrapperlessNodes.map((node) => ({ ...describe(node), turnIndex: -1, source: 'wrapperless', domOrder: order.get(node) })),
+    };
+}
+```
+
+`readWrapperlessAssistantBlocks` from §5.2 is superseded by this single function.
+
+### 9.4 Added criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 23 | wrapped USER turn + wrapperless answer | completes — the ordering gate is skipped (blocker-2 reproduction) |
+| 24 | wrapped user AND wrapped assistant | the gate still runs, unchanged |
+| 25 | newer `[data-message-author-role="user"]` and older `[data-turn="user"]` | the DOCUMENT-last user wins; an answer preceding it is rejected (blocker-3 reproduction) |
+| 26 | **transport** — real `page.evaluate(readAssistantSnapshotSources, …)` | returns both lists, no `ReferenceError` (blocker-1 reproduction) |
+| 27 | empty-text markdown node | excluded |
