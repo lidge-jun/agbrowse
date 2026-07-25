@@ -157,19 +157,25 @@ FIRST, or the guard rejects the very state the flag exists to fix:
 The dynamic import mirrors the existing pattern at `chatgpt-model.mjs:539`, which
 uses it to avoid a static cycle with `product-surfaces.mjs`.
 
-### 6.3 Warning merge (there is no `warnings` variable)
+### 6.3 Warning merge — inside the existing array (corrected, round-2 blocker 6)
 
-The send result assembles warnings as a literal at `chatgpt.mjs:452-460`. The new
-array joins it there:
+The round-1 diff added a conditional `warnings` key BEFORE the literal's own
+`warnings:` at `chatgpt.mjs:462`, so the later key would simply overwrite it and the
+normalization warning would never appear. The correct edit adds a spread INSIDE the
+existing array:
 
 ```diff
-             usedFallbacks: [...usedFallbacks, ...(selectedModel?.usedFallbacks || []), ...(selectedTools?.usedFallbacks || [])],
-+            ...(surfaceWarnings.length ? { warnings: [...(selectedTools?.warnings || []), ...surfaceWarnings] } : {}),
+@@ web-ai/chatgpt.mjs, the send return literal (~:462)
+             warnings: [
+                 ...rendered.warnings,
+                 ...(contextPack?.warnings || []),
++                ...surfaceWarnings,
+                 ...(repomixMode
+                     ? contextAttachments.map(...)
 ```
 
-B verifies the exact existing `warnings` key composition at that return and merges
-into it rather than replacing it — the diff above is the shape, and the precise
-spread depends on what that literal already carries.
+That is copy-paste executable against the current file; no B-phase discretion
+remains.
 
 ### 6.4 CLI plumbing
 

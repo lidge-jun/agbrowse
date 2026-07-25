@@ -202,3 +202,78 @@ longer matches, because the payload does not END at the fence.
 | 11 | malformed JSON opening the payload | NOT a wrapper (parse failure falls through) |
 | 12 | a 5000-key JSON object with `name` + `arguments` | NOT a wrapper (key-count ceiling) |
 | 13-16 | the original selection cases (wrapper target + complete frame, etc.) | as in §3 rows 8-11 |
+
+## 6. Audit amendments (A-gate round 2, blocker 3) — AUTHORITATIVE over §5
+
+Measured escapes and false positives:
+
+```text
+{"type":"function","function":{"name":"web.run","arguments":"..."}}  detected=false  <- escapes
+{"tool_call_id":"call_1","title":"Incident report", ...}             detected=true   <- false positive
+"Analysis to=web.run is the literal syntax used by ..."              detected=true   <- false positive
+seven-key envelope with name+arguments                                detected=false  <- escapes
+```
+
+### 6.1 Envelope allowlist instead of a key ceiling
+
+```js
+const ENVELOPE_KEYS = new Set([
+    'name', 'tool_name', 'function', 'recipient', 'type', 'role', 'channel',
+    'arguments', 'parameters', 'args', 'input',
+    'tool_call_id', 'call_id', 'function_call', 'id', 'index',
+]);
+const TOOL_NAME = /^[\w.:-]+$/;
+
+/** @param {any} value @returns {boolean} */
+function isToolEnvelopeObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (!keys.length) return false;
+    // EVERY top-level key must belong to the envelope vocabulary. A report object
+    // carrying `title`/`sections`/`summary` therefore never qualifies, no matter
+    // which envelope-ish key it also happens to contain.
+    if (!keys.every((key) => ENVELOPE_KEYS.has(key))) return false;
+
+    // Nested OpenAI shape: {type:'function', function:{name, arguments}}
+    const nested = value.function;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        return typeof nested.name === 'string' && TOOL_NAME.test(nested.name);
+    }
+    const name = value.name ?? value.tool_name ?? value.recipient
+        ?? (typeof value.function === 'string' ? value.function : undefined);
+    const hasArgs = ['arguments', 'parameters', 'args', 'input'].some((k) => k in value);
+    const hasId = ['tool_call_id', 'call_id', 'function_call'].some((k) => k in value);
+    if (hasId && (hasArgs || typeof name === 'string')) return true;   // id alone is not enough
+    return typeof name === 'string' && TOOL_NAME.test(name) && hasArgs;
+}
+```
+
+The allowlist replaces the arbitrary six-key ceiling (which let a seven-key envelope
+escape and would have grown stale), and an ID key now needs a structural companion,
+so `{"tool_call_id":..., "title":"Incident report"}` fails on the allowlist anyway.
+
+### 6.2 Channel marker must be line-bounded AND envelope-followed
+
+```diff
+-    if (/^(?:<\|)?(?:tool|assistant|analysis|commentary)(?:\|>)?\s*to=\S+/i.test(norm)) return true;
++    // Line-bounded, and the remainder must look like an envelope payload — prose
++    // that merely QUOTES "analysis to=web.run" is a report, not a wrapper.
++    const channel = /^(?:<\|)?(?:tool|assistant|analysis|commentary)(?:\|>)?\s+to=(\S+)[ \t]*\n?([\s\S]*)$/i.exec(norm);
++    if (channel) {
++        const rest = channel[2].trim();
++        if (!rest) return true;
++        if (/^[[{]/.test(rest)) { try { return isToolEnvelopeObject(JSON.parse(rest)); } catch { return false; } }
++        return /^```/.test(rest);
++    }
+```
+
+### 6.3 Added criteria
+
+| # | Input | Expected |
+|---|-------|----------|
+| 17 | `{"type":"function","function":{"name":"web.run","arguments":"…"}}` | wrapper (escape closed) |
+| 18 | seven-key envelope, all keys in the vocabulary | wrapper |
+| 19 | `{"tool_call_id":"call_1","title":"Incident report", …}` | NOT a wrapper (allowlist) |
+| 20 | prose quoting `Analysis to=web.run is the literal syntax…` | NOT a wrapper |
+| 21 | `assistant to=web.run` followed by a JSON envelope | wrapper |
+| 22 | `assistant to=web.run` alone on its line | wrapper |

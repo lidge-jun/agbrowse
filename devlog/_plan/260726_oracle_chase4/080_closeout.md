@@ -1,12 +1,38 @@
 # WP9 — Round 5 close-out
 
-Placeholder written at WP1 so every work-phase in the map owns a numbered document
-(A-gate round 1, blocker 9). Filled in at WP9 with the real evidence.
+Diff-level plan for the close-out cycle. Evidence tables are filled at WP9; the
+STEPS below are fixed now so the phase is executable rather than improvised
+(A-gate round 2, blocker 7).
+
+## 0. Executable steps
+
+1. **Fill §1-§2** from the goalplan's `capturedEvidence` — no re-derivation from
+   memory.
+2. **Promote:** `git mv devlog/_plan/260726_oracle_chase4 devlog/_fin/260726_oracle_chase4`
+   (the directory is gitignored, so the follow-up `git add -f devlog/_fin/...` is
+   mandatory).
+3. **Sync counts** in `structure/str_func.md`. The gate is ALREADY red from this
+   round's docs — measured at the round-2 audit:
+
+   ```
+   FAIL devlog/ count drift: doc 553 files/77835 lines vs actual 562 files/79526
+   ```
+
+   Every implementation phase re-runs `npm run docs:counts` and syncs its own rows
+   (`web-ai/`, `test/unit/`, `test/integration/`, per-file line rows). WP9 syncs the
+   final `devlog/` row LAST, after promotion, because promotion itself changes the
+   file count. Rows to touch: `devlog/`, plus any `web-ai/*.mjs` line row the
+   implementation phases moved.
+4. **Fresh gates, in this order:** `npm run test:unit`, `npm run docs:drift`,
+   `npm run docs:counts`, then scoped `npx tsc --noEmit -p tsconfig.checkjs-dom.json`
+   filtered to touched files. Playwright smokes are NOT run and NOT claimed green.
+5. **Push:** `git push origin dev`, then `git rev-parse dev` and
+   `git rev-parse origin/dev` must match; record both.
+6. **Close the FSM** through D and `cxc loop validate`.
 
 ## 1. Outcome
 
-_(WP9 records the terminal outcome here: DONE / NOOP / BLOCKED / UNSAFE /
-NEEDS_HUMAN / BUDGET_EXHAUSTED, per work-phase, with commit SHAs.)_
+_(Terminal outcome per work-phase with commit SHAs.)_
 
 | WP | Rows | Commit | Result |
 |----|------|--------|--------|

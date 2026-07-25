@@ -258,3 +258,78 @@ IN: `readWrapperlessAssistantBlocks`, the `readAssistantSnapshots` fallback, the
 `isResponseFinished` wrapperless branch, tests.
 OUT: `resolveTopLevelAssistantTurns`, the copy-markdown fallback, and the text-only
 reader at `chatgpt.mjs:1358-1361` (which already has its own locator fallback).
+
+## 6. Audit amendments (A-gate round 2, blocker 2) — AUTHORITATIVE over §5
+
+Three defects, all confirmed:
+
+1. **Baseline slicing breaks.** `countAssistantMessages` (`chatgpt.mjs:317`) walks the
+   same `readAssistantSnapshots`, so BEFORE the send the fallback counts old
+   wrapperless blocks (which then follow the previous user) as baseline `N`. AFTER the
+   send those same blocks precede the NEW user node and are dropped, so the reader
+   returns only `M` new blocks. `snapshots.slice(N)` at `:642` then discards the answer
+   whenever `N >= M`.
+2. **Historical wrapped turns suppress it.** §5.2 only consults the fallback when the
+   wrapped list is empty, so one old wrapped turn anywhere hides a new wrapperless
+   answer forever.
+3. **Provenance inferred from null ids is unsafe.** A wrapped snapshot can also carry
+   null `messageId`/`turnId`; if its DOM re-renders before the finish probe it would be
+   wrongly promoted to `finished: true`.
+
+### 6.1 Explicit provenance
+
+Every snapshot carries its origin; nothing is inferred:
+
+```diff
+ // readTopLevelAssistantSnapshots (wrapped path)
+-        return { text, messageId, turnId, turnIndex };
++        return { text, messageId, turnId, turnIndex, source: 'wrapped' };
+ // readWrapperlessAssistantBlocks
++            blocks.push({ text, messageId: null, turnId: null, turnIndex: -1, source: 'wrapperless' });
+```
+
+`isResponseFinished` keys off `sample.source === 'wrapperless'`, never off absent ids.
+
+### 6.2 Wrapperless candidates are already correlated, so they bypass slicing
+
+The reader only emits blocks that DOM-follow the latest user node — that IS the
+"is it new?" test. Baseline slicing would ask the same question a second time with a
+count that is not comparable across sends, so the poll loop separates the two lists:
+
+```diff
+@@ chatgpt.mjs poll loop (~:641)
+-        const snapshots = await readAssistantSnapshots(page);
+-        const newSnapshots = snapshots.slice(baseline.assistantCount).filter(sample => isFinalAnswer(sample.text));
++        const { wrapped, wrapperless } = await readAssistantSnapshotsSplit(page);
++        // Wrapped turns are positional: slice against the pre-send count.
++        // Wrapperless blocks are already correlated by DOM-following the latest
++        // user node, so slicing them against a stale count would drop the answer.
++        const newSnapshots = [
++            ...wrapped.slice(baseline.assistantCount),
++            ...wrapperless,
++        ].filter(sample => isFinalAnswer(sample.text));
+```
+
+and `countAssistantMessages` (which feeds `baseline.assistantCount`) counts the
+WRAPPED list only, so the baseline stays a pure positional count:
+
+```diff
+ async function countAssistantMessages(page) {
+-    return (await readAssistantSnapshots(page)).length;
++    return (await readAssistantSnapshotsSplit(page)).wrapped.length;
+ }
+```
+
+`readAssistantSnapshotsSplit` always reads BOTH lists — defect 2 disappears, because
+a historical wrapped turn no longer suppresses the wrapperless read.
+
+### 6.3 Revised criteria (supersede §5.3 rows 1, 4, 8, 10)
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | wrapperless answer following the latest user, NO wrapped turns | appears in `newSnapshots`; completes |
+| 4 | wrapperless answer AND historical wrapped turns present | still appears (defect 2) |
+| 8 | wrapped answer present | `baseline.assistantCount` counts wrapped only; slicing unchanged |
+| 10 | `isResponseFinished` on `source:'wrapperless'` | `finished: true` at `minTurnIndex` |
+| 10b | wrapped sample with null ids whose DOM vanished | `finished: false` — provenance is explicit (defect 3) |
+| 14 | old wrapperless blocks existed before the send | baseline unaffected (wrapped-only count); the new block still surfaces |

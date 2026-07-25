@@ -131,3 +131,67 @@ IN: `chatgpt-model.mjs` canonical table + the five derived consumers + the two o
 tables, `test/unit/web-ai-chatgpt-model.test.mjs`, transport case.
 OUT: other locales (ja, es, …) — the table makes them a one-line addition, but adding
 them is a separate decision; effort-trigger testIds; and the menu-open timing logic.
+
+## 6. Audit amendments (A-gate round 2, blocker 5) — AUTHORITATIVE over §3
+
+The single canonical table lost existing behavior. Measured:
+
+```text
+Standard Pro  old=true   proposed=false   <- REGRESSION
+Extended Pro  old=true   proposed=false   <- REGRESSION
+Fast          old=false  proposed=true    <- newly matched
+Heavy         old=false  proposed=true    <- newly matched
+```
+
+Root cause: one flat table cannot serve four different vocabularies. `Pro Standard`
+/`Pro Extended` are MENU-ROW labels; `Standard Pro`/`Extended Pro` are observed PILL
+labels (`chatgpt-model.mjs:48`); `Fast`/`Heavy` are selection ALIASES that were never
+valid standalone button text. Flattening them into one alternation both dropped and
+invented matches.
+
+### 6.1 Four canonical sets, not one
+
+```js
+/** Menu-row labels per model choice (selection + verification). */
+const CHATGPT_MODEL_ROW_LABELS = Object.freeze({
+    instant: Object.freeze(['Instant', '즉시', '即时']),
+    thinking: Object.freeze(['Thinking', '思考']),
+    pro: Object.freeze(['Pro', 'Pro Standard', 'Pro Extended', 'Pro 확장', '프로 확장', 'Pro 扩展']),
+});
+/** Effort-row labels (thinking sub-menu). */
+const CHATGPT_EFFORT_LABELS = Object.freeze({
+    medium: Object.freeze(['Medium', '중간', '中等']),
+    high: Object.freeze(['High', '높음', '高']),
+    xhigh: Object.freeze(['Extra High', '매우 높음', '极高']),
+});
+/** Observed pill labels — NOT menu rows. Unchanged from chatgpt-model.mjs:48. */
+export const CHATGPT_OBSERVED_PRO_PILL_LABELS = ['Pro', 'Standard Pro', 'Extended Pro'];
+/** Selection-only aliases: accepted as user input, never matched as button text. */
+const CHATGPT_SELECTION_ALIASES = Object.freeze({ instant: ['Fast'], pro: ['Heavy'] });
+```
+
+### 6.2 Each consumer derives from the RIGHT set
+
+- `CHATGPT_MODEL_TEXT_BUTTON_PATTERN` (`:47`): built from model-row labels + effort
+  labels + the observed pill labels — **never** from the aliases. An equivalence test
+  asserts the derived regex matches exactly the same strings as today's literal for
+  every en/ko token, plus the new zh ones.
+- `matchesModelText` (`:1123`, browser context): receives a COMPOSED per-choice map as
+  an evaluate argument — `{ instant: [...rows, ...aliases], thinking: [...rows,
+  ...allEffortLabels], pro: [...rows, ...aliases] }` — so `thinking` keeps matching
+  `Medium/High/Extra High` as it does today. That omission was blocker 5's third half.
+- `modelChoiceFromText` (`:1376`), `isSimplifiedIntelligenceMenuOpen` (`:1415`),
+  `isModelPillText` (`:1538`): model-row + effort sets, pills for the pill test.
+
+### 6.3 Equivalence is the acceptance bar
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 13 | every en/ko string accepted today by each of the five consumers | still accepted (table-driven old-vs-new equivalence test) |
+| 14 | every string REJECTED today | still rejected — specifically `Fast` and `Heavy` as standalone button text |
+| 15 | `Standard Pro` / `Extended Pro` pills | still recognized |
+| 16 | `matchesModelText('Medium', 'thinking', …)` | true (composed map) |
+| 17 | zh rows 1-12 from §4 | as recorded |
+
+Row 13/14 are generated from the CURRENT literals captured before the change, so the
+test fails if the refactor alters any existing verdict.

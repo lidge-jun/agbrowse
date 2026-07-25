@@ -289,6 +289,33 @@ Poll-loop cases (driven through the existing poll harness):
 | 20 | weak activity, text stable 6s, NO terminal evidence | still polling — `finished` is still required |
 | 21 | no activity, text stable 1.5s, terminal evidence | completes (unchanged baseline) |
 
+## 6. Audit amendments (A-gate round 2, blocker 1)
+
+### 6.1 The generated-image shortcut must NOT see weak as idle
+
+Making `streaming` strong-only was right for the stability block but wrong for the
+image shortcut at `chatgpt.mjs:652`, which fires on `!streaming` BEFORE any terminal
+or ordering evidence and returns on the first detected image
+(`chatgpt-images.mjs:305,325`). Under the round-1 amendment a live `panel-trace`
+would newly enter that path and could return a half-generated image.
+
+**Fix: the shortcut keeps the old, stricter meaning of "idle".**
+
+```diff
+-        if (!streaming && latestSnapshot && session && input.outputImage !== undefined
++        // The image shortcut returns on the FIRST detected image with no terminal
++        // evidence, so it requires true quiet — weak activity is still activity here.
++        if (activity.strength === 'none' && latestSnapshot && session && input.outputImage !== undefined
+             && isImageOnlyGeneratedImageChromeText(latest)) {
+```
+
+Every other consumer was traced with the reviewer and is safe under strong-only:
+heartbeat (wording only), the `:787` reset, `doesAssistantFollowUser` gating at
+`:684`, and the completion proof (still requires `finished`).
+
+New criterion 22: weak `panel-trace` + a detectable image + `outputImage` set →
+the shortcut does NOT fire; the loop continues to the normal completion path.
+
 ### 5.4 Corrected scope
 
 IN: the grammar and strata in `chatgpt-response-dom.mjs`, the poll-loop strength

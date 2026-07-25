@@ -91,7 +91,7 @@ false-confidence test, which is exactly why the triage was fooled.
 
 ## 4. Revised work-phase map (corrected, A-gate round 1 blocker 9)
 
-Six implementation phases, ordered by dependency rather than size:
+Seven implementation phases (WP2-WP8), ordered by dependency rather than size:
 
 ```
 WP1 (this triage)
@@ -133,4 +133,4 @@ The goalplan `workPhases[]` is amended to match this map.
   evidence; "assume it's ours unless proven otherwise" produced a wrong-click path
   in every variant tried.
 - `devlog/` is gitignored — `git add -f`.
-- Push only at WP8, `dev` only, no force-push, no PR.
+- Push only at WP9 (the close-out phase), `dev` only, no force-push, no PR.

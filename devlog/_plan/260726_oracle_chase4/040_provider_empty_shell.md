@@ -192,3 +192,59 @@ same monotonic scheduler the tests already inject.
 
 Row 5's zero-sleep assertion is the guard that keeps this phase honest about the
 byte-identical claim.
+
+## 7. Audit amendments (A-gate round 2, blocker 4) — AUTHORITATIVE over §6
+
+Three defects in the round-1 correction:
+
+**(a) `{ ...result, graced: undefined }` does not delete a property** — it creates an
+own key holding `undefined`, which is observable via `in` and `Object.keys`. The flag
+never enters the public shape at all instead:
+
+```diff
+-        if (result.kind !== 'empty-shell' || !result.graced) return result;
+-        if (scheduler.now() >= deadline) return { ...result, graced: undefined };
++        const { graced, ...verdict } = result;   // graced is loop-internal only
++        if (verdict.kind !== 'empty-shell' || !graced) return verdict;
++        if (scheduler.now() >= deadline) return verdict;
+```
+
+**(b) The zero-`scheduler.sleep` criterion is impossible.** `boundedProbe` races every
+signal probe against `scheduler.sleep` (`interstitial.mjs:130,143`), so sleeps happen
+on any path. Criterion 5 is restated in terms of the thing that actually matters:
+
+> ChatGPT performs exactly ONE `gatherInterstitialSignals` cycle and returns
+> `empty-shell` — assert the gather call count is 1 and that `scheduler.now()` never
+> advances past the first interval.
+
+**(c) The host regex is unanchored**, so `notgrok.com` or any URL merely containing
+`x.com/i/grok` qualifies. Parse instead of pattern-match:
+
+```js
+const IMMEDIATE_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
+const GRACED_HOSTS = new Set(['grok.com', 'gemini.google.com']);
+
+/** @param {string} url @returns {'immediate'|'graced'|'none'} */
+function emptyShellHostKind(url) {
+    let parsed;
+    try { parsed = new URL(url); } catch { return 'none'; }
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (IMMEDIATE_HOSTS.has(host)) return 'immediate';
+    if (GRACED_HOSTS.has(host)) return 'graced';
+    // Grok on X lives at a specific path, not anywhere on the host.
+    if (host === 'x.com' && parsed.pathname.startsWith('/i/grok')) return 'graced';
+    return 'none';
+}
+```
+
+### 7.1 Added criteria
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 12 | `https://notgrok.com/` empty shell | `none` |
+| 13 | `https://evil.example/?u=https://x.com/i/grok` | `none` |
+| 14 | `https://x.com/home` empty | `none` (path guard) |
+| 15 | `https://www.grok.com/` empty past grace | `empty-shell` (www stripped) |
+| 16 | malformed url | `none`, no throw |
+| 17 | returned verdict object | has NO `graced` key at all (`'graced' in verdict === false`) |
+| 5' | ChatGPT empty shell | exactly ONE gather cycle, no re-probe (replaces the zero-sleep assertion) |
