@@ -682,9 +682,13 @@ and `readAssistantSnapshotsSplit`'s inline import names the same type:
 + * @returns {Promise<{ wrapped: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[] }>}
 ```
 
-`isResponseFinished` takes the CORRELATED type only — a union would need
-`'source' in sample` narrowing at every read, and its poll-loop caller now always
-supplies a correlated snapshot. Exact JSDoc diffs:
+`isResponseFinished` takes a UNION and narrows. Correlated-only typing is wrong: it
+has THREE callers (`chatgpt.mjs:672`, `:827`, `:897`), and the timeout-recovery one at
+`:827` receives a base `ChatGptAssistantSnapshot` from `recoverAssistantResponse`
+(`chatgpt-response-observer.mjs:95`), which knows nothing about correlation. Migrating
+recovery to the split reader would be a larger change than this row justifies.
+
+Exact JSDoc diffs:
 
 ```diff
 *** web-ai/chatgpt-response-dom.mjs
@@ -699,16 +703,29 @@ supplies a correlated snapshot. Exact JSDoc diffs:
  /**
   * @param {any} page
 - * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot} sample
-+ * @param {import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot} sample
++ * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot | import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot} sample
   * @param {number} minTurnIndex
   * @returns {Promise<{ finished: boolean, messageId: string|null, turnId: string|null, turnIndex: number }>}
   */
  async function isResponseFinished(page, sample, minTurnIndex) {
 ```
 
-The only other `isResponseFinished` caller is the poll loop itself (`chatgpt.mjs:671`),
-which passes `latestSnapshot` from the split reader — already correlated — so no call
-site needs a cast.
+and the one provenance read inside it narrows first:
+
+```diff
+-        if (result && typeof result === 'object' && result.turnIndex < 0 && sample.source === 'wrapperless') {
++        // `in` narrowing: the recovery caller passes a base snapshot with no
++        // provenance, which must take the ordinary wrapped path.
++        if (result && typeof result === 'object' && result.turnIndex < 0
++            && 'source' in sample && sample.source === 'wrapperless') {
+```
+
+Same for the poll-loop's ordering-gate skip in §9.1, which already uses optional
+chaining (`latestSnapshot?.source !== 'wrapperless'`) and is therefore safe on a base
+snapshot — a base snapshot simply keeps the gate, which is correct.
+
+New criterion 35: `isResponseFinished` called with a BASE snapshot (the recovery
+path) behaves exactly as today — no wrapperless branch, no type error.
 
 **Criterion 34 (revised):** scoped checkJs reports zero `TS2304` AND zero `TS2339`
 for `chatgpt.mjs` and `chatgpt-response-dom.mjs` beyond the pre-existing baseline.
