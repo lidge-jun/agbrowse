@@ -11,6 +11,7 @@ import {
 import {
     detectChatGptComposerSurface,
     detectChatGptWorkAvailability,
+    workSurfaceUnsupportedError,
 } from './product-surfaces.mjs';
 import { anyStopButtonVisible, scopeToMainRegion } from './chatgpt-response-dom.mjs';
 
@@ -281,6 +282,80 @@ export async function ensureWorkSurface(page) {
             errorCode: 'provider.work-state-unknown',
             stage: 'provider-work-preflight',
             message: `Work surface not active after click (post-state: ${postDetection.surface})`,
+            retryHint: 'reload-page',
+            evidence: postDetection,
+        });
+    }
+
+    return { switched: true, detection: postDetection };
+}
+
+/**
+ * Ensure the CHAT surface is active. Mirror of `ensureWorkSurface`.
+ *
+ * NEVER called implicitly — only from an explicit caller opt-in, because
+ * switching a user's composer out of Work is a visible side effect they must
+ * ask for. That opt-in is the whole reason G16 could finally be implemented:
+ * the objection was never to the capability, only to doing it silently.
+ *
+ * @param {any} page
+ * @returns {Promise<{ switched: boolean, detection: import('./product-surfaces.mjs').ComposerSurfaceDetection }>}
+ */
+export async function ensureChatSurface(page) {
+    const detection = await detectChatGptComposerSurface(page);
+
+    if (detection.surface === 'chat') return { switched: false, detection };
+
+    // A conversation page has no toggle to click: normalizing there would mean
+    // navigating away from the user's conversation, which is a different and
+    // much larger action. Fail closed with the existing typed error instead.
+    if (detection.ui === 'legacy') {
+        throw workSurfaceUnsupportedError({
+            surface: detection.surface || 'conversation',
+            evidence: detection,
+        });
+    }
+
+    if (detection.surface === 'ambiguous') {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: 'Cannot ensure Chat surface: ambiguous surface state',
+            retryHint: 'reload-page',
+            evidence: detection,
+        });
+    }
+
+    // detection.surface === 'work' — click the Chat radio.
+    const { CHATGPT_SURFACE_RADIO_SELECTOR } = await import('./chatgpt-model.mjs');
+    const radios = page.locator(CHATGPT_SURFACE_RADIO_SELECTOR);
+    const count = await radios.count().catch(() => 0);
+    let clicked = false;
+    for (let i = 0; i < count; i++) {
+        const el = radios.nth(i);
+        const text = (await el.textContent().catch(() => '') || '').trim();
+        if (/^chat$/i.test(text)) {
+            await el.click({ timeout: 5000 });
+            clicked = true;
+            break;
+        }
+    }
+
+    if (!clicked) {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: 'Chat radio button not found for click',
+            retryHint: 'reload-page',
+        });
+    }
+
+    const postDetection = await detectChatGptComposerSurface(page);
+    if (postDetection.surface !== 'chat') {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: `Chat surface not active after click (post-state: ${postDetection.surface})`,
             retryHint: 'reload-page',
             evidence: postDetection,
         });

@@ -312,6 +312,16 @@ export async function sendWebAi(deps, input = {}) {
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelope(envelope);
+    /** @type {string[]} */
+    const surfaceWarnings = [];
+    if (input.normalizeSurface === true) {
+        // Must run BEFORE selectChatGptModel: its surface guard rejects a Work
+        // surface, which is exactly the state this flag exists to fix. Dynamic
+        // import mirrors the existing pattern that avoids a static cycle.
+        const { ensureChatSurface } = await import('./chatgpt-work-picker.mjs');
+        const normalized = await ensureChatSurface(page);
+        if (normalized.switched) surfaceWarnings.push('composer surface normalized: work -> chat');
+    }
     const selectedModel = await selectChatGptModel(page, input.model, {
         effort: input.reasoningEffort,
         family: input.family,
@@ -465,6 +475,7 @@ export async function sendWebAi(deps, input = {}) {
             warnings: [
                 ...rendered.warnings,
                 ...(contextPack?.warnings || []),
+                ...surfaceWarnings,
                 ...(repomixMode
                     ? contextAttachments.map((/** @type {any} */ attachment) => `context package attached: ${attachment.displayPath || attachment.path}`)
                     : (contextAttachments[0]?.path ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : [])),

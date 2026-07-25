@@ -117,6 +117,8 @@ Commands:
 Provider:
   --vendor <name>     chatgpt | gemini | grok (default: chatgpt)
   --url <url>         Navigate or verify the provider URL before mutation
+  --normalize-surface Switch a ChatGPT composer from Work to Chat before sending
+                      (opt-in; default off, so sends stay zero-touch)
   --model <alias>     Provider model alias; aliases below
                         ChatGPT: instant, thinking, pro
                         Gemini  models: flash-lite, flash, pro
@@ -572,6 +574,7 @@ async function runWebAiCliInner(argv = [], deps) {
         args: argv.slice(1),
         options: {
             vendor: { type: 'string', default: 'chatgpt' },
+            'normalize-surface': { type: 'boolean', default: false },
             url: { type: 'string' },
             prompt: { type: 'string' },
             system: { type: 'string' },
@@ -683,6 +686,7 @@ async function runWebAiCliInner(argv = [], deps) {
 
     const input = {
         vendor: (command === 'watch' && !vendorExplicit) ? null : values.vendor,
+        normalizeSurface: values['normalize-surface'] === true,
         url: values.url,
         prompt: values.prompt,
         system: values.system,
