@@ -373,6 +373,54 @@ describe('adaptive fetch browser escalation', () => {
         expect(result.ok).toBe(true);
         expect(result.safetyFlags).toContain('user_session_used');
     });
+
+    // A CDP connect failure is a plain Error, not a BrowserRequiredError, so the
+    // escalation catch used to rethrow it and the whole fetch died with
+    // internal.unhandled — throwing away text an earlier lane had already read.
+    // Running `agbrowse fetch <url>` without Chrome up hit this on the default
+    // path.
+    it('keeps earlier lane content when browser escalation fails with a plain error', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => {
+                throw new Error('CDP connection failed after 4 attempts: connect ECONNREFUSED 127.0.0.1:9222');
+            },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.content.length).toBeGreaterThan(100);
+        expect(result.attempts.some(a => a.source === 'browser' && a.verdict === 'error')).toBe(true);
+        expect(result.warnings.some(w => w.includes('CDP connection failed'))).toBe(true);
+    });
+
+    // Same failure under `required`: there is no usable candidate, so the verdict
+    // stays browser_required, but the reason why the browser never came up must
+    // survive into the result instead of vanishing.
+    it('reports browser_required with the failure reason when required escalation errors', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/spa',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('', { status: 200, headers: { 'content-type': 'text/html' } }),
+            createIsolatedPage: async () => {
+                throw new Error('CDP connection failed after 4 attempts: connect ECONNREFUSED 127.0.0.1:9222');
+            },
+        });
+        expect(result.ok).toBe(false);
+        expect(result.verdict).toBe('browser_required');
+        expect(result.warnings.some(w => w.includes('CDP connection failed'))).toBe(true);
+    });
 });
 
 function fakePage({ text = '', title = '', url = 'https://example.com/rendered', networkCandidates = [], navResponse = undefined }) {

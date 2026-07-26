@@ -64,6 +64,11 @@ export function normalizeAdaptiveFetchOptions(raw = {}) {
         allowArchive: Boolean(raw.allowArchive),
         interactive: Boolean(raw.interactive),
         optionWarnings: raw.allowArchive ? ['archive-fallback-deferred'] : [],
+        // Filled during the run by lanes whose failure the caller should still
+        // hear about. `attempts` only ships with `--trace`, so without this a
+        // swallowed infrastructure failure would leave no trace at all in the
+        // default JSON output.
+        runtimeWarnings: [],
     };
 }
 
@@ -647,7 +652,7 @@ function finishResult(result, options, trace, runtime = {}) {
         attempts: options.trace ? trace.attempts : [],
         safetyFlags: Array.isArray(result.safetyFlags) ? result.safetyFlags : [],
         evidence,
-        warnings: [...(options.optionWarnings || []), ...(result.warnings || [])],
+        warnings: [...(options.optionWarnings || []), ...(options.runtimeWarnings || []), ...(result.warnings || [])],
         metadata: result.metadata || null,
         _traceSummary: summarizeAttempts(trace.attempts),
     };
@@ -718,16 +723,26 @@ async function tryBrowserEscalation(url, options, deps, trace, challengeInfo) {
         }
         return result;
     } catch (error) {
-        if (error instanceof BrowserRequiredError || (/** @type {any} */ (error))?.code === 'browser_required') {
-            appendAttempt(trace, {
-                source: 'browser',
-                verdict: 'browser_required',
-                url,
-                reason: (/** @type {any} */ (error)).message,
-            });
-            return null;
-        }
-        throw error;
+        // Every other lane in this scheduler records the failure and keeps
+        // going (see the catch blocks around the fetch, feed, third-party
+        // reader, user-session, and human-loop lanes). This one used to
+        // rethrow anything that was not a BrowserRequiredError, so a CDP
+        // connect failure — a plain Error from browser.mjs — killed the whole
+        // fetch and discarded text an earlier lane had already read. Classify
+        // the verdict, but never let the error escape: a browser that will not
+        // come up is an environment state, not an internal fault.
+        const browserRequired = error instanceof BrowserRequiredError
+            || (/** @type {any} */ (error))?.code === 'browser_required';
+        const message = (/** @type {any} */ (error))?.message || 'browser-escalation-error';
+        appendAttempt(trace, {
+            source: 'browser',
+            verdict: browserRequired ? 'browser_required' : 'error',
+            url,
+            reason: message,
+        });
+        // `attempts` is trace-only, so carry the reason into the result too.
+        if (!browserRequired) options.runtimeWarnings.push(`browser-escalation-failed: ${message}`);
+        return null;
     }
 }
 
