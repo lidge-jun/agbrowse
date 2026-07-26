@@ -660,6 +660,77 @@ describe('adaptive fetch browser escalation', () => {
         expect(camoufoxCalls).toBe(0);
     });
 
+    // Phase 1d reads the fetched body and records alternate URLs found in it.
+    // It was unreachable for the same reason the camoufox guard was always
+    // true: the scored wrapper has no `text`, only `candidate.text`. The unit
+    // tests import the discovery helpers directly, so they passed while the
+    // lane never ran in the pipeline.
+    it('records alternate URLs discovered in the fetched body', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Readable body text with a reference. '.repeat(20)
+                + ' See https://github.com/openai/codex and https://arxiv.org/abs/2401.00001 for more.'
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const discovered = result.attempts.filter(a => String(a.reason || '').startsWith('candidate-discovered:'));
+        expect(discovered.length).toBeGreaterThan(0);
+        expect(discovered.map(a => a.url)).toContain('https://github.com/openai/codex');
+    });
+
+    // Discovery classifies each URL into a lane, and the lane rides along in the
+    // attempt reason. Pin it: a bare `candidate-discovered:` with no lane means
+    // ranking silently degraded to unclassified.
+    it('classifies discovered candidates into lanes', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Readable body text with references. '.repeat(20)
+                + ' See https://github.com/openai/codex and https://arxiv.org/abs/2401.00001 for more.'
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const reasons = result.attempts
+            .filter(a => String(a.reason || '').startsWith('candidate-discovered:'))
+            .map(a => a.reason);
+        expect(reasons).toContain('candidate-discovered:package');
+        expect(reasons).toContain('candidate-discovered:academic');
+    });
+
+    // The original URL must not be re-fetched as its own discovered candidate.
+    it('does not rediscover the URL it is already fetching', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Body that links to itself: https://example.com/article and again. '.repeat(20)
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const discoveredUrls = result.attempts
+            .filter(a => String(a.reason || '').startsWith('candidate-discovered:'))
+            .map(a => a.url);
+        expect(discoveredUrls).not.toContain('https://example.com/article');
+    });
+
     // A render the lane itself reports as failed is not evidence. Without the
     // `ok` guard a challenge page body gets promoted into the result.
     it('does not adopt a camoufox render the lane reported as failed', async () => {

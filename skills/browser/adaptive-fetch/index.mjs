@@ -338,7 +338,13 @@ export async function runAdaptiveFetch(input, deps = {}) {
     // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical URLs
     // from the first-pass text, adding them to the reader candidate pool.
     {
-        const bestSoFar = chooseBestReaderCandidate(readerCandidates);
+        // `chooseBestReaderCandidate` returns the SCORED wrapper
+        // (`{ candidate, score, verdict, ... }`), so the body lives under
+        // `.candidate.text`. Reading `.text` off the wrapper made this
+        // condition always false and Phase 1d never ran — the same
+        // wrapper/raw-candidate mix-up that kept the camoufox guard always
+        // true. `resultFromReaderCandidate` is the canonical unwrap.
+        const bestSoFar = chooseBestReaderCandidate(readerCandidates)?.candidate;
         if (bestSoFar?.text) {
             const discovered = extractCandidateUrlsFromText(bestSoFar.text);
             if (discovered.length > 0) {
@@ -346,7 +352,12 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     discovered.map(u => ({ url: u, source: bestSoFar.source || 'fetch' })),
                     { originalUrl: parsed.href },
                 );
-                for (const candidate of ranked.slice(0, 3)) {
+                // `rankDiscoveredCandidates` returns
+                // `{ candidates, lanes, rejected }`, not an array. This line
+                // threw `ranked.slice is not a function` the moment the block
+                // above became reachable — nobody saw it because nobody ever
+                // got here.
+                for (const candidate of (ranked.candidates || []).slice(0, 3)) {
                     if (fetchedUrls.has(candidate.url)) continue;
                     fetchedUrls.add(candidate.url);
                     appendAttempt(trace, {
