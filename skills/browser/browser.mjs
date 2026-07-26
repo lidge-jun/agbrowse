@@ -1538,17 +1538,35 @@ async function navigate(port, url, opts = {}) {
 }
 
 /**
- * Join the `evaluate` argv into the source to run, keeping CLI flags OUT of it.
+ * Flags that consume the following argv token as their value. A flag missing
+ * from this set leaks its VALUE into positional arguments — the defect class
+ * behind `evaluate "1+1" --port 9333` running `1+1 --port 9333` and
+ * `type e2 "hello" --port 9333` typing "hello 9333" into the page.
+ */
+const VALUE_TAKING_FLAGS = new Set([
+    '--amount', '--clip', '--origin', '--port', '--ref', '--timeout',
+    '--unsafe-allow', '--wait-until', '--limit', '--duration', '--filter',
+    '--selector', '--max-nodes', '--max-chars', '--format', '--output',
+    '--idle-after', '--max-tabs', '--provider', '--keep-provider-tabs',
+    '--chrome-path', '--expression',
+]);
+
+/**
+ * Collect the positional arguments from an argv slice, keeping CLI flags AND
+ * their values out of the result.
  *
- * The expression is arbitrary JS executed in the page, so a stray `--port 9333`
- * appended to it is not a cosmetic bug: it silently changes what runs.
- * `--unsafe-allow` takes a value, so its argument is dropped too.
+ * Filtering only tokens that start with `--` is not enough: the flag name goes
+ * away but its value stays behind and is read as a positional argument. That is
+ * how `--port 9333` ended up inside an evaluated expression, a typed string, and
+ * an upload file list.
+ *
+ * Everything after a bare `--` is taken literally, so a positional argument that
+ * merely LOOKS like a flag survives.
  *
  * @param {string[]} args argv after the command name
- * @returns {string}
+ * @returns {string[]}
  */
-export function collectEvaluateExpression(args) {
-    const VALUE_FLAGS = new Set(['--unsafe-allow', '--port']);
+export function collectPositionalArgs(args) {
     // Everything after a bare `--` is expression, never flags. Without this
     // escape hatch a JS token that merely LOOKS like a flag is dropped:
     // `evaluate "let b=5;" "--b"` silently became `let b=5;` and returned
@@ -1560,14 +1578,23 @@ export function collectEvaluateExpression(args) {
     const parts = [];
     for (let i = 0; i < scanned.length; i++) {
         const arg = scanned[i];
-        if (VALUE_FLAGS.has(arg)) {
+        if (VALUE_TAKING_FLAGS.has(arg)) {
             i += 1;
             continue;
         }
         if (arg.startsWith('--')) continue;
         parts.push(arg);
     }
-    return [...parts, ...literal].join(' ');
+    return [...parts, ...literal];
+}
+
+/**
+ * Join the `evaluate` argv into the source to run, keeping CLI flags OUT of it.
+ * @param {string[]} args argv after the command name
+ * @returns {string}
+ */
+export function collectEvaluateExpression(args) {
+    return collectPositionalArgs(args).join(' ');
 }
 
 /**
@@ -2615,7 +2642,10 @@ try {
         }
         case 'type': {
             const [ref, ...rest] = process.argv.slice(3);
-            const text = rest.filter(a => !a.startsWith('--')).join(' ');
+            // Not `filter(a => !a.startsWith('--'))`: that drops the flag NAME
+            // and keeps its value, so `type e2 "hello" --port 9333` typed
+            // "hello 9333" into the page with no error.
+            const text = collectPositionalArgs(rest).join(' ');
             const submit = rest.includes('--submit');
             await typeAction(getPort(), ref, text, { submit });
             console.log(`typed into ${ref}`);
@@ -3046,16 +3076,10 @@ try {
         case 'wait-for-text': {
             const json = process.argv.includes('--json');
             const timeoutIndex = process.argv.indexOf('--timeout');
-            const textArgs = [];
-            for (let i = 3; i < process.argv.length; i++) {
-                if (i === timeoutIndex) {
-                    i += 1;
-                    continue;
-                }
-                if (process.argv[i].startsWith('--')) continue;
-                textArgs.push(process.argv[i]);
-            }
-            const text = textArgs.join(' ');
+            // Only --timeout used to have its value skipped, so every other
+            // flag's value joined the search text: `--port 9333` made this wait
+            // for "QA Fixture 9333" and time out.
+            const text = collectPositionalArgs(process.argv.slice(3)).join(' ');
             if (!text) { console.error('Usage: browser.mjs wait-for-text <text> [--timeout ms] [--json]'); process.exit(1); }
             const timeout = timeoutIndex !== -1 ? parseInt(process.argv[timeoutIndex + 1]) : undefined;
             const wr = await waitForText(getPort(), text, { timeout });
@@ -3112,7 +3136,10 @@ try {
         case 'upload': {
             const json = process.argv.includes('--json');
             const uRef = process.argv[3];
-            const uFiles = process.argv.slice(4).filter(arg => !arg.startsWith('--'));
+            // A flag's value must never become a file path: with a file named
+            // `9333` in cwd, `--port 9333` uploaded it alongside the requested
+            // one and reported success.
+            const uFiles = collectPositionalArgs(process.argv.slice(4));
             if (!uRef || uFiles.length === 0) { console.error('Usage: browser.mjs upload <ref> <file>... [--json]'); process.exit(1); }
             const result = await uploadFiles(getPort(), uRef, uFiles);
             if (json) console.log(JSON.stringify(result, null, 2));

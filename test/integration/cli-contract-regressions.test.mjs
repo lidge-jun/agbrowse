@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execBrowser, stopBrowserIfRunning } from '../helpers/exec-browser.mjs';
 import { startFixtureServer } from '../helpers/fixture-server.mjs';
 import { createTempBrowserEnv, getAvailablePort } from '../helpers/temp-env.mjs';
+import { extractRef } from '../helpers/snapshot-utils.mjs';
 
 /**
  * Regressions found by running the CLI by hand (devlog/_plan/260726_agbrowse_qa).
@@ -130,5 +131,53 @@ describe.sequential('Q2 — evaluate never absorbs a CLI flag into the source', 
             { env },
         );
         expect(result.stdout.trim()).toBe('4');
+    });
+});
+
+describe.sequential('Q8 — a flag VALUE never becomes a positional argument', () => {
+    const temp = createTempBrowserEnv('agbrowse-q8-');
+    const env = temp.env;
+    let port;
+    let server;
+
+    beforeAll(async () => {
+        port = await getAvailablePort();
+        server = await startFixtureServer();
+        await execBrowser(['start', '--headless', '--port', port], { env });
+        await execBrowser(['navigate', server.url], { env });
+        await execBrowser(['snapshot', '--interactive'], { env });
+    });
+
+    afterAll(async () => {
+        await stopBrowserIfRunning(env);
+        await server.close();
+        temp.cleanup();
+    });
+
+    it('type does not append the --port value to the typed text', async () => {
+        // `type e2 "hello" --port <n>` used to type "hello <n>" into the page,
+        // with no error and exit 0 — a silent mutation of user-visible state.
+        const snapshot = await execBrowser(['snapshot', '--interactive'], { env });
+        const ref = extractRef(snapshot.stdout, 'textbox', 'Name');
+        expect(ref).toBeTruthy();
+
+        await execBrowser(['type', ref, 'hello', '--port', port], { env });
+        const read = await execBrowser(
+            ['evaluate', 'document.querySelector("input[aria-label=Name]").value', '--port', port],
+            { env },
+        );
+        expect(read.stdout.trim()).toBe('"hello"');
+    });
+
+    it('wait-for-text does not append the --port value to the search text', async () => {
+        // The contaminated form searched for "Probe Button <n>" and timed out.
+        // A timeout would also fail this test, so assert on the success shape:
+        // a clean exit proves the text was matched as written.
+        const result = await execBrowser(
+            ['wait-for-text', 'Probe Button', '--timeout', '3000', '--port', port, '--json'],
+            { env },
+        );
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ text: 'Probe Button' });
     });
 });
