@@ -99,6 +99,8 @@ Q5(인자 누락의 `internal.unhandled` 오분류)다.
 | Q4 | `README.md:334`가 한 번도 동작한 적 없는 Camoufox 레인을 광고 | 중 | WP6 |
 | Q5 | 인자 누락이 `internal.unhandled` + `retryHint: report`로 표면화 (`context-dry-run`, `context-render`) | 중하 | WP6 |
 | Q6 | Camoufox 결과 필드 불일치(`content` vs `html`)로 레인이 구조적으로 무력 | 중 | WP6 |
+| Q7 | 브라우저 커맨드의 실패가 `--json`/`AGBROWSE_JSON_ERRORS=1`을 무시하고 평문을 냄 | 중 | WP6 |
+| Q8 | `upload`/`type`/`wait-for-text`가 플래그의 **값**을 위치 인자로 흡수 (Q2와 같은 계열) | 높음 | WP6 |
 
 Q1-Q3은 각각 뮤테이션으로 RED를 확인한 뒤에만 "수정됨"으로 적었다. 되돌렸을 때
 실패하는 테스트 수: Q1 1건, Q2 3건, Q3 1건.
