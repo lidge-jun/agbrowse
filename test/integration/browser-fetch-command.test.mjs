@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { constants as bufferConstants } from 'node:buffer';
 import { runAdaptiveFetch, runAdaptiveFetchCli } from '../../skills/browser/adaptive-fetch/index.mjs';
 import { getFetchBrowserPage, BrowserRequiredError } from '../../skills/browser/adaptive-fetch/browser-runtime.mjs';
 import { fetchTextCandidate } from '../../skills/browser/adaptive-fetch/fetcher.mjs';
@@ -902,6 +903,116 @@ describe('adaptive fetch browser escalation', () => {
             createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
         });
         expect(abortedWithinAttemptWindow).toBe(false);
+    });
+
+    // A user typo is not an internal fault. These errors set `code` but the
+    // CLI's top-level handler reads `errorCode`, so every one of them reported
+    // `internal.unhandled` — "report a bug" for a mistyped URL.
+    it('reports a bad URL as an input error, not an internal fault', async () => {
+        await expect(runAdaptiveFetch({ url: 'not-a-url', browserMode: 'never' }, {}))
+            .rejects.toMatchObject({
+                errorCode: 'input.invalid-url',
+                stage: 'input-preflight',
+                retryHint: 'fix-arguments',
+            });
+    });
+
+    // `--timeout-ms` had no upper bound, so a large value reached
+    // `AbortSignal.timeout` and died with a bare RangeError — which the
+    // scheduler now treats as our own bug and rethrows.
+    // Pin the boundary, not just "some huge number". The first ceiling here was
+    // 2^32-1, which `AbortSignal.timeout` accepts and then silently resets to
+    // 1ms — a test that only rejected 5e9 passed against that wrong value.
+    it('rejects a timeout one past the ceiling that AbortSignal honours', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            timeoutMs: 2_147_483_648,
+        }, {})).rejects.toMatchObject({
+            errorCode: 'input.value-out-of-range',
+            stage: 'input-preflight',
+            message: expect.stringContaining('timeoutMs'),
+        });
+    });
+
+    // The ceiling has to be a delay `AbortSignal.timeout` actually honours.
+    // Node does not reject 2^32-1: it warns and resets the delay to 1ms, so a
+    // huge `--timeout-ms` aborted instantly. Respect the signal in the fake, or
+    // this test proves nothing — that is exactly how the wrong ceiling shipped.
+    it('accepts a timeout at the ceiling and still honours the signal', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            publicEndpoints: false,
+            timeoutMs: 2_147_483_647,
+        }, {
+            fetch: async (_url, init) => {
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                if (init?.signal?.aborted) {
+                    const error = new Error('The operation was aborted');
+                    error.name = 'AbortError';
+                    throw error;
+                }
+                return new Response(
+                    '<title>Fine</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    // `maxBytes` never reaches a timer — it bounds a body decoded into a
+    // string, so it gets its own ceiling instead of borrowing the timeout's.
+    it('rejects a max-bytes past the string-decode ceiling', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            // One past MAX_STRING_LENGTH. Borrowing the timeout ceiling here
+            // let a 4GB body limit through, and the decode is what actually
+            // breaks.
+            maxBytes: bufferConstants.MAX_STRING_LENGTH + 1,
+        }, {})).rejects.toMatchObject({
+            errorCode: 'input.value-out-of-range',
+            message: expect.stringContaining('maxBytes'),
+        });
+    });
+
+    it('accepts a max-bytes exactly at the string-decode ceiling', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            publicEndpoints: false,
+            maxBytes: bufferConstants.MAX_STRING_LENGTH,
+        }, {
+            fetch: async () => new Response(
+                '<title>Fine</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    // Mistyping an enum flag was still `internal.unhandled` — "report a bug"
+    // for a typo, the same misclassification the URL errors had.
+    it.each([
+        ['browser', 'bogus', 'input.invalid-browser'],
+        ['identity', 'nope', 'input.invalid-identity'],
+        // camelCase option: the code stays kebab-case like every other one.
+        ['browserSession', 'bogus', 'input.invalid-browser-session'],
+    ])('reports an invalid --%s as an input error', async (key, value, errorCode) => {
+        await expect(runAdaptiveFetch({ url: 'https://example.com/a', [key]: value }, {}))
+            .rejects.toMatchObject({ errorCode, stage: 'input-preflight', retryHint: 'fix-arguments' });
+    });
+
+    // A refusal is not a typo. Telling the caller to fix their arguments after
+    // an SSRF guard fires invites them to retry what we deliberately blocked.
+    it.each([
+        ['http://localhost:8080/x', 'safety.private-network'],
+        ['https://user:pw@example.com/x', 'safety.credential-url'],
+    ])('reports %s as a safety refusal without a retry hint', async (url, errorCode) => {
+        await expect(runAdaptiveFetch({ url, browserMode: 'never' }, {}))
+            .rejects.toMatchObject({ errorCode, stage: 'safety-preflight', retryHint: null });
     });
 });
 

@@ -1,7 +1,8 @@
 // @ts-check
 
 import { parseArgs } from 'node:util';
-import { validateFetchUrl, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safety.mjs';
+import { constants as bufferConstants } from 'node:buffer';
+import { validateFetchUrl, AdaptiveFetchInputError, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safety.mjs';
 import { appendAttempt, createAttemptTrace, summarizeAttempts } from './trace.mjs';
 import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
@@ -76,6 +77,15 @@ function recordLaneFailure(trace, error, { source, url, fallbackReason, lane }) 
 const BROWSER_MODES = new Set(['auto', 'never', 'required']);
 const BROWSER_SESSIONS = new Set(['none', 'isolated', 'existing', 'user', 'interactive']);
 const IDENTITY_MODES = new Set(['auto', 'minimal', 'chrome']);
+// `AbortSignal.timeout` does not reject a delay past 2^31-1 — Node warns
+// `TimeoutOverflowWarning` and silently resets it to 1ms, so asking for an
+// enormous timeout would abort instantly. `camoufox-session` clamps to the
+// same number.
+const MAX_TIMEOUT_MS = 2_147_483_647;
+// A different limit for a different thing: `maxBytes` never reaches a timer,
+// it bounds a response body that is decoded into a string. Past
+// `MAX_STRING_LENGTH` the decode itself throws.
+const MAX_MAX_BYTES = bufferConstants.MAX_STRING_LENGTH;
 
 /**
  * @param {Record<string, unknown>} raw
@@ -97,8 +107,8 @@ export function normalizeAdaptiveFetchOptions(raw = {}) {
         userSessionExplicit,
         humanLoop,
         browserSessionRaw: browserSession,
-        maxBytes: positiveInteger(raw.maxBytes, DEFAULT_MAX_BYTES),
-        timeoutMs: positiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
+        maxBytes: positiveInteger(raw.maxBytes, DEFAULT_MAX_BYTES, MAX_MAX_BYTES, 'maxBytes'),
+        timeoutMs: positiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, 'timeoutMs'),
         selector: typeof raw.selector === 'string' ? raw.selector : null,
         publicEndpoints: raw.publicEndpoints !== false,
         allowPrivateNetwork: Boolean(raw.allowPrivateNetwork),
@@ -670,7 +680,17 @@ export function formatAdaptiveFetchHuman(result) {
 function normalizeEnum(value, allowed, fallback, name) {
     if (value === undefined || value === null || value === '') return fallback;
     const text = String(value);
-    if (!allowed.has(text)) throw new Error(`invalid ${name}: ${text}`);
+    // A plain Error here reached the CLI as `internal.unhandled`, so mistyping
+    // `--browser` read as "report a bug" — the same misclassification the URL
+    // errors had.
+    if (!allowed.has(text)) {
+        throw new AdaptiveFetchInputError(
+            `invalid ${name}: ${text} (expected ${[...allowed].join('|')})`,
+            // kebab-case, like every other code here. `toLowerCase()` alone
+            // flattened `browserSession` into `browsersession`.
+            { code: `invalid-${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}` },
+        );
+    }
     return text;
 }
 
@@ -678,9 +698,20 @@ function normalizeEnum(value, allowed, fallback, name) {
  * @param {unknown} value
  * @param {number} fallback
  */
-function positiveInteger(value, fallback) {
+function positiveInteger(value, fallback, max, label) {
     const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    // Upper bound too. Unbounded, `--timeout-ms` reached `AbortSignal.timeout`
+    // and crashed with a bare RangeError, which the scheduler reads as our own
+    // bug and rethrows. Each option gets its own ceiling — they feed different
+    // machinery and share no natural limit.
+    if (n > max) {
+        throw new AdaptiveFetchInputError(
+            `${label} out of range: ${value} (max ${max})`,
+            { code: 'value-out-of-range' },
+        );
+    }
+    return Math.floor(n);
 }
 
 /**
