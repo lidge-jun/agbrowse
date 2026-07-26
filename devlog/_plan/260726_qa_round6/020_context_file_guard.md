@@ -91,3 +91,41 @@ context-render               → exit=0
 `hasContextPackaging`은 `context-pack/index.mjs` 배럴로 이미 export되어 있어
 `cli.mjs`가 그대로 import할 수 있다. 사본을 정본 호출로 대체하는 것을 다음
 work-phase 후보로 올린다.
+
+## 5. 이 단계에서 함께 고친 것 — WP1 수정이 만든 산발적 실패
+
+WP2 게이트를 돌리다 통합 스위트가 **간헐적으로** 1건 실패하는 것을 봤다. 4회 중
+1회꼴이라 처음엔 재현이 안 됐다.
+
+```
+FAIL test/integration/search-cli.test.mjs > --stdin-results processes piped JSON candidates
+```
+
+원인은 내가 WP1에서 넣은 매핑이다.
+
+```js
+// 이전
+return { ok: output.evidenceStatus !== 'insufficient', output };
+```
+
+`evidenceStatus`는 실패 신호가 아니다. `sufficient` / `partial` / `browse-needed` /
+`insufficient` 네 단계로 **얼마나 많은 증거를 모았는지**를 말하는 사다리이고,
+어느 칸에 떨어지는지는 네트워크 상태에 달렸다. 그 테스트는 실제로
+`httpbin.org`를 fetch하므로, 외부가 느린 날에는 `insufficient`가 되고 내 매핑이
+exit 1을 냈다. `execFileSync`는 비0에서 throw하니 테스트가 죽는다.
+
+**증거를 적게 찾은 검색은 실패한 검색이 아니다.** 매핑을 되돌려 파이프라인은
+항상 `ok: true`를 반환하게 했다. 이 경로에는 자체 실패 모드가 없고, 진짜 실패는
+throw되어 상위에서 잡힌다.
+
+`search --verify`는 그대로 둔다. 그쪽은 진짜 `ok` 필드가 있어서 실패를 종료
+코드로 옮기는 것이 맞다.
+
+```
+search --verify <죽은 도메인>   → exit 1
+search --verify https://example.com → exit 0
+search 파이프라인 (빈 결과)      → exit 0   ← 증거량과 무관
+```
+
+Q11을 고치면서 "실패를 종료 코드로"에 너무 넓게 손을 댄 것이 원인이다. 어떤 필드가
+**실패**를 뜻하고 어떤 필드가 **정도**를 뜻하는지 구분했어야 했다.

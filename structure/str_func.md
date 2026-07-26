@@ -21,7 +21,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 55 | 16511 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
+| `skills/browser/` | 55 | 16517 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 912 | bundled agent workflow skill |
@@ -36,7 +36,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 3583 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
-| `devlog/` | 572 | 82736 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 572 | 82774 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -45,7 +45,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
 | `skills/browser/browser.mjs` | 3713 | root CLI parser, Chrome lifecycle, browser primitive commands |
-| `skills/browser/search.mjs` | 415 | standalone search orchestrator: query rewrite → fetch → evidence score → output |
+| `skills/browser/search.mjs` | 421 | standalone search orchestrator: query rewrite → fetch → evidence score → output |
 | `skills/browser/runway.mjs` | 598 | Runway Apps/Custom selector contract, status/open/preflight command surface |
 | `skills/browser/runway-monitor.mjs` | 383 | Runway read-only queue/completion poller and progress signal extraction |
 | `skills/browser/tab-manager.mjs` | 446 | CDP target list, create, close, switch |
