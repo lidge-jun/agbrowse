@@ -110,6 +110,13 @@ $ du -sh ~/Library/Caches/camoufox
 
 ## 4. 미설치 환경에서의 비용
 
+> **이 절의 비용 서술은 WP8 이전에는 성립하지 않았다.** 이 레인의 실행을 막는
+> `strong_ok` 가드가 죽어 있어서 — 채점 래퍼에만 있는 `verdict` 필드를 raw 후보에서
+> 찾고 있었다 — `never`를 제외한 **모든 모드**에서 매 fetch마다 레인이 탔다. 아래
+> 40~50ms는 미설치 환경의 값이고, **설치된 환경에서는 매 fetch마다 §1의 6.1초**였다.
+> WP8이 가드를 고쳐 이제 이 절이 서술하는 대로 동작한다. 전말은
+> `100_camoufox_regression_pin.md` §3.2에 있다.
+
 "미검증"과 "위험"은 다르다. 이 레인이 지금 무엇을 하는지 쟀다.
 
 ```
@@ -156,7 +163,7 @@ $ node -e "fetchViaCamoufox('https://example.com',{timeoutMs:5000})"
 
 | 근거 | 내용 |
 |------|------|
-| 문서상 약속 — **아직 남아 있다** | Q4가 지운 것은 다른 행이고, `README.md:246`이 여전히 `Camoufox stealth lane`을 기능 목록에 올려 둔다. 같은 README `:185`/`:367`은 stealth를 out of scope이자 forbidden으로 선언하므로 문서 내부가 상충한다. §6의 처분과 함께 정리해야 한다 |
+| 문서상 약속 | Q4가 지운 것은 다른 행이고, `README.md:246`이 `Camoufox stealth lane`을 기능 목록에 올려 둔 채였다. 같은 README `:185`/`:367`은 stealth를 out of scope이자 forbidden으로 선언해 문서 내부가 상충했다. **WP3b에서 정리했다** — `060_ci_install_and_readme_conflict.md` §2 |
 | 무해함 | §4에서 측정. 미설치 시 프로세스당 프로브 2회(40~50ms) 후 no-op |
 | **동작 확인됨** | §1에서 실증. `html` 559자와 제목을 반환하고, §1.1에서 파이프라인 증거로도 채택된다 |
 | 제거는 되돌리기 어렵다 | 코드 92줄 + 테스트를 지우는 것은 이 QA의 권한 밖 제품 판단이다 |
@@ -165,19 +172,20 @@ $ node -e "fetchViaCamoufox('https://example.com',{timeoutMs:5000})"
 그 문장이 성립하지 않는다. 대가는 선언되지 않은 선택적 의존성이 남는 것이고,
 그건 §6에서 다룬다.
 
-### 5.1 Q6 수정은 회귀 테스트로 고정되어 있지 않다
+### 5.1 Q6 수정은 회귀 테스트로 고정되어 있지 않았다 — WP8에서 닫았다
 
 `index.mjs:329`의 `camoResult.html`은 살아 있고, `camoufox-session.mjs:50`의
 typedef와 Python emitter의 `json.dumps({... "html": html ...})`까지 세 지점이
 같은 필드명을 쓴다.
 
-그런데 **이 수정을 지키는 테스트가 없다.** `browser-adaptive-fetch-camoufox.test.mjs`는
-테스트가 1건뿐이고 aborted-signal 경로만 본다. 누가 `camoResult.content`로 되돌려도
-게이트는 초록색이다. Q6이 고친 바로 그 결함이 무방비다.
+처음 이 문서를 쓸 때는 **이 수정을 지키는 테스트가 없었다.**
+`browser-adaptive-fetch-camoufox.test.mjs`는 테스트가 1건뿐이고 aborted-signal
+경로만 본다. 누가 `camoResult.content`로 되돌려도 게이트가 초록색이었다.
 
-이번 라운드에서 고치지 않는 이유는 스폰 없이 이 경로를 테스트하려면 주입 지점이
-필요해 설계 변경이 되기 때문이다. 사용자가 "유지"를 택하면 이것이 다음 후속 작업의
-근거가 된다.
+그때 "주입 지점이 필요해 설계 변경이 된다"고 적었는데, **그것도 틀렸다.** 같은
+파일 `:126`이 이미 `deps.fetch || input.fetchImpl`로 주입 선례를 갖고 있었다.
+설계 변경이 아니라 선례를 한 줄 확장하는 일이었다. WP8에서 닫았고 자세한 것은
+`100_camoufox_regression_pin.md`에 있다.
 
 ## 6. 남는 것 — 사용자 판단이 필요한 지점
 
@@ -186,10 +194,11 @@ typedef와 Python emitter의 `json.dumps({... "html": html ...})`까지 세 지�
 
 - **동작한다.** §1과 §1.1에서 확인했다. 더 이상 "가능성"이 아니다.
 - 설치하지 않으면 비용은 프로세스당 프로브 2회(40~50ms)다. `--browser required`에서는
-  매번 탄다.
-- `README.md:246`이 아직 이 레인을 기능으로 광고한다. 어떤 처분을 택하든 그 행을
-  함께 정리해야 문서 내부의 상충이 해소된다.
-- Q6 수정은 회귀 테스트가 없다(§5.1).
+  매번 탄다. **단, WP8 이전에는 `auto`에서도 매번 탔고 설치된 환경에서는 그것이
+  6.1초였다** — 가드가 죽어 있었다(§4 머리말, `100_...md` §3.2).
+- ~~`README.md:246`의 stealth 상충~~ → WP3b에서 용어를 갈라 해소했다
+  (`060_ci_install_and_readme_conflict.md` §2).
+- ~~Q6 수정은 회귀 테스트가 없다~~ → WP8에서 고정했다(§5.1).
 - 내 검증이 `~/Library/Caches/camoufox`에 656MB를 남겼다(§3.1). 남길지 지울지 결정이 필요하다.
 
 검증 결과가 선택지의 무게를 바꾼다. **동작하는 기능을 제거하는 것**과 **동작하지

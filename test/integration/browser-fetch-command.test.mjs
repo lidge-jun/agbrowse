@@ -560,6 +560,147 @@ describe('adaptive fetch browser escalation', () => {
         expect(calls).toBe(1);
         expect(result.ok).toBe(false);
     });
+
+    // Q6: the lane reads `camoResult.html`. Reading `content` instead made the
+    // candidate's text always '' so it was dropped, and the lane could never
+    // contribute evidence even with camoufox installed. Nothing pinned that
+    // field name until this test, because reaching the lane used to require a
+    // real camoufox install and a browser spawn.
+    it('reads html from the camoufox lane and adopts it as evidence', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({
+                ok: true,
+                url: 'https://example.com/article',
+                title: 'Rendered Title',
+                html: '<title>Rendered Title</title><article>'
+                    + 'Content the camoufox lane rendered. '.repeat(20) + '</article>',
+            }),
+        });
+        expect(result.ok).toBe(true);
+        expect(result.evidence).toContain('camoufox-render');
+        expect(result.content.length).toBeGreaterThan(100);
+        expect(result.attempts.some(a => a.reason === 'camoufox-render')).toBe(true);
+    });
+
+    // The lane must stay a no-op when camoufox returns nothing, and must not
+    // fabricate a candidate from an empty render.
+    it('drops the camoufox candidate when the render carries no text', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({ ok: true, url: 'https://example.com/article', title: '', html: '' }),
+            // Inject the browser lane too, otherwise the verdict below would be
+            // asserting that this environment has no isolated page rather than
+            // anything about the camoufox lane.
+            createIsolatedPage: async () => ({
+                page: fakePage({ text: '', title: '' }),
+                cleanup: async () => undefined,
+            }),
+        });
+        expect(result.evidence).not.toContain('camoufox-render');
+        expect(result.ok).toBe(false);
+    });
+
+    // `--browser never` must not reach the camoufox lane at all. Nothing pinned
+    // this: dropping the browserMode guard left all 1892 tests green while every
+    // `--no-browser` run paid for a spawn.
+    it('never spawns the camoufox lane in browser never mode', async () => {
+        let camoufoxCalls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async () => {
+                camoufoxCalls += 1;
+                return { ok: true, url: 'https://example.com/article', title: 'T', html: '<article>x</article>' };
+            },
+        });
+        expect(camoufoxCalls).toBe(0);
+        expect(result.evidence).not.toContain('camoufox-render');
+    });
+
+    // The lane also has to stay off once an earlier rung already produced a
+    // strong result. It sits before the early-return check, so only the
+    // strong_ok guard stops it paying for a spawn nobody needs.
+    it('does not spawn the camoufox lane once a rung already scored strong_ok', async () => {
+        let camoufoxCalls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Strong Article</title><article><p>'
+                + 'Long readable body text that scores well. '.repeat(80) + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => {
+                camoufoxCalls += 1;
+                return { ok: true, url: 'https://example.com/article', title: 'T', html: '<article>x</article>' };
+            },
+        });
+        expect(result.verdict).toBe('strong_ok');
+        expect(camoufoxCalls).toBe(0);
+    });
+
+    // A render the lane itself reports as failed is not evidence. Without the
+    // `ok` guard a challenge page body gets promoted into the result.
+    it('does not adopt a camoufox render the lane reported as failed', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({
+                ok: false,
+                url: 'https://example.com/article',
+                title: 'Just a moment',
+                html: '<title>Just a moment</title><article>' + 'Checking your browser. '.repeat(20) + '</article>',
+            }),
+        });
+        expect(result.evidence).not.toContain('camoufox-render');
+        expect(result.ok).toBe(false);
+    });
+
+    // The lane is wrapped in `.catch(() => null)`, so a lane that throws must
+    // not take the whole fetch down.
+    it('keeps going when the camoufox lane throws', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => { throw new Error('camoufox spawn failed'); },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.content.length).toBeGreaterThan(100);
+    });
 });
 
 function fakePage({ text = '', title = '', url = 'https://example.com/rendered', networkCandidates = [], navResponse = undefined }) {

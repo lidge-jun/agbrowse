@@ -124,6 +124,11 @@ export async function runAdaptiveFetch(input, deps = {}) {
         identity: options.identity,
     });
     const fetchImpl = /** @type {typeof fetch | undefined} */ (deps.fetch || input.fetchImpl);
+    // Same injection shape as `deps.fetch` above. Without it the camoufox lane
+    // can only be exercised by installing camoufox and spawning a browser, so
+    // nothing stopped the `html` field name from regressing to `content` —
+    // which is exactly the defect Q6 fixed.
+    const camoufoxImpl = /** @type {typeof fetchViaCamoufox} */ (deps.fetchViaCamoufox || fetchViaCamoufox);
     const parsed = validateFetchUrl(options.url, { allowPrivateNetwork: options.allowPrivateNetwork });
     appendAttempt(trace, {
         source: 'validation',
@@ -356,8 +361,14 @@ export async function runAdaptiveFetch(input, deps = {}) {
     // Phase 04c (203.3): Camoufox hardened-fingerprint render. When TLS-impersonation
     // also fails (or wasn't attempted), render through Camoufox before the CDP browser.
     // It normalizes the fingerprint; it does not resolve challenges (README §Boundary).
-    if (!readerCandidates.some(c => c.verdict === 'strong_ok') && options.browserMode !== 'never') {
-        const camoResult = await fetchViaCamoufox(parsed.href, {
+    // `verdict` lives on the SCORED candidate, not the raw one — `fromFetchResult`
+    // never sets it, so `readerCandidates.some(c => c.verdict === 'strong_ok')`
+    // was always false and this lane ran on every non-`never` fetch, including
+    // ones a direct fetch had already answered well. Ask the scorer the way the
+    // browser and user-session lanes below already do.
+    const bestBeforeCamoufox = chooseBestReaderCandidate(readerCandidates);
+    if (bestBeforeCamoufox?.verdict !== 'strong_ok' && options.browserMode !== 'never') {
+        const camoResult = await camoufoxImpl(parsed.href, {
             timeoutMs: options.timeoutMs,
         }).catch(() => null);
         if (camoResult?.ok) {
