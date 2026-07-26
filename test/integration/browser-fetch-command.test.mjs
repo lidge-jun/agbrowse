@@ -689,6 +689,30 @@ describe('adaptive fetch browser escalation', () => {
         expect(discovered.every(a => a.verdict === 'discovered')).toBe(true);
     });
 
+    // The trace summary has to name the lane whose candidate was returned. It
+    // used to report the last attempt, which is a different axis: a fetch that
+    // succeeded on rung 1 was summarized as `browser_required` because the
+    // browser rung ran afterwards and failed.
+    it('summarizes the lane that produced the result, not the last one tried', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.verdict).toBe('weak_ok');
+        expect(result.attempts.some(a => a.verdict === 'browser_required')).toBe(true);
+        expect(result._traceSummary).toContain(`selected source=${result.source} verdict=${result.verdict}`);
+        expect(result._traceSummary).not.toContain('browser_required');
+    });
+
     // The phase must stay a recorder: `agbrowse fetch` reads the one URL it was
     // given. Following discovered links would make every fetch a crawl.
     it('does not fetch the URLs it discovers', async () => {

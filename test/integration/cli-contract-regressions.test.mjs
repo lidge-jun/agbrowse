@@ -462,4 +462,43 @@ describe.sequential('Q9 — tab-cleanup preview and execution share a schema', (
         expect(previewBody.dryRun).toBe(true);
         expect(realBody.dryRun).toBe(false);
     });
+
+    describe('errors name themselves without --json', () => {
+        // `errorCode` is what tells a refusal apart from a typo, and it only
+        // existed in the JSON envelope. Someone running the command by hand saw
+        // `❌ private or local host is not allowed` and `❌ invalid URL` in the
+        // same shape, with no way to know one was a deliberate block.
+        it.each([
+            ['not-a-url', 'input.invalid-url', 'fix-arguments'],
+            ['http://localhost:8080/x', 'safety.private-network', null],
+        ])('prints the error code for %s', async (url, errorCode, retryHint) => {
+            const temp = createTempBrowserEnv('agbrowse-errcode-');
+            try {
+                const result = await execBrowser(['fetch', url, '--browser', 'never'], { env: temp.env });
+                expect(result.code).toBe(1);
+                expect(result.stderr).toContain(errorCode);
+                if (retryHint) expect(result.stderr).toContain(retryHint);
+                // The message still leads; the code annotates it.
+                expect(result.stderr).toContain('❌');
+            } finally {
+                temp.cleanup();
+            }
+        });
+
+        it('does not annotate an unclassified failure with internal.unhandled', async () => {
+            const temp = createTempBrowserEnv('agbrowse-errcode-plain-');
+            try {
+                // No browser needed: an unknown skill name is an unclassified
+                // failure, which is exactly the case that must NOT get a code
+                // line — `internal.unhandled` on screen is noise, not a fact
+                // the caller can act on.
+                const result = await execBrowser(['skills', 'get', 'nonexistent'], { env: temp.env });
+                expect(result.code).toBe(1);
+                expect(result.stderr).not.toContain('internal.unhandled');
+                expect(result.stderr).toContain('❌ unknown skill');
+            } finally {
+                temp.cleanup();
+            }
+        });
+    });
 });

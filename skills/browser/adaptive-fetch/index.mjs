@@ -780,7 +780,7 @@ function finishResult(result, options, trace, runtime = {}) {
         evidence,
         warnings: [...(options.optionWarnings || []), ...(options.runtimeWarnings || []), ...(result.warnings || [])],
         metadata: result.metadata || null,
-        _traceSummary: summarizeAttempts(trace.attempts),
+        _traceSummary: summarizeAttempts(trace.attempts, { source: result.source, verdict: result.verdict }),
     };
 }
 

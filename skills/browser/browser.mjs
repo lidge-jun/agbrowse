@@ -3705,7 +3705,24 @@ try {
                 },
             }, null, 2));
         } else {
+            // The JSON envelope carries `errorCode`/`retryHint`, and those are
+            // what tell a refusal apart from a typo. Without them the human
+            // path made an SSRF block look like a bad URL, so surface the same
+            // facts in one extra line when they exist.
             console.error(`❌ ${err?.message}`);
+            const code = err?.errorCode;
+            // Unclassified failures leave `errorCode` unset — the JSON envelope
+            // fills in `internal.unhandled` as a default, but there is nothing
+            // to show a human, so `code &&` already covers them. The explicit
+            // comparison is a second line of defence for errors that set that
+            // default on themselves (`WebAiError` does): today they never reach
+            // here because `web-ai/cli.mjs` marks them `alreadyReported` after
+            // printing, and this guard is what keeps the noise out if that flag
+            // is ever dropped.
+            if (code && code !== 'internal.unhandled') {
+                const hint = err?.retryHint ? ` · ${err.retryHint}` : '';
+                console.error(`   ${code}${hint}`);
+            }
         }
     }
     process.exit(1);

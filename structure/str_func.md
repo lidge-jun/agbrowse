@@ -21,7 +21,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 55 | 16763 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
+| `skills/browser/` | 55 | 16787 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 912 | bundled agent workflow skill |
@@ -31,12 +31,12 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 156 | 22619 | deterministic module tests |
-| `test/integration/` | 24 | 5010 | CLI, MCP, policy, provider fixture tests |
+| `test/unit/` | 156 | 22654 | deterministic module tests |
+| `test/integration/` | 24 | 5073 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 3583 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
-| `devlog/` | 584 | 84874 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 585 | 85035 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -44,7 +44,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 | 파일 | 라인 수 | 설명 |
 | --- | ---: | --- |
-| `skills/browser/browser.mjs` | 3713 | root CLI parser, Chrome lifecycle, browser primitive commands |
+| `skills/browser/browser.mjs` | 3730 | root CLI parser, Chrome lifecycle, browser primitive commands |
 | `skills/browser/search.mjs` | 421 | standalone search orchestrator: query rewrite → fetch → evidence score → output |
 | `skills/browser/runway.mjs` | 598 | Runway Apps/Custom selector contract, status/open/preflight command surface |
 | `skills/browser/runway-monitor.mjs` | 383 | Runway read-only queue/completion poller and progress signal extraction |
@@ -61,7 +61,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/adaptive-fetch/challenge-detector.mjs` | 91 | WAF-aware challenge/auth/paywall classification |
 | `skills/browser/adaptive-fetch/human-loop.mjs` | 109 | human-in-the-loop challenge resolution with timeout |
 | `skills/browser/adaptive-fetch/browser-session.mjs` | 97 | user session navigation with URL validation (user/interactive modes) |
-| `skills/browser/adaptive-fetch/trace.mjs` | 63 | per-attempt trace with identity field |
+| `skills/browser/adaptive-fetch/trace.mjs` | 70 | per-attempt trace with identity field |
 | `skills/browser/adaptive-fetch/endpoint-resolvers.mjs` | 367 | public endpoint resolution (GitHub, Reddit, HN, Wikipedia, npm, etc.) |
 | `skills/browser/adaptive-fetch/metadata.mjs` | 182 | HTML metadata + JSON-LD extraction |
 | `skills/browser/adaptive-fetch/browser-escalation.mjs` | 206 | isolated Chrome render + network API JSON discovery + defuddle markdown candidate |
