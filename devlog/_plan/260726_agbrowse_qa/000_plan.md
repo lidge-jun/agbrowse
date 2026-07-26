@@ -97,7 +97,7 @@ Q5(인자 누락의 `internal.unhandled` 오분류)다.
 | Q2 | `evaluate`가 뒤따르는 플래그를 표현식에 합침 — 에러 없이 오실행 재현됨 | 높음 | **수정됨** (WP1) |
 | Q3 | `web-ai claim-audit`이 FAIL인데 종료 코드 0 | 높음 | **수정됨** (WP1) |
 | Q4 | `README.md:334`가 한 번도 동작한 적 없는 Camoufox 레인을 광고 | 중 | WP6 |
-| Q5 | 인자 누락이 `internal.unhandled` + `retryHint: report`로 표면화 (`context-dry-run`, `context-render`) | 중하 | WP6 |
+| Q5 | 인자 누락이 `internal.unhandled` + `retryHint: report`로 표면화 (`context-dry-run`, `context-render`) | 중하 | **Q13에 흡수** |
 | Q6 | Camoufox 결과 필드 불일치(`content` vs `html`)로 레인이 구조적으로 무력 | 중 | WP6 |
 | Q7 | 브라우저 커맨드의 실패가 `--json`/`AGBROWSE_JSON_ERRORS=1`을 무시하고 평문을 냄 | 중 | WP6 |
 | Q8 | `upload`/`type`/`wait-for-text`가 플래그의 **값**을 위치 인자로 흡수 (Q2와 같은 계열) | 높음 | **수정됨** (WP3, `ad7f259`) |
@@ -105,6 +105,8 @@ Q5(인자 누락의 `internal.unhandled` 오분류)다.
 | Q10 | Chromium 트랜스포트 테스트 4파일이 기본 실행에서 skipped로 집계되어 통과처럼 보임 | 높음 | WP6 |
 | Q11 | fetch 계열(`fetch`, `search --verify`)이 `ok:false`를 종료 코드로 옮기지 않음 — 실패가 `&&` 체인을 조용히 통과 | 높음 | WP6 |
 | Q12 | `research`가 `--json`에도 평문 오류 (Q7 계열) | 중하 | WP6 |
+| Q13 | 입력 오류의 올바른 패턴(`code-mode.prompt-missing`)이 있는데 네 커맨드가 따르지 않음 (Q5 흡수) | 중 | WP6 |
+| Q14 | `skills install` 실패도 `--json`을 무시하고 평문 (Q7 계열) | 중하 | WP6 |
 
 Q1-Q3은 각각 뮤테이션으로 RED를 확인한 뒤에만 "수정됨"으로 적었다. 되돌렸을 때
 실패하는 테스트 수: Q1 1건, Q2 3건, Q3 1건.
@@ -123,6 +125,7 @@ Q7·Q11·Q12는 따로 고칠 일이 아니다. 전부 **실패를 호출자에�
 | Q7 | 브라우저 커맨드 실패가 `--json`을 무시하고 평문 |
 | Q11 | fetch 계열이 `ok:false`를 종료 코드로 옮기지 않음 |
 | Q12 | `research` 실패가 `--json`을 무시하고 평문 |
+| Q14 | `skills install` 실패가 `--json`을 무시하고 평문 |
 
 설계를 새로 발명할 필요가 없다. **`extract`가 이미 정답을 구현하고 있다**:
 성공이든 실패든 같은 봉투, 실패 종류를 구분하는 `verdict`, 그리고 `ok`와 일치하는
@@ -130,6 +133,11 @@ Q7·Q11·Q12는 따로 고칠 일이 아니다. 전부 **실패를 호출자에�
 
 이식할 지점도 한 줄로 특정된다: `extract.mjs:540`의
 `if (!body.ok) return io.exit(1)`.
+
+Q13도 같은 방식으로 선례가 있다: `cli.mjs:904-912`의
+`code-mode.prompt-missing` + `retryHint: add-prompt`. 새 계열을 설계하는 게 아니라
+이미 있는 패턴을 `render`/`context-dry-run`/`context-render`/`sessions show`로
+넓히는 일이다.
 
 다만 셋의 성격이 같지 않다는 점은 짚어 둔다.
 
@@ -141,6 +149,31 @@ Q7·Q11·Q12는 따로 고칠 일이 아니다. 전부 **실패를 호출자에�
 그래도 고치는 쪽이 맞다. `ok:false`에 exit 0을 내는 것은 계약 위반이고, 같은
 저장소의 `extract`가 이미 반대로 동작하므로 "이게 이 CLI의 관행"이라고 방어할
 근거도 없다.
+
+### 5.2 이 QA가 반복해서 찾아낸 한 가지 모양
+
+발견한 결함 대부분이 같은 구조다. **올바른 방법이 저장소 안에 이미 있는데, 형제
+경로들이 따르지 않는다.**
+
+| 결함 | 이미 옳게 하고 있던 곳 | 따르지 않은 곳 |
+|------|------------------------|----------------|
+| Q8 | WP1이 고친 `evaluate` | `type`, `upload`, `wait-for-text` |
+| Q11 | `extract` (`ok`와 종료 코드 일치) | `fetch`, `search --verify`, `search` |
+| Q13 | `code-mode.prompt-missing` | `render`, `context-dry-run`, `context-render`, `sessions show` |
+| Q1/Q7/Q12/Q14 | `doctor`, `extract`의 `--json` 처리 | `status`, 브라우저 커맨드, `research`, `skills install` |
+
+설계가 없어서 생긴 문제가 아니라 일관성이 없어서 생긴 문제다. 그래서 WP6의 수정은
+전부 "새로 설계"가 아니라 "이미 있는 선례를 형제들로 확장"이 된다. 리뷰하기도
+쉽고, 무엇이 옳은지 논쟁할 필요도 없다.
+
+내가 두 번(Q8 첫 수정, Q13 첫 진단) 같은 함정에 빠진 것도 기록해 둔다. 발견한
+자리만 고치거나, 없는 설계 공백을 상상했다. 결함을 볼 때 **"이 저장소에서 이걸
+제대로 하는 곳이 이미 있는가"**를 먼저 묻는 편이 낫다.
+
+한 가지 단서는 달아 둔다. 이 표는 **이번 QA가 찾은 결함**의 모양이고, 이번 방법은
+플래그 변형과 경계 조건 탐색이었다. 그 방법은 형제 경로 사이의 불일치를 잘 드러낸다.
+동시성, 자원 고갈, 깨진 프로바이더 DOM 같은 다른 방법으로 팠다면 다른 모양의
+결함이 나왔을 것이다. "agbrowse의 모든 결함이 이렇게 생겼다"는 뜻이 아니다.
 
 ## 6. 제약
 
