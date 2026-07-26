@@ -15,11 +15,29 @@
 | WP5 | 브라우저 레인 실패가 확보한 본문을 버림 | **신규** | 해결 | `7dc6d4c` |
 | WP6 | 레인 실패와 자체 버그 구분 | WP5 A-gate | 해결 | `29ac072` |
 | WP7 | 감시하는 척하던 CI 잡 | WP3b A-gate | 해결 | `ebf5b16` |
+| WP8 | Q6 수정에 회귀 테스트 없음 | 라운드 7 후보 → 당김 | 해결 | `0725823` |
+| WP9 | 후보 발견 단계가 도달 불가 | WP8 A-gate | 해결 | `c71507b` |
+| WP10 | 발견 단계의 경계 + 타입 방어 | WP9 A-gate | 해결 | `b81553e` |
 
 이월 4번("다른 결함 모양 — 동시성·자원 고갈·깨진 프로바이더 DOM")은 이번에도
 건드리지 않았다. 범위를 넓히는 대신 1~3번을 실제로 닫는 데 썼다.
 
-### 1.1 사용자에게 보이는 수정과 문서 전용을 구분한다
+### 1.1 라운드가 한 번 더 이어졌다
+
+§4의 이월 목록 4번(Q6 회귀 테스트 부재)을 다음 라운드로 미루는 대신 당겨서 WP8로
+처리했고, 그 A-gate에서 나온 것이 WP9, 또 그 A-gate에서 나온 것이 WP10이다. 세
+work-phase가 연쇄로 열렸고 **각각 실제 결함을 잡았다.**
+
+| WP | 잡은 것 | 성격 |
+|----|---------|------|
+| WP8 | `strong_ok` 가드가 죽어 있어 camoufox가 매 fetch마다 실행 | 설치 환경에서 **6.1초/fetch** |
+| WP9 | Phase 1d가 도달 불가 + 그 안의 `ranked.slice` `TypeError` | 기능 하나가 통째로 죽어 있었다 |
+| WP10 | 발견 attempt가 `weak_ok`로 기록 — 미채점 URL을 통과처럼 표기 | 트레이스가 거짓을 말함 |
+
+**회귀 테스트를 쓰려다 프로덕션 결함을 셋 잡았다.** WP8은 "테스트가 없다"는 항목이었지
+"결함이 있다"는 항목이 아니었다.
+
+### 1.2 사용자에게 보이는 수정과 문서 전용을 구분한다
 
 **동작이 바뀐 것 넷:**
 
@@ -29,8 +47,11 @@
 - WP5 — Chrome이 없어도 `agbrowse fetch <url>`이 읽은 것을 돌려주고 exit 0으로
   끝난다. 기본 사용법에서 밟던 크래시다.
 - WP6 — 레인 실패는 기록하고 계속 가되, 우리 코드의 결함은 삼키지 않는다.
+- WP8 — camoufox가 필요 없을 때 스폰하지 않는다.
+- WP9 — 후보 발견이 실제로 동작한다.
+- WP10 — 트레이스가 미채점 URL을 통과처럼 적지 않는다.
 
-**문서·인프라 정리 넷:** WP2b(중복 제거), WP3(검증 기록), WP3b(CI + README),
+**문서·인프라 정리:** WP2b(중복 제거), WP3(검증 기록), WP3b(CI + README),
 WP7(죽은 잡).
 
 ## 2. 이번 라운드가 가르쳐 준 것
@@ -81,9 +102,33 @@ ENOTFOUND/ECONNREFUSED를 `TypeError`로 던져서, 그대로 넣었으면 죽�
 | WP2b 예측자 사본 | 같은 저장소의 정본 `hasContextPackaging` |
 | WP5 브라우저 레인 rethrow | 형제 catch 5곳 (`:124` `:217` `:265` `:404` `:440`) |
 | WP3b README stealth | 이미 실려 있는 203.1 TLS impersonation |
+| WP8 죽은 `strong_ok` 가드 | 바로 아래 `:427` `:454`가 채점 후 `best.verdict`를 봄 |
+| WP9 Phase 1d 언랩 | 같은 파일 `resultFromReaderCandidate`(`:641`)의 `scored.candidate` |
 
 WP5는 특히 선명하다. 여섯 곳 중 다섯이 같은 형태였고 하나만 달랐다. 설계 판단을
-새로 할 필요가 없었다.
+새로 할 필요가 없었다. **다섯 번 연속으로 정답이 같은 파일 안에 있었다.**
+
+### 2.5 도달 불가 코드는 조용히 썩는다
+
+WP9가 Phase 1d를 살리자 그 안에서 `ranked.slice is not a function`이 즉시 터졌다.
+`rankDiscoveredCandidates`는 배열이 아니라 객체를 반환하는데, **아무도 그 줄을 실행해
+본 적이 없어서** 아무도 몰랐다. 유닛 테스트는 두 함수를 직접 import해 통과하고 있었다.
+
+**"안 돌려본 표면은 미검증"이 함수 단위가 아니라 파이프라인 단위로도 필요하다.**
+함수가 초록인 것과 그 함수가 제품에서 불리는 것은 다른 명제다.
+
+### 2.6 같은 실수가 부호만 바꿔 두 번
+
+`chooseBestReaderCandidate`는 채점 래퍼를 돌려준다. 본문은 `.candidate.text`에,
+`verdict`는 래퍼에 있다. 두 결함이 이 구분을 서로 반대로 놓쳤다.
+
+| 위치 | 잘못 읽은 것 | 결과 |
+|------|--------------|------|
+| camoufox 가드 (WP8) | raw 후보에서 `verdict` | 항상 `undefined` → 조건 **항상 참** → 매번 실행 |
+| Phase 1d (WP9) | 래퍼에서 `text` | 항상 `undefined` → 조건 **항상 거짓** → 전혀 실행 안 됨 |
+
+둘 다 `tsc`를 그냥 통과했다. WP10이 `ScoredReaderCandidate` typedef를 넣어 뒤쪽(Phase 1d)
+방향을 막았다 — 다만 그 방어는 아직 게이트에 걸려 있지 않다(120 §2.1).
 
 ## 3. 게이트
 
@@ -92,14 +137,17 @@ WP5는 특히 선명하다. 여섯 곳 중 다섯이 같은 형태였고 하나�
 
 ```
 npm run test:unit          → 156 files / 1683 tests
-npm run test:integration   → 22 files / 207 tests
+npm run test:integration   → 22 files / 217 tests
 npm run test:e2e           → 1 file / 1 test
 npm run typecheck          → 0
 npm run docs:drift         → 164
 npm run docs:counts        → 76
 ```
 
-통합 스위트가 193 → 207로 늘었다. 라운드 중 추가한 회귀가 14건이다.
+통합 스위트가 193 → 217로 늘었다. 라운드 중 추가한 회귀가 24건이다.
+
+`npm run typecheck:checkjs`는 109건 실패하는데 이 라운드 이전부터의 baseline이다
+(리뷰어가 stash 대조로 확인, 120 §2.1).
 
 ## 4. 라운드 7로 넘기는 것
 
@@ -115,15 +163,18 @@ npm run docs:counts        → 76
 
 ### 4.2 다음 라운드 작업 후보
 
-4. **Q6 수정에 회귀 테스트가 없다.** `camoResult.html`을 `content`로 되돌려도
-   게이트는 초록색이다. 스폰 없이 테스트하려면 주입 지점이 필요해 설계 변경이
-   된다(040 §5.1).
+4. ~~Q6 수정에 회귀 테스트가 없다~~ → WP8에서 닫았다. "설계 변경이 필요하다"던
+   진단 자체가 틀렸다 — 주입 선례가 같은 파일에 이미 있었다(100 §2).
 5. **레인 내부 catch도 프로그래밍 오류를 삼킨다.** WP6은 스케줄러 6곳을 고쳤고,
    `tls-fetch.mjs`·`metadata.mjs`·`browser-session.mjs`의 레인 내부 catch는
    그대로다. `tls-fetch.mjs:118`의 `new URL(location)`이 안전한 것은 그 catch에
-   **의존한** 안전이다(070 §5.1).
+   **의존한** 안전이다(070 §5.1). camoufox 레인도 여기 해당한다(120 §5).
 6. **이월 4번이 그대로 남았다.** 동시성, 자원 고갈, 깨진 프로바이더 DOM. 이번
    방법(플래그 변형·경계 탐색·실경로 실행)이 잘 드러내는 모양은 다 훑었다.
+7. **WP8~WP10이 남긴 여섯 항목** — camoufox `signal` 미전달과 `.catch` 삼킴,
+   `RawReaderCandidate` typedef, `adaptive-fetch/` checkJs 편입,
+   `summarizeAttempts`의 `verdict=discovered` 노출, M-I/M-L, Phase 1d → search
+   배선. 전부 120 §5에 근거와 함께 있다.
 
 ## 5. 커밋
 
@@ -138,3 +189,6 @@ npm run docs:counts        → 76
 | `cdd484a` | WP3b — CI 설치 제거 + README 용어 정리 |
 | `29ac072` | WP6 — 레인 실패와 자체 버그 구분 |
 | `ebf5b16` | WP7 — 죽은 `live-drift` 잡 제거 |
+| `0725823` | WP8 — camoufox 회귀 핀 + 죽은 `strong_ok` 가드 |
+| `c71507b` | WP9 — Phase 1d 도달 가능화 + `ranked.slice` |
+| `b81553e` | WP10 — 발견 경계 확정 + 타입 방어 |
