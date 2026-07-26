@@ -175,4 +175,17 @@ npm run test:integration   → exit 1, 4 files failed, 15 tests never run
 
 ## 9. 푸시
 
-_(푸시 후 기록.)_
+```
+$ git push origin dev
+To https://github.com/lidge-jun/agbrowse.git
+   abb2bcb..68a2b10  dev -> dev
+
+$ git fetch origin dev && git rev-parse dev
+68a2b109ea1aa156d43400a309b7c367bc1e0f94
+$ git rev-parse origin/dev
+68a2b109ea1aa156d43400a309b7c367bc1e0f94
+```
+
+9개 커밋, `abb2bcb..68a2b10`. `dev`만, force-push 없음, PR 없음. `68a2b10`은 이
+close-out 커밋 자신이므로 위 블록은 푸시 증거를 담은 후속 커밋에 실린다 — 커밋은
+자기 다음 커밋의 SHA를 담을 수 없다.
