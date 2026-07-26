@@ -211,7 +211,7 @@ async function snapshotMenuEpoch(page) {
  * @returns {Promise<any>}
  */
 async function evaluateComposerMenu(page, labels, token = null, ownedContainerId = null) {
-    return page.evaluate(resolveComposerMenuItem, {
+    const result = await page.evaluate(resolveComposerMenuItem, {
         containerSelector: MENU_CONTAINER_SELECTOR,
         itemSelector: MENU_ITEM_SELECTOR,
         plusSelectors: PLUS_BUTTON_SELECTORS,
@@ -219,7 +219,13 @@ async function evaluateComposerMenu(page, labels, token = null, ownedContainerId
         menuTextPattern: { source: MENU_OPEN_TEXT_PATTERN.source, flags: MENU_OPEN_TEXT_PATTERN.flags },
         token,
         ownedContainerId,
-    }).catch(() => ({ index: -1, reason: 'no-open-menu' }));
+    }).catch(() => null);
+    // A rejected evaluate and one that RESOLVES null mean the same thing here:
+    // no verdict was produced. Only the former was normalized before, so a page
+    // whose evaluate returns null (any transport that cannot serialize this
+    // call, and every hand-written page double) reached callers as a bare null
+    // and crashed them on `.reason`. Normalize both to the no-verdict shape.
+    return result || { index: -1, reason: 'no-open-menu' };
 }
 
 /**

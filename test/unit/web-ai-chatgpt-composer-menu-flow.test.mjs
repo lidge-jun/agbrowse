@@ -270,4 +270,35 @@ describe('ChatGPT composer menu selection flow (issue #81)', () => {
         expect(result.warnings).toContain('composer plugin not selected: github');
         expect(harness.clicks).not.toContain('GitHub');
     });
+
+    it('treats an evaluate that RESOLVES null as "no verdict" instead of crashing', async () => {
+        // A rejected evaluate was already normalized; one that resolves null was
+        // not, so the bare null reached `result.reason` and threw
+        // "Cannot read properties of null". Any page whose evaluate cannot
+        // serialize this call hits it -- the fake-ChatGPT integration fixture
+        // did, on the ordinary tool-selection path.
+        const page = {
+            locator: () => ({
+                first: () => ({
+                    isVisible: async () => true,
+                    click: async () => undefined,
+                    boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+                    hover: async () => undefined,
+                    getAttribute: async () => null,
+                }),
+                nth: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+            evaluate: async () => null,
+            waitForTimeout: async () => undefined,
+            keyboard: { press: async () => undefined, down: async () => undefined, up: async () => undefined },
+            mouse: { click: async () => undefined },
+        };
+
+        const result = await selectChatGptComposerTools(page, { plugins: ['github'] });
+
+        expect(result.selectedPlugins).toEqual([]);
+        expect(result.warnings).toContain('composer plugin not selected: github');
+    });
 });

@@ -46,6 +46,7 @@ PABCD cycle, not a batched edit. WP9's own result is recorded in §3-§4.
 | WP6 | G81b | `d1d4398` | Ownership is conferred from a single OBSERVED element id read off the specific More locator — never a selector — and forwarded through both post-More resolutions |
 | WP7 | G25 | `edce15e` | zh implemented via canonical label sets with THREE consumer-specific projections, because one shared projection could not preserve three historically different predicates |
 | WP8 | G16 | `661e625` | Opt-in `ensureChatSurface`; chat no-op checked BEFORE the legacy throw, inserted before `selectChatGptModel` whose surface guard rejects Work, warning surfaced to the caller |
+| WP10 | composer-menu null verdict | see §3.2 | Post-push follow-up. Ran the integration suite for the first time in three rounds and fixed the crash it exposed on the plain tool-selection path |
 
 ### 1.1 What the reviewer caught that the implementation missed
 
@@ -72,6 +73,13 @@ serializes a function BODY and not its module bindings, so browser-context
 functions must declare every constant inside themselves and be proven by a real
 transport round trip; and a test that fails by TIMEOUT proves nothing, so a
 mutation must fail on its assertion to count.
+
+WP10 adds a third, and it is the sharpest one of the round: **an inherited
+"known broken" label is a claim, not a fact.** Three rounds restated "Playwright
+smokes fail for missing Chromium" without once testing it. The suite ran fine,
+and it had been hiding a real production crash since round 4. A gate nobody runs
+is indistinguishable from a gate that passes — and strictly worse, because it
+buys false confidence.
 
 ## 2. Final gap-matrix state
 
@@ -134,11 +142,49 @@ npm run docs:counts  -> All structure count checks passed (76)
 
 The round opened at 152 files / 1529 tests, so it adds 4 files and 153 cases.
 
-Not run and deliberately NOT claimed green: the Playwright integration smokes
-(`post-action-smoke`, `self-heal-smoke`) fail here for a missing bundled
-Chromium, which is the pre-existing baseline. The Chromium transport tests added
-in WP2/WP3/WP7 were each verified by the A-gate reviewer with
-`AGBROWSE_CHROMIUM_EXECUTABLE_PATH` pointed at the installed Chrome.
+WP10 (§3.1-§3.2) adds one case and re-runs the set: unit 156 files / **1683**
+tests, integration 21 files / **171** tests, `docs:drift` 164, `docs:counts` 76.
+
+The Chromium transport tests added in WP2/WP3/WP7 were each verified by the
+A-gate reviewer with `AGBROWSE_CHROMIUM_EXECUTABLE_PATH` pointed at the
+installed Chrome.
+
+### 3.1 Correction — the "missing Chromium" baseline was wrong (WP10)
+
+Rounds 3-5 all recorded the Playwright integration smokes as unrunnable for a
+"missing bundled Chromium". That was never true. `playwright-core@1.58.2`
+resolves its default `executablePath()` to build **1208**, which is absent, but
+the cache holds working **1217** and **1228** Chrome-for-Testing builds. The
+repo already ships the escape hatch — `AGBROWSE_CHROMIUM_EXECUTABLE_PATH`, read
+by `test/integration/playwright-launch.mjs`. Pointed at 1228, the smokes run:
+
+```
+$ AGBROWSE_CHROMIUM_EXECUTABLE_PATH=".../chromium-1228/.../Google Chrome for Testing" \
+    npm run test:integration
+Test Files  21 passed (21)
+Tests      171 passed (171)
+```
+
+The cost of that unexamined claim was a real defect sitting in `dev` since
+round 4. Running the suite for the first time surfaced a crash on the ordinary
+tool-selection path — see §3.2.
+
+### 3.2 The defect the unrun suite was hiding
+
+`evaluateComposerMenu` normalized a REJECTED `page.evaluate` to a no-verdict
+shape but not one that RESOLVES `null`, so a bare `null` reached
+`isComposerPlusMenuOpen` and threw `Cannot read properties of null (reading
+'reason')` — through `selectChatGptComposerTools`, on the plain send path.
+
+Bisected to `6aeb656` (round 4's issue-#81 fix), which introduced the
+`result.reason` read. Verified by running the fixture on detached worktrees at
+`6aeb656` and at round 4's tip `e5623a0`: both fail identically, so round 5 did
+not introduce it and round 4 shipped it unseen for exactly this reason.
+
+Fixed by normalizing both no-verdict cases at the single evaluate wrapper. The
+regression test asserts the public `selectChatGptComposerTools` path against a
+page whose `evaluate` resolves `null`; reverting the fix reproduces the exact
+production `TypeError`.
 
 `npm run typecheck:checkjs-dom` is red at repo baseline (184 diagnostics) and
 stays that way. The bar this round holds itself to is **zero NEW diagnostics in
@@ -166,7 +212,7 @@ evidence, since a commit cannot contain its own successor's SHA.
 
 ## 5. Next round
 
-Anchor for round 6: upstream `6009d4ad`, local `dev` at the WP9 close-out commit.
+Anchor for round 6: upstream `6009d4ad`, local `dev` at the WP10 commit.
 
 The clone at `/tmp/oracle-chase-260724` is still valid but lives in `/tmp`, so
 round 6 should re-fetch rather than trust it — and after two consecutive NOOPs the
@@ -176,3 +222,9 @@ planning work begins.
 With the deferred backlog now empty, round 6 has no inherited queue. Its scope is
 whatever upstream ships next, plus anything the reviewer flagged this round as
 honestly-unreachable rather than covered.
+
+One concrete carry-over from WP10: `npm run test:integration` should be part of
+the standard gate set from round 6 on, with `AGBROWSE_CHROMIUM_EXECUTABLE_PATH`
+pointed at a present Chrome-for-Testing build. Pinning `playwright-core` to a
+version whose default build actually exists in the cache would remove the need
+for the override entirely.
