@@ -19,6 +19,8 @@ on:
 jobs:
   fixture-drift:
     runs-on: ubuntu-latest
+    # Runs on PRs touching the paths above, and weekly on the schedule so
+    # dependency updates that move the fixtures still get caught.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,28 +36,12 @@ jobs:
       - run: npm run test:eval
       - run: npm run test:eval-fixtures
       - run: npm run eval:web-ai:fixtures
-        env:
-          AGBROWSE_DRIFT_MODE: fixture
 
-  live-drift:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run test:contract-drift
-        env:
-          AGBROWSE_DRIFT_MODE: live
-        continue-on-error: true
-      - name: Alert on drift
-        if: failure()
-        run: |
-          curl -X POST "$AGBROWSE_ALERT_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d '{"text":"Contract drift detected in live provider check"}'
-        env:
-          AGBROWSE_ALERT_WEBHOOK: ${{ secrets.AGBROWSE_ALERT_WEBHOOK }}
+# A `live-drift` job used to sit here, scheduled weekly with
+# `AGBROWSE_DRIFT_MODE: live` and an alert webhook. It never checked a live
+# provider: nothing in this repository reads AGBROWSE_DRIFT_MODE, so it ran the
+# same fixture command as the job above, and `continue-on-error: true` meant its
+# `if: failure()` alert could not fire either. Auditing a live provider needs a
+# signed-in browser session, which a GitHub runner does not have — so this is
+# not a gap to fill here. Fixture drift is covered above; live drift is caught
+# by running `agbrowse web-ai doctor` against a real session.
