@@ -13,6 +13,7 @@ import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStop
 import { isWorkSession, pollWorkSession, submitWorkPrompt } from './chatgpt-work-picker.mjs';
 import {
     buildContextPackageResult,
+    hasContextPackaging,
     normalizeContextTransformMode,
     prepareContextForBrowser,
     renderContextDryRunReport,
@@ -667,12 +668,17 @@ async function runWebAiCliInner(argv = [], deps) {
     const contextTransform = values.research === 'deep' && ['render', 'send', 'query', 'code'].includes(command)
         ? 'raw'
         : values['context-transform'];
-    const hasRepomixContext = contextTransform === 'repomix';
-    const hasContextPackage = Boolean(
-        values['context-file'] ||
-        (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0) ||
-        hasRepomixContext
-    );
+    // Ask the canonical predicate rather than restating it. This was a
+    // hand-written copy, and copies of it have been wrong three times: the
+    // 'raw' default read as a source, `--context-file` dropped, and `--file`
+    // admitted when the canonical one rejects it. `contextTransform` is passed
+    // post-normalisation (see the assignment above) and after the deep-research
+    // override, so the argument reflects what this command will actually do.
+    const hasContextPackage = hasContextPackaging({
+        contextFile: values['context-file'],
+        contextFromFiles: values['context-from-files'],
+        contextTransform,
+    });
     // --file may repeat → parseArgs yields an array; normalize to a path list.
     const filePaths = (Array.isArray(values.file) ? values.file : (values.file ? [values.file] : [])).filter((value) => typeof value === 'string');
     // context-dry-run and context-render exist to inspect a context package, so

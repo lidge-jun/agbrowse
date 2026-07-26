@@ -353,6 +353,38 @@ describe('Q13 — a missing argument is an input error, not a crash', () => {
             temp.cleanup();
         }
     });
+
+    it('recognises every context source the canonical predicate accepts', async () => {
+        // The CLI used to restate builder.mjs's `hasContextPackaging` by hand,
+        // and every hand-written version was wrong about something: the 'raw'
+        // default read as a source, --context-file dropped, --file admitted.
+        // It now calls the canonical predicate.
+        //
+        // These three inputs are what that predicate accepts. A future copy
+        // that drops any of them lands on input.context-source-missing, which
+        // is exactly how the --context-file regression showed up.
+        const temp = createTempBrowserEnv('agbrowse-wp2b-');
+        const listPath = join(tmpdir(), `agbrowse-wp2b-${Date.now()}.txt`);
+        writeFileSync(listPath, 'web-ai/errors.mjs\n');
+        try {
+            for (const argv of [
+                ['--context-from-files', 'web-ai/errors.mjs'],
+                ['--context-file', listPath],
+                ['--context-transform', 'REPOMIX'],
+            ]) {
+                const result = await execBrowser(
+                    ['web-ai', 'context-dry-run', '--prompt', 'hi', ...argv, '--json'],
+                    { env: temp.env },
+                );
+                const parsed = JSON.parse(result.stdout || result.stderr);
+                expect(parsed.error?.errorCode, `${argv[0]} should be a context source`)
+                    .not.toBe('input.context-source-missing');
+            }
+        } finally {
+            rmSync(listPath, { force: true });
+            temp.cleanup();
+        }
+    });
 });
 
 describe('Q11 — ok:false reaches the exit code', () => {
