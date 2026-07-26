@@ -335,8 +335,13 @@ export async function runAdaptiveFetch(input, deps = {}) {
         }
     }
 
-    // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical URLs
-    // from the first-pass text, adding them to the reader candidate pool.
+    // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical
+    // URLs from the first-pass text and record them in the trace. It deliberately
+    // does NOT fetch them: `agbrowse fetch` reads one URL (README lists it as "a
+    // URL reader, not search"), and following discovered links would turn every
+    // fetch into a crawl and widen the SSRF surface past the one validated URL the
+    // caller asked for. `agbrowse search` is the surface that acts on candidates;
+    // this phase only tells it, and `--trace` readers, what the page pointed at.
     {
         // `chooseBestReaderCandidate` returns the SCORED wrapper
         // (`{ candidate, score, verdict, ... }`), so the body lives under
@@ -361,7 +366,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     if (fetchedUrls.has(candidate.url)) continue;
                     fetchedUrls.add(candidate.url);
                     appendAttempt(trace, {
-                        source: 'metadata', verdict: 'weak_ok', url: candidate.url,
+                        // Not `weak_ok`: nothing fetched or scored this URL, and a
+                        // verdict that implies it passed evaluation misleads anyone
+                        // reading `--trace`.
+                        source: 'metadata', verdict: 'discovered', url: candidate.url,
                         reason: `candidate-discovered:${candidate.lane || 'unknown'}`,
                     });
                 }

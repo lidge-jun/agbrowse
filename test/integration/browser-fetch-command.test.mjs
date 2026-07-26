@@ -683,6 +683,32 @@ describe('adaptive fetch browser escalation', () => {
         const discovered = result.attempts.filter(a => String(a.reason || '').startsWith('candidate-discovered:'));
         expect(discovered.length).toBeGreaterThan(0);
         expect(discovered.map(a => a.url)).toContain('https://github.com/openai/codex');
+        // Discovery records, it does not fetch. A verdict implying the URL passed
+        // evaluation would be a lie in the trace.
+        expect(discovered.every(a => a.verdict === 'discovered')).toBe(true);
+    });
+
+    // The phase must stay a recorder: `agbrowse fetch` reads the one URL it was
+    // given. Following discovered links would make every fetch a crawl.
+    it('does not fetch the URLs it discovers', async () => {
+        const requested = [];
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async (url) => {
+                requested.push(String(url));
+                return new Response(
+                    '<title>Article</title><article><p>'
+                    + 'Readable body text with a reference. '.repeat(20)
+                    + ' See https://github.com/openai/codex for more.</p></article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(requested).toEqual(['https://example.com/article']);
     });
 
     // Discovery classifies each URL into a lane, and the lane rides along in the
