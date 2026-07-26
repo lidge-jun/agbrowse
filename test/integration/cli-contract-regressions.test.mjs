@@ -180,4 +180,28 @@ describe.sequential('Q8 — a flag VALUE never becomes a positional argument', (
         expect(result.code).toBe(0);
         expect(JSON.parse(result.stdout)).toMatchObject({ text: 'Probe Button' });
     });
+
+    it('does not leak the value of a flag it has never heard of', async () => {
+        // The first fix listed the value-taking flags, which fails OPEN: --file
+        // and --browser were not on that list and still leaked. The parser now
+        // assumes an unknown --flag consumes a value, so a flag added later is
+        // safe by default. --file is a real agbrowse flag, so this is not a
+        // hypothetical shape.
+        const snapshot = await execBrowser(['snapshot', '--interactive'], { env });
+        const ref = extractRef(snapshot.stdout, 'textbox', 'Name');
+
+        await execBrowser(['type', ref, 'hello', '--file', '/etc/hosts', '--port', port], { env });
+        const read = await execBrowser(
+            ['evaluate', 'document.querySelector("input[aria-label=Name]").value', '--port', port],
+            { env },
+        );
+        expect(read.stdout.trim()).toBe('"hello"');
+    });
+
+    it('treats --flag=value as self-contained and keeps the next token', async () => {
+        // `--port=9333` carries its value inline, so skipping a following token
+        // would swallow a real positional argument.
+        const result = await execBrowser(['evaluate', `--port=${port}`, '7+1'], { env });
+        expect(result.stdout.trim()).toBe('8');
+    });
 });

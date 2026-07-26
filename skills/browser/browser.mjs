@@ -1538,17 +1538,26 @@ async function navigate(port, url, opts = {}) {
 }
 
 /**
- * Flags that consume the following argv token as their value. A flag missing
- * from this set leaks its VALUE into positional arguments — the defect class
- * behind `evaluate "1+1" --port 9333` running `1+1 --port 9333` and
- * `type e2 "hello" --port 9333` typing "hello 9333" into the page.
+ * Flags that stand alone, taking no value.
+ *
+ * The set is deliberately the BOOLEAN one, not the value-taking one. An
+ * allowlist of value-taking flags fails OPEN: anything missing from it leaks
+ * its value into positional arguments, which is how `--file`, `--browser`, and
+ * a dozen others still leaked after the first pass at this fix listed only the
+ * flags that turned up in one grep. Every new flag would inherit the bug
+ * silently.
+ *
+ * Inverting it fails CLOSED. An unknown `--flag` is assumed to take a value, so
+ * a flag added later is safe by default; the cost of a mistake is a dropped
+ * argument rather than a silently corrupted one. Booleans are also the smaller
+ * and more stable half (18 vs 29 in this CLI).
  */
-const VALUE_TAKING_FLAGS = new Set([
-    '--amount', '--clip', '--origin', '--port', '--ref', '--timeout',
-    '--unsafe-allow', '--wait-until', '--limit', '--duration', '--filter',
-    '--selector', '--max-nodes', '--max-chars', '--format', '--output',
-    '--idle-after', '--max-tabs', '--provider', '--keep-provider-tabs',
-    '--chrome-path', '--expression',
+const BOOLEAN_FLAGS = new Set([
+    '--boxes', '--clear', '--dry-run', '--double', '--force', '--full-page',
+    '--headed', '--headless', '--heavy-site-compat', '--include-disabled',
+    '--include-untracked', '--interactive', '--json', '--keep-bg-networking',
+    '--live-only', '--no-activate', '--no-browser', '--reload', '--right',
+    '--screenshot', '--submit', '--trace',
 ]);
 
 /**
@@ -1578,12 +1587,14 @@ export function collectPositionalArgs(args) {
     const parts = [];
     for (let i = 0; i < scanned.length; i++) {
         const arg = scanned[i];
-        if (VALUE_TAKING_FLAGS.has(arg)) {
-            i += 1;
+        if (!arg.startsWith('--')) {
+            parts.push(arg);
             continue;
         }
-        if (arg.startsWith('--')) continue;
-        parts.push(arg);
+        // `--flag=value` carries its value inline, so nothing extra to skip.
+        if (arg.includes('=') || BOOLEAN_FLAGS.has(arg)) continue;
+        // Unknown flag: assume it takes a value and skip that token too.
+        i += 1;
     }
     return [...parts, ...literal];
 }
