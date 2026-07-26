@@ -1538,6 +1538,39 @@ async function navigate(port, url, opts = {}) {
 }
 
 /**
+ * Join the `evaluate` argv into the source to run, keeping CLI flags OUT of it.
+ *
+ * The expression is arbitrary JS executed in the page, so a stray `--port 9333`
+ * appended to it is not a cosmetic bug: it silently changes what runs.
+ * `--unsafe-allow` takes a value, so its argument is dropped too.
+ *
+ * @param {string[]} args argv after the command name
+ * @returns {string}
+ */
+export function collectEvaluateExpression(args) {
+    const VALUE_FLAGS = new Set(['--unsafe-allow', '--port']);
+    // Everything after a bare `--` is expression, never flags. Without this
+    // escape hatch a JS token that merely LOOKS like a flag is dropped:
+    // `evaluate "let b=5;" "--b"` silently became `let b=5;` and returned
+    // undefined — the same silent-wrong-answer class this function exists to
+    // stop, just from the other direction.
+    const stop = args.indexOf('--');
+    const scanned = stop === -1 ? args : args.slice(0, stop);
+    const literal = stop === -1 ? [] : args.slice(stop + 1);
+    const parts = [];
+    for (let i = 0; i < scanned.length; i++) {
+        const arg = scanned[i];
+        if (VALUE_FLAGS.has(arg)) {
+            i += 1;
+            continue;
+        }
+        if (arg.startsWith('--')) continue;
+        parts.push(arg);
+    }
+    return [...parts, ...literal].join(' ');
+}
+
+/**
  * @param {any} port
  * @param {any} expression
  * @param {any} opts
@@ -2339,9 +2372,16 @@ try {
             }
             break;
         }
-        case 'web-ai':
-            await runWebAiCli(process.argv.slice(3), browserDeps);
+        case 'web-ai': {
+            // A command that REPORTS failure must EXIT with failure. claim-audit
+            // returns {ok:false} for a policy violation without throwing, so
+            // discarding the result made `agbrowse web-ai claim-audit` print
+            // "FAIL" and exit 0 — useless in a `set -e` or `&&` CI chain, which
+            // is exactly how --help tells you to verify claims.
+            const webAiResult = await runWebAiCli(process.argv.slice(3), browserDeps);
+            if (webAiResult && webAiResult.ok === false) process.exit(1);
             break;
+        }
         case 'runway':
             await runRunwayCli(process.argv.slice(3), browserDeps);
             break;
@@ -2377,7 +2417,19 @@ try {
             break;
         case 'status': {
             const r = await getBrowserStatus();
-            console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
+            // --json is this CLI's machine-readable contract (see `doctor`
+            // directly below, and every --json command in help). `status` used
+            // to accept the flag and silently emit the human format, so an
+            // agent parsing it got a JSON.parse error instead of a status.
+            if (process.argv.includes('--json')) {
+                console.log(JSON.stringify({
+                    running: r.running,
+                    tabs: r.tabs,
+                    cdpUrl: r.cdpUrl || null,
+                }, null, 2));
+            } else {
+                console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
+            }
             break;
         }
         case 'doctor': {
@@ -2939,9 +2991,13 @@ try {
         case 'evaluate': {
             const unsafeIndex = process.argv.indexOf('--unsafe-allow');
             const unsafeAllow = unsafeIndex === -1 ? [] : [process.argv[unsafeIndex + 1]].filter(Boolean);
-            const expression = process.argv.slice(3)
-                .filter((arg, index, args) => arg !== '--unsafe-allow' && args[index - 1] !== '--unsafe-allow')
-                .join(' ');
+            // Only --unsafe-allow used to be stripped, so every OTHER flag was
+            // concatenated into the evaluated source: `evaluate "1+1" --port 9333`
+            // ran `1+1 --port 9333`. Usually a SyntaxError, but not always —
+            // `evaluate "globalThis.json = 41; 1 +" --json` parses fine and
+            // silently returns the wrong value. This command executes arbitrary
+            // JS in the page, so a flag must never become part of the source.
+            const expression = collectEvaluateExpression(process.argv.slice(3));
             const r = await evaluate(getPort(), expression, { unsafeAllow });
             console.log(JSON.stringify(r.result, null, 2));
             break;
