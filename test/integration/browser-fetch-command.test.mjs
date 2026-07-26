@@ -798,6 +798,111 @@ describe('adaptive fetch browser escalation', () => {
         expect(result.ok).toBe(true);
         expect(result.content.length).toBeGreaterThan(100);
     });
+
+    // WP6 stopped the other lanes from hiding our own bugs; the camoufox lane
+    // stayed the exception because it is wrapped in a bare `.catch(() => null)`.
+    it('rethrows a programming fault from the camoufox lane', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async () => { throw new TypeError('undefined is not a function'); },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // An infrastructure failure still has to be recorded rather than vanish:
+    // `attempts` only ships with `--trace`, so the reason belongs in warnings.
+    it('records why the camoufox lane failed instead of dropping it', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => { throw new Error('camoufox spawn failed'); },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.ok).toBe(true);
+        // The lane shares `source: 'fetch'` with the direct-fetch lane, so the
+        // reason has to say which one failed.
+        expect(result.attempts.some(a => a.source === 'fetch'
+            && a.verdict === 'error'
+            && a.reason === 'camoufox-render: camoufox spawn failed')).toBe(true);
+        expect(result.warnings.some(w => w === 'camoufox-render-failed: camoufox spawn failed')).toBe(true);
+    });
+
+    // camoufox-session bails before spawning when the deadline already fired,
+    // but only if the caller hands it a signal. It never did.
+    it('gives the camoufox lane an abort signal so it can bail before spawning', async () => {
+        let received;
+        let abortedOnEntry;
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            timeoutMs: 5000,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async (_url, options) => {
+                received = options?.signal;
+                abortedOnEntry = options?.signal?.aborted;
+                return null;
+            },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(received).toBeInstanceOf(AbortSignal);
+        // A signal that is already aborted, or one that never fires, both satisfy
+        // "is an AbortSignal" while disabling or unbounding the lane.
+        expect(abortedOnEntry).toBe(false);
+    });
+
+    // The budget has to leave room for a browser launch. Signalling at
+    // `timeoutMs` aborts mid-launch: measured at `--timeout-ms 1500`, the fetch
+    // went from ok:true to ok:false with no attempt recorded.
+    it('budgets the camoufox signal above the per-attempt timeout', async () => {
+        const timeoutMs = 50;
+        let abortedWithinAttemptWindow = null;
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            timeoutMs,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async (_url, options) => {
+                // Outlast the per-attempt window by a margin. A signal budgeted at
+                // `timeoutMs` has fired by now; one that leaves launch headroom
+                // has not.
+                await new Promise((resolve) => setTimeout(resolve, timeoutMs * 4));
+                abortedWithinAttemptWindow = options.signal.aborted;
+                return null;
+            },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(abortedWithinAttemptWindow).toBe(false);
+    });
 });
 
 function fakePage({ text = '', title = '', url = 'https://example.com/rendered', networkCandidates = [], navResponse = undefined }) {

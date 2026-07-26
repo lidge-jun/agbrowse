@@ -21,7 +21,7 @@ import { parsePublicFeed, formatFeedEvidence } from './feed-parser.mjs';
 import { extractStructuredContent } from './structured-extractor.mjs';
 import { extractCandidateUrlsFromText, rankDiscoveredCandidates } from './candidate-discovery.mjs';
 import { ytdlpMetadata, ytdlpSubtitles, formatYtdlpEvidence } from './ytdlp-reader.mjs';
-import { fetchViaCamoufox } from './camoufox-session.mjs';
+import { fetchViaCamoufox, camoufoxBudgetMs } from './camoufox-session.mjs';
 
 /**
  * Decide whether a thrown value is our own bug rather than a lane failure.
@@ -50,15 +50,18 @@ function isProgrammerError(error) {
  *
  * @param {{ attempts: object[] }} trace
  * @param {unknown} error
- * @param {{ source: string, url: string, fallbackReason: string }} context
+ * @param {{ source: string, url: string, fallbackReason: string, lane?: string }} context
  */
-function recordLaneFailure(trace, error, { source, url, fallbackReason }) {
+function recordLaneFailure(trace, error, { source, url, fallbackReason, lane }) {
     if (isProgrammerError(error)) throw error;
+    const message = (/** @type {any} */ (error))?.message || fallbackReason;
     appendAttempt(trace, {
         source,
         verdict: 'error',
         url,
-        reason: (/** @type {any} */ (error))?.message || fallbackReason,
+        // Lanes that share a `source` with another lane say which one they are,
+        // otherwise their failures are indistinguishable in the trace.
+        reason: lane ? `${lane}: ${message}` : message,
     });
 }
 
@@ -387,9 +390,36 @@ export async function runAdaptiveFetch(input, deps = {}) {
     // browser and user-session lanes below already do.
     const bestBeforeCamoufox = chooseBestReaderCandidate(readerCandidates);
     if (bestBeforeCamoufox?.verdict !== 'strong_ok' && options.browserMode !== 'never') {
-        const camoResult = await camoufoxImpl(parsed.href, {
-            timeoutMs: options.timeoutMs,
-        }).catch(() => null);
+        // The lane checks `signal.aborted` before spawning and passes the signal
+        // to execFile, but only if the caller supplies one, so the whole abort
+        // path was unreachable in production.
+        //
+        // The signal must expire with the lane's process budget, not with
+        // `timeoutMs`. `timeoutMs` is per-attempt (see `--timeout-ms` in the
+        // help) and the Python script spends it on `page.goto`; the lane allows
+        // launch headroom on top. Signalling at `timeoutMs` aborts mid-launch —
+        // measured: at `--timeout-ms 1500` the fetch went from ok:true to
+        // ok:false with no attempt recorded. `camoufoxBudgetMs` is the one
+        // definition both sides use.
+        let camoResult = null;
+        try {
+            camoResult = await camoufoxImpl(parsed.href, {
+                timeoutMs: options.timeoutMs,
+                signal: AbortSignal.timeout(camoufoxBudgetMs(options.timeoutMs)),
+            });
+        } catch (error) {
+            // A bare `.catch(() => null)` here swallowed our own bugs too — the
+            // exact thing the sibling lanes stopped doing. Same rule for this one.
+            recordLaneFailure(trace, error, {
+                source: 'fetch',
+                lane: 'camoufox-render',
+                url: parsed.href,
+                fallbackReason: 'camoufox-render-error',
+            });
+            options.runtimeWarnings.push(
+                `camoufox-render-failed: ${(/** @type {any} */ (error))?.message || 'camoufox-error'}`,
+            );
+        }
         if (camoResult?.ok) {
             const camoCandidate = fromFetchResult({
                 ok: true, status: 200, finalUrl: camoResult.url || parsed.href,
