@@ -321,7 +321,12 @@ export async function runAdaptiveFetch(input, deps = {}) {
         if (camoResult?.ok) {
             const camoCandidate = fromFetchResult({
                 ok: true, status: 200, finalUrl: camoResult.url || parsed.href,
-                contentType: 'text/html', text: camoResult.content || '', headers: {},
+                // `html`, not `content`: CamoufoxResult and the Python emitter
+                // both produce `html`. Reading `content` made `text` always ''
+                // and the candidate was then dropped by the `if` below, so this
+                // lane could never contribute evidence even with Camoufox
+                // installed.
+                contentType: 'text/html', text: camoResult.html || '', headers: {},
             }, { source: 'fetch', label: 'camoufox' });
             camoCandidate.evidence = [...(camoCandidate.evidence || []), 'camoufox-render'];
             const scored = scoreReaderCandidate(camoCandidate);
@@ -507,6 +512,10 @@ export async function runAdaptiveFetchCli(args, deps = {}) {
     } else {
         await writeStdoutLine(formatAdaptiveFetchHuman(result), /** @type {any} */ (deps.stdout));
     }
+    // The caller turns this into an exit code. Reporting ok:false while exiting
+    // 0 let a failed fetch pass silently through `&&` chains and `set -e`, with
+    // downstream steps running on empty content.
+    return result;
 }
 
 export function formatAdaptiveFetchHelp() {

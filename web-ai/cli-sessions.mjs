@@ -87,14 +87,14 @@ export async function runSessionsCommand(args, values, deps, input) {
         const id = rest[0];
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions show <id> requires a sessionId argument' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
         return { ok: true, status: 'show', session };
     }
     if (sub === 'resume') {
         const id = rest[0] || values.session;
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions resume <id> requires a sessionId (positional or --session)' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
         // 35.2: a Deep Research session resumes via the DR capture path (no new
         // prompt), not the generic poller.
         if (session.researchMode === 'deep' && session.vendor === 'chatgpt') {
@@ -140,7 +140,7 @@ export async function runSessionsCommand(args, values, deps, input) {
         const id = rest[0] || values.session;
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions reattach <id> requires a sessionId' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
         const targetUrl = session.conversationUrl || session.originalUrl;
         if (!targetUrl) {
             return { ok: false, status: 'reattach-failed', sessionId: id, error: 'session has no conversationUrl/originalUrl', warnings: [] };

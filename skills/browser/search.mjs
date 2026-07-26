@@ -105,6 +105,10 @@ export async function runSearchCli(argv = [], deps = {}) {
     } else {
         console.log(formatHumanOutput(output));
     }
+    // Returned so the caller can map failure onto an exit code. The pipeline
+    // reports failure as `evidenceStatus: "insufficient"` rather than `ok`,
+    // hence the explicit shape here.
+    return { ok: output.evidenceStatus !== 'insufficient', output };
 }
 
 /**
@@ -137,6 +141,7 @@ async function runVerifyMode(url, options) {
     } else {
         console.log(formatVerifyOutput(output));
     }
+    return { ok: output.ok, output };
 }
 
 /**

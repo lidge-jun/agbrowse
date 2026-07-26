@@ -49,7 +49,7 @@ describe('web-ai question envelope', () => {
     });
 
     it('rejects empty prompts', () => {
-        expect(() => normalizeEnvelope({ vendor: 'chatgpt', prompt: '   ' })).toThrow(/prompt required/);
+        expect(() => normalizeEnvelope({ vendor: 'chatgpt', prompt: '   ' })).toThrow(/a prompt is required/);
     });
 
     it('rejects over-budget inline prompts', () => {
@@ -79,16 +79,24 @@ describe('web-ai question envelope', () => {
         expect(captured?.retryHint).toBe('enable-or-skip');
     });
 
-    it('throws WebAiError with context.over-budget for empty prompt and oversize prompt', () => {
+    it('separates a missing prompt from a genuine budget overflow', () => {
+        // These two used to share `context.over-budget` and
+        // `retryHint: 'reduce-files'`, so a caller branching on the code could
+        // not tell them apart — and a user who simply forgot --prompt was told
+        // to reduce files. This test previously asserted that confusion.
         let emptyErr;
         try { normalizeEnvelope({ vendor: 'chatgpt', prompt: '   ' }); } catch (e) { emptyErr = e; }
-        expect(emptyErr?.errorCode).toBe('context.over-budget');
-        expect(emptyErr?.stage).toBe('context-preflight');
+        expect(emptyErr?.errorCode).toBe('input.prompt-missing');
+        expect(emptyErr?.stage).toBe('input-preflight');
+        expect(emptyErr?.retryHint).toBe('add-prompt');
 
         let bigErr;
         try { renderQuestionEnvelope({ prompt: 'x'.repeat(50001) }); } catch (e) { bigErr = e; }
         expect(bigErr?.errorCode).toBe('context.over-budget');
+        expect(bigErr?.retryHint).toBe('reduce-files');
         expect(bigErr?.evidence?.length).toBeGreaterThan(50000);
+
+        expect(emptyErr?.errorCode).not.toBe(bigErr?.errorCode);
     });
 
     it('throws WebAiError with provider.attachment-preflight for unknown attachmentPolicy', () => {

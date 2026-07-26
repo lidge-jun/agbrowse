@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execBrowser, stopBrowserIfRunning } from '../helpers/exec-browser.mjs';
 import { startFixtureServer } from '../helpers/fixture-server.mjs';
 import { createTempBrowserEnv, getAvailablePort } from '../helpers/temp-env.mjs';
@@ -203,5 +206,204 @@ describe.sequential('Q8 — a flag VALUE never becomes a positional argument', (
         // would swallow a real positional argument.
         const result = await execBrowser(['evaluate', `--port=${port}`, '7+1'], { env });
         expect(result.stdout.trim()).toBe('8');
+    });
+});
+
+describe('Q7/Q12/Q14 — failures honour the --json contract', () => {
+    it('emits a JSON envelope instead of plaintext when a command fails', async () => {
+        // Failures used to print `❌ <message>` even under --json, so a caller
+        // that parsed a successful run got JSON and a failed one got a
+        // JSON.parse error — a silent break in the machine-readable contract.
+        const temp = createTempBrowserEnv('agbrowse-q7-');
+        try {
+            const result = await execBrowser(
+                ['research', 'normalize-results', '--file', '/tmp/agbrowse-qa-definitely-absent.json', '--json'],
+                { env: temp.env },
+            );
+            expect(result.code).toBe(1);
+            const parsed = JSON.parse(result.stdout);
+            expect(parsed).toMatchObject({ ok: false, status: 'error' });
+            expect(parsed.error).toHaveProperty('message');
+        } finally {
+            temp.cleanup();
+        }
+    });
+
+    it('keeps the human format when --json is absent', async () => {
+        const temp = createTempBrowserEnv('agbrowse-q7b-');
+        try {
+            const result = await execBrowser(
+                ['research', 'normalize-results', '--file', '/tmp/agbrowse-qa-definitely-absent.json'],
+                { env: temp.env },
+            );
+            expect(result.code).toBe(1);
+            expect(`${result.stdout}${result.stderr}`).toContain('❌');
+        } finally {
+            temp.cleanup();
+        }
+    });
+
+    it('covers argument errors that return instead of throwing', async () => {
+        // `research` validates arguments by RETURNING {stderr, exitCode}, so it
+        // never reaches the top-level handler. That path kept printing
+        // plaintext usage under --json after the first pass at this fix.
+        const temp = createTempBrowserEnv('agbrowse-q12-');
+        try {
+            const result = await execBrowser(['research', 'plan', '--json'], { env: temp.env });
+            expect(result.code).toBe(1);
+            const parsed = JSON.parse(result.stdout);
+            expect(parsed.ok).toBe(false);
+            expect(parsed.error.errorCode).toBe('input.invalid-arguments');
+        } finally {
+            temp.cleanup();
+        }
+    });
+});
+
+describe('Q13 — a missing argument is an input error, not a crash', () => {
+    // web-ai writes its failure envelope to stderr (emitCliError), unlike the
+    // top-level handler which uses stdout. Read both so the assertion is about
+    // the envelope's content, not which stream carried it.
+    const envelopeOf = (result) => JSON.parse(result.stdout || result.stderr);
+
+    it('names the missing prompt instead of blaming the context budget', async () => {
+        // This used to throw context.over-budget with retryHint reduce-files —
+        // the code for a genuine budget overflow — so the two events were
+        // indistinguishable and the user was told to reduce files.
+        const temp = createTempBrowserEnv('agbrowse-q13-');
+        try {
+            const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--json'], { env: temp.env });
+            expect(result.code).toBe(1);
+            const parsed = envelopeOf(result);
+            expect(parsed.error.errorCode).toBe('input.prompt-missing');
+            expect(parsed.error.retryHint).toBe('add-prompt');
+        } finally {
+            temp.cleanup();
+        }
+    });
+
+    it('names a missing context source instead of crashing', async () => {
+        const temp = createTempBrowserEnv('agbrowse-q13b-');
+        try {
+            const result = await execBrowser(
+                ['web-ai', 'context-dry-run', '--vendor', 'chatgpt', '--prompt', 'hi', '--json'],
+                { env: temp.env },
+            );
+            expect(result.code).toBe(1);
+            expect(envelopeOf(result).error.errorCode).toBe('input.context-source-missing');
+        } finally {
+            temp.cleanup();
+        }
+    });
+
+    it('does not report a typo as a bug to file', async () => {
+        const temp = createTempBrowserEnv('agbrowse-q13c-');
+        try {
+            const result = await execBrowser(['web-ai', 'sessions', 'show', 'no-such-session-qa', '--json'], { env: temp.env });
+            expect(result.code).toBe(1);
+            const parsed = envelopeOf(result);
+            expect(parsed.error.errorCode).toBe('input.session-not-found');
+            expect(parsed.error.retryHint).not.toBe('report');
+        } finally {
+            temp.cleanup();
+        }
+    });
+
+    it('accepts --context-file, which the first version of this guard rejected', async () => {
+        // The guard was hand-written as a second copy of a predicate that
+        // already existed 380 lines up, and the copy omitted --context-file —
+        // so a valid invocation started failing, and the error told the user to
+        // use flags other than the correct one they had passed.
+        const temp = createTempBrowserEnv('agbrowse-q13d-');
+        const listPath = join(tmpdir(), `agbrowse-qa-ctx-${Date.now()}.txt`);
+        writeFileSync(listPath, 'web-ai/errors.mjs\n');
+        try {
+            const result = await execBrowser(
+                ['web-ai', 'context-dry-run', '--prompt', 'hi', '--context-file', listPath, '--json'],
+                { env: temp.env },
+            );
+            expect(result.code).toBe(0);
+            expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, status: 'dry-run' });
+        } finally {
+            rmSync(listPath, { force: true });
+            temp.cleanup();
+        }
+    });
+});
+
+describe('Q11 — ok:false reaches the exit code', () => {
+    it('exits non-zero when fetch RETURNS ok:false', async () => {
+        // fetch used to print ok:false and exit 0, so a failed lookup passed
+        // through `&&` chains as success and downstream steps ran on empty
+        // content.
+        //
+        // Two paths must not be used here, because both exit 1 even against the
+        // bug and would pass while guarding nothing: the SSRF guard throws, and
+        // so does any local URL (it is caught by the same guard). This drives
+        // the path that RETURNS a verdict, which is the one that used to exit 0.
+        //
+        // `.invalid` is reserved by RFC 2606 and can never resolve, so this
+        // needs no network and cannot break when a domain gets registered.
+        const temp = createTempBrowserEnv('agbrowse-q11-');
+        try {
+            const result = await execBrowser(
+                ['fetch', 'https://agbrowse-qa-must-not-resolve.invalid', '--json', '--browser', 'never'],
+                { env: temp.env },
+            );
+            const body = JSON.parse(result.stdout);
+            expect(body.ok).toBe(false);
+            expect(result.code).toBe(1);
+        } finally {
+            temp.cleanup();
+        }
+    });
+});
+
+describe.sequential('Q9 — tab-cleanup preview and execution share a schema', () => {
+    const temp = createTempBrowserEnv('agbrowse-q9-');
+    const env = temp.env;
+    let port;
+    let server;
+
+    beforeAll(async () => {
+        port = await getAvailablePort();
+        server = await startFixtureServer();
+        await execBrowser(['start', '--headless', '--port', port], { env });
+    });
+
+    afterAll(async () => {
+        await stopBrowserIfRunning(env);
+        await server.close();
+        temp.cleanup();
+    });
+
+    it('exposes ok, dryRun and counts on both paths', async () => {
+        // The two shapes used to share no keys at all: the preview nested its
+        // counters under `counts` and carried `ok`, the real run was flat with
+        // no `ok`. Previewing and then executing needed two parsers, and
+        // anything gating on `ok` read a successful cleanup as a failure.
+        await execBrowser(['new-tab', server.url], { env });
+        await execBrowser(['new-tab', 'about:blank'], { env });
+
+        const preview = await execBrowser(
+            ['tab-cleanup', '--dry-run', '--max-tabs', '1', '--include-untracked', '--force', '--json'],
+            { env },
+        );
+        const previewBody = JSON.parse(preview.stdout);
+
+        await execBrowser(['new-tab', 'about:blank'], { env });
+        const real = await execBrowser(
+            ['tab-cleanup', '--max-tabs', '1', '--include-untracked', '--force', '--json'],
+            { env },
+        );
+        const realBody = JSON.parse(real.stdout);
+
+        for (const body of [previewBody, realBody]) {
+            expect(body).toHaveProperty('ok');
+            expect(body).toHaveProperty('dryRun');
+            expect(body.counts).toEqual(expect.objectContaining({ limitClosed: expect.any(Number) }));
+        }
+        expect(previewBody.dryRun).toBe(true);
+        expect(realBody.dryRun).toBe(false);
     });
 });

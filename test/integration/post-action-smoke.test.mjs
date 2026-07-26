@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { chromium } from 'playwright-core';
 import { assertPostAction, clickWithPostAssert, fillWithPostAssert } from '../../web-ai/post-action-assert.mjs';
-import { chromiumLaunchOptions } from './playwright-launch.mjs';
+import { launchTransportChromium } from './playwright-launch.mjs';
 import { startSmokeServer, stopSmokeServer } from './smoke-server.mjs';
 
 describe('post-action browser smoke', () => {
@@ -13,7 +13,7 @@ describe('post-action browser smoke', () => {
         const result = await startSmokeServer();
         server = result.server;
         serverUrl = result.url;
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {

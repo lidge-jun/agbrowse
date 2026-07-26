@@ -675,6 +675,23 @@ async function runWebAiCliInner(argv = [], deps) {
     );
     // --file may repeat → parseArgs yields an array; normalize to a path list.
     const filePaths = (Array.isArray(values.file) ? values.file : (values.file ? [values.file] : [])).filter((value) => typeof value === 'string');
+    // context-dry-run and context-render exist to inspect a context package, so
+    // no context source is a user input error — not a crash. Both used to reach
+    // the packing code with nothing to pack and surface `internal.unhandled`
+    // with `retryHint: report`, telling the user to file a bug for a missing
+    // flag. Follows the `code-mode.prompt-missing` precedent below.
+    //
+    // Reuses `hasContextPackage` deliberately: a hand-written second copy of
+    // this predicate missed `--context-file` and rejected a valid invocation.
+    if (isContextCommand(command) && !hasContextPackage && filePaths.length === 0) {
+        throw new WebAiError({
+            errorCode: 'input.context-source-missing',
+            stage: 'input-preflight',
+            retryHint: 'add-context-source',
+            message: `web-ai ${command} requires a context source: pass --context-from-files <glob>, --context-file <path>, or --file <path>`,
+            mutationAllowed: false,
+        });
+    }
     if (['send', 'query'].includes(command) && !values['inline-only'] && filePaths.length === 0 && !hasContextPackage) {
         throw new WebAiError({
             errorCode: 'provider.attachment-preflight',

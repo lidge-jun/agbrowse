@@ -1609,6 +1609,22 @@ export function collectEvaluateExpression(args) {
 }
 
 /**
+ * Should a failure be reported as a JSON envelope rather than `❌ <message>`?
+ *
+ * Help documents `AGBROWSE_JSON_ERRORS=1` under `Environment:` — outside the
+ * web-ai section, so the promise reads as CLI-wide — and every `--json` command
+ * implies the same contract for its failures.
+ *
+ * @param {string[]} argv
+ * @param {Record<string, string|undefined>} env
+ * @returns {boolean}
+ */
+export function wantsJsonErrors(argv, env) {
+    if (env.AGBROWSE_JSON_ERRORS === '1') return true;
+    return argv.includes('--json');
+}
+
+/**
  * @param {any} port
  * @param {any} expression
  * @param {any} opts
@@ -2356,15 +2372,39 @@ try {
         case 'research': {
             const result = await runResearchCli(process.argv.slice(3));
             if (result.stderr) {
-                console.error(result.stderr);
+                // This path returns an error instead of throwing, so it never
+                // reaches the top-level handler that renders the JSON envelope.
+                // Argument errors like `research plan` without --query printed
+                // plaintext usage even under --json.
+                if (wantsJsonErrors(process.argv, process.env)) {
+                    console.log(JSON.stringify({
+                        ok: false,
+                        status: 'error',
+                        error: {
+                            name: 'ResearchCliError',
+                            errorCode: 'input.invalid-arguments',
+                            stage: 'input-preflight',
+                            message: result.stderr.trim(),
+                            retryHint: 'fix-arguments',
+                        },
+                    }, null, 2));
+                } else {
+                    console.error(result.stderr);
+                }
                 process.exit(result.exitCode || 1);
             }
             console.log(result.stdout);
             break;
         }
-        case 'search':
-            await runSearchCli(process.argv.slice(3));
+        case 'search': {
+            // A reported failure must exit non-zero. `extract` already does
+            // this (extract.mjs:540); `fetch` and `search` used to print
+            // ok:false and exit 0, so a failed lookup slipped through `&&`
+            // chains as success.
+            const searchResult = await runSearchCli(process.argv.slice(3));
+            if (searchResult && searchResult.ok === false) process.exit(1);
             break;
+        }
         case 'extract':
             await runExtractCli(process.argv.slice(3));
             break;
@@ -2423,9 +2463,11 @@ try {
         case 'runway':
             await runRunwayCli(process.argv.slice(3), browserDeps);
             break;
-        case 'fetch':
-            await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
+        case 'fetch': {
+            const fetchResult = await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
+            if (fetchResult && fetchResult.ok === false) process.exit(1);
             break;
+        }
         case 'start': {
             const { values } = parseArgs({
                 args: process.argv.slice(3),
@@ -2933,11 +2975,27 @@ try {
             }
             const leaseResult = await cleanupPoolTabs(getPort());
             const result = await cleanupIdleTabs(getPort(), cleanupOpts);
+            // `ok` and `counts` mirror the --dry-run shape above. The two paths
+            // used to share no keys at all: the preview nested its counters
+            // under `counts` and carried `ok`, while the real run was flat and
+            // had no `ok`, so a caller that previewed and then executed needed
+            // two parsers, and anything gating on `ok` read every successful
+            // cleanup as a failure.
             const combined = {
+                ok: true,
+                dryRun: false,
                 ...result,
                 closed: result.closed + (leaseResult.closed || 0),
                 leaseClosed: leaseResult.closed || 0,
                 leaseClosedTabs: leaseResult.closedTabs || [],
+                counts: {
+                    total: result.closed + (leaseResult.closed || 0),
+                    idleClosed: result.idleClosed,
+                    limitClosed: result.limitClosed,
+                    untrackedClosed: result.untrackedClosed,
+                    providerClosed: result.providerClosed,
+                    leaseClosed: leaseResult.closed || 0,
+                },
             };
             if (values.json) console.log(JSON.stringify(combined, null, 2));
             else {
@@ -3627,6 +3685,28 @@ try {
     // Force exit — playwright CDP WebSocket keeps event loop alive
     process.exit(0);
 } catch (e) {
-    if (!(/** @type {any} */ (e))?.alreadyReported) console.error(`❌ ${(/** @type {any} */ (e)).message}`);
+    // `--json` (or AGBROWSE_JSON_ERRORS=1) is this CLI's machine-readable
+    // contract, and the help text promises it globally under `Environment:`.
+    // Failures used to print `❌ <message>` regardless, so a caller parsing a
+    // successful run got JSON and a failed one got a JSON.parse error.
+    // `extract` already emits the same envelope shape on both paths.
+    const err = /** @type {any} */ (e);
+    if (!err?.alreadyReported) {
+        if (wantsJsonErrors(process.argv, process.env)) {
+            console.log(JSON.stringify({
+                ok: false,
+                status: 'error',
+                error: {
+                    name: err?.name || 'Error',
+                    errorCode: err?.errorCode || 'internal.unhandled',
+                    stage: err?.stage || null,
+                    message: err?.message || String(err),
+                    retryHint: err?.retryHint || null,
+                },
+            }, null, 2));
+        } else {
+            console.error(`❌ ${err?.message}`);
+        }
+    }
     process.exit(1);
 }

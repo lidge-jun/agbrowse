@@ -7,7 +7,7 @@ import {
     resolveComposerMenuItem,
     snapshotOpenMenus,
 } from '../../web-ai/chatgpt-menu-resolver.mjs';
-import { chromiumLaunchOptions } from './playwright-launch.mjs';
+import { launchTransportChromium } from './playwright-launch.mjs';
 
 // Regression guard for the defect class that nearly shipped: `page.evaluate`
 // serializes a function BODY, not its module bindings, so any constant lifted
@@ -18,7 +18,7 @@ describe('composer menu resolver browser transport', () => {
     let browser;
 
     beforeAll(async () => {
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {

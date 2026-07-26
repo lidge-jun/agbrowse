@@ -331,7 +331,6 @@ rungs:
 | --- | --- |
 | 203.1 TLS impersonation | JA3 fingerprint spoofing via `curl-impersonate` on 403/429/challenge, inserted before browser escalation |
 | 203.2 yt-dlp media reader | Extracts metadata and transcripts from video URLs via `yt-dlp` |
-| 203.3 Camoufox stealth lane | Firefox-based stealth browser session via Camoufox for anti-bot-heavy targets |
 | 203.4 Feed parser | RSS, Atom, and JSON Feed detection and parsing into structured evidence |
 | 203.5 BM25 lexical reranker | Content-relevance scoring using BM25 term weighting |
 | 203.6 Structured extractor | Table and heading extraction from HTML into structured records |

@@ -7,7 +7,7 @@ import {
     readChatGptStreamingState,
     resolveTopLevelAssistantTurns,
 } from '../../web-ai/chatgpt-response-dom.mjs';
-import { chromiumLaunchOptions } from './playwright-launch.mjs';
+import { launchTransportChromium } from './playwright-launch.mjs';
 import { __localeConsumersForTest as localeConsumers } from '../../web-ai/chatgpt-model.mjs';
 
 // `page.evaluate` serializes a function BODY, not its module bindings. The
@@ -19,7 +19,7 @@ describe('activity state browser transport', () => {
     let browser;
 
     beforeAll(async () => {
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {
@@ -73,7 +73,7 @@ describe('snapshot source acquisition browser transport (G11)', () => {
     let browser;
 
     beforeAll(async () => {
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {
@@ -125,7 +125,7 @@ describe('locale pattern browser transport (G25)', () => {
     let browser;
 
     beforeAll(async () => {
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {

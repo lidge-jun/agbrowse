@@ -96,17 +96,17 @@ Q5(인자 누락의 `internal.unhandled` 오분류)다.
 | Q1 | `status --json`이 JSON을 내지 않음 | 중 | **수정됨** (WP1) |
 | Q2 | `evaluate`가 뒤따르는 플래그를 표현식에 합침 — 에러 없이 오실행 재현됨 | 높음 | **수정됨** (WP1) |
 | Q3 | `web-ai claim-audit`이 FAIL인데 종료 코드 0 | 높음 | **수정됨** (WP1) |
-| Q4 | `README.md:334`가 한 번도 동작한 적 없는 Camoufox 레인을 광고 | 중 | WP6 |
+| Q4 | `README.md:334`가 한 번도 동작한 적 없는 Camoufox 레인을 광고 | 중 | **수정됨** (WP6) |
 | Q5 | 인자 누락이 `internal.unhandled` + `retryHint: report`로 표면화 (`context-dry-run`, `context-render`) | 중하 | **Q13에 흡수** |
-| Q6 | Camoufox 결과 필드 불일치(`content` vs `html`)로 레인이 구조적으로 무력 | 중 | WP6 |
-| Q7 | 브라우저 커맨드의 실패가 `--json`/`AGBROWSE_JSON_ERRORS=1`을 무시하고 평문을 냄 | 중 | WP6 |
+| Q6 | Camoufox 결과 필드 불일치(`content` vs `html`)로 레인이 구조적으로 무력 | 중 | **수정됨** (WP6, 동작은 미검증) |
+| Q7 | 브라우저 커맨드의 실패가 `--json`/`AGBROWSE_JSON_ERRORS=1`을 무시하고 평문을 냄 | 중 | **수정됨** (WP6) |
 | Q8 | `upload`/`type`/`wait-for-text`가 플래그의 **값**을 위치 인자로 흡수 (Q2와 같은 계열) | 높음 | **수정됨** (WP3, `ad7f259`) |
-| Q9 | `tab-cleanup`의 JSON 스키마가 `--dry-run` 유무로 완전히 달라짐 (공통 키 0개, `ok` 부재) | 중 | WP6 |
-| Q10 | Chromium 트랜스포트 테스트 4파일이 기본 실행에서 skipped로 집계되어 통과처럼 보임 | 높음 | WP6 |
-| Q11 | fetch 계열(`fetch`, `search --verify`)이 `ok:false`를 종료 코드로 옮기지 않음 — 실패가 `&&` 체인을 조용히 통과 | 높음 | WP6 |
-| Q12 | `research`가 `--json`에도 평문 오류 (Q7 계열) | 중하 | WP6 |
-| Q13 | 입력 오류의 올바른 패턴(`code-mode.prompt-missing`)이 있는데 네 커맨드가 따르지 않음 (Q5 흡수) | 중 | WP6 |
-| Q14 | `skills install` 실패도 `--json`을 무시하고 평문 (Q7 계열) | 중하 | WP6 |
+| Q9 | `tab-cleanup`의 JSON 스키마가 `--dry-run` 유무로 완전히 달라짐 (공통 키 0개, `ok` 부재) | 중 | **수정됨** (WP6) |
+| Q10 | Chromium 트랜스포트 테스트 4파일이 기본 실행에서 skipped로 집계 (종료코드는 정상) | 중 | **부분 수정** (WP6) — 15개는 미검증, 버전 핀은 WP7 |
+| Q11 | fetch 계열(`fetch`, `search --verify`)이 `ok:false`를 종료 코드로 옮기지 않음 — 실패가 `&&` 체인을 조용히 통과 | 높음 | **수정됨** (WP6) |
+| Q12 | `research`가 `--json`에도 평문 오류 (Q7 계열) | 중하 | **수정됨** (WP6) |
+| Q13 | 입력 오류의 올바른 패턴(`code-mode.prompt-missing`)이 있는데 네 커맨드가 따르지 않음 (Q5 흡수) | 중 | **부분 수정** (WP6) — `context-dry-run --file`은 WP7 |
+| Q14 | `skills install` 실패도 `--json`을 무시하고 평문 (Q7 계열) | 중하 | **수정됨** (WP6) |
 
 Q1-Q3은 각각 뮤테이션으로 RED를 확인한 뒤에만 "수정됨"으로 적었다. 되돌렸을 때
 실패하는 테스트 수: Q1 1건, Q2 3건, Q3 1건.
