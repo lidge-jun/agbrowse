@@ -87,7 +87,7 @@
   "dependencies": {
     "archiver": "^7.0.1",
     "fast-glob": "^3.3.3",
-    "playwright-core": "^1.58.2"
+    "playwright-core": "1.59.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
