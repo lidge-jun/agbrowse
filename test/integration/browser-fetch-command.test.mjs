@@ -421,6 +421,145 @@ describe('adaptive fetch browser escalation', () => {
         expect(result.verdict).toBe('browser_required');
         expect(result.warnings.some(w => w.includes('CDP connection failed'))).toBe(true);
     });
+
+    // Swallowing a lane failure is right for the environment and wrong for our
+    // own bug: a TypeError from this code would be reported as "that source had
+    // nothing" and the fetch would return partial evidence as if complete.
+    it('rethrows a programming fault instead of recording it as a lane failure', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => {
+                throw new TypeError('undefined is not a function');
+            },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // The separator is `cause`, not the type. Node's fetch reports ENOTFOUND and
+    // ECONNREFUSED as `TypeError: fetch failed` with the system error attached,
+    // so a type-only rule would crash on any dead hostname.
+    it('keeps going when a fetch lane fails with undici TypeError carrying a cause', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                const error = new TypeError('fetch failed');
+                error.cause = Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' });
+                throw error;
+            },
+        });
+        expect(result.ok).toBe(false);
+        expect(result.attempts.some(a => a.verdict === 'error' && a.reason === 'fetch failed')).toBe(true);
+    });
+
+    it('rethrows a fetch-lane TypeError that carries no cause', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                throw new TypeError('deps.fetch is not a function');
+            },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // Pin the whole set, not just the type we happened to hit first. Without
+    // this, dropping a constructor from the guard passes every other test.
+    it.each([
+        ['TypeError', () => new TypeError('undefined is not a function')],
+        ['ReferenceError', () => new ReferenceError('someVar is not defined')],
+        ['RangeError', () => new RangeError('Maximum call stack size exceeded')],
+        ['SyntaxError', () => new SyntaxError('Unexpected token }')],
+    ])('rethrows %s from a lane instead of recording it', async (_name, makeError) => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => { throw makeError(); },
+        })).rejects.toBeInstanceOf(makeError().constructor);
+    });
+
+    // A malformed `Location` is remote input, not our bug. Before the fetcher
+    // guarded it, `new URL()` threw a cause-less TypeError that the scheduler
+    // read as a programming fault and rethrew, crashing the whole fetch.
+    it('treats a malformed redirect Location as a lane failure, not a crash', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/x',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('', { status: 301, headers: { location: 'http://[bad' } }),
+        });
+        expect(result.ok).toBe(false);
+        expect(result.verdict).toBe('blocked');
+        expect(result.attempts.some(a => a.evidence?.includes('invalid-redirect-location'))).toBe(true);
+    });
+
+    it('still follows a well-formed relative redirect', async () => {
+        const seen = [];
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/start',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async (url) => {
+                seen.push(String(url));
+                if (seen.length === 1) return new Response('', { status: 302, headers: { location: '/moved' } });
+                return new Response(
+                    '<title>Moved</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(seen[1]).toBe('https://example.com/moved');
+        expect(result.ok).toBe(true);
+    });
+
+    // A blank Location resolves to the base URL rather than throwing, so without
+    // the blank check it becomes a redirect to itself and burns the redirect
+    // budget. Standard Headers normalizes blanks away, so reach it through a
+    // fetchImpl that implements headers.get directly.
+    it('does not loop on a blank redirect Location', async () => {
+        let calls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/start',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                calls += 1;
+                return {
+                    status: 301,
+                    headers: {
+                        get: (name) => (name.toLowerCase() === 'location' ? '   ' : null),
+                        entries: () => [][Symbol.iterator](),
+                    },
+                    body: null,
+                    text: async () => '',
+                };
+            },
+        });
+        expect(calls).toBe(1);
+        expect(result.ok).toBe(false);
+    });
 });
 
 function fakePage({ text = '', title = '', url = 'https://example.com/rendered', networkCandidates = [], navResponse = undefined }) {

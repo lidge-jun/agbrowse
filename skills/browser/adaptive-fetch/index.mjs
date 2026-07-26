@@ -24,6 +24,45 @@ import { ytdlpMetadata, ytdlpSubtitles, formatYtdlpEvidence } from './ytdlp-read
 import { fetchViaCamoufox } from './camoufox-session.mjs';
 
 /**
+ * Decide whether a thrown value is our own bug rather than a lane failure.
+ *
+ * Every lane in this scheduler records its failure and continues, which is
+ * right for network, process, and provider failures and wrong for a defect in
+ * this code: swallowing a TypeError turns "we crashed" into "that source had
+ * nothing", and the fetch reports partial evidence as if it were complete.
+ *
+ * The type alone cannot decide it. Node's `fetch` throws a TypeError for
+ * ordinary network failures — ENOTFOUND and ECONNREFUSED both arrive as
+ * `TypeError: fetch failed` — so a type-only rule would rethrow on a dead
+ * hostname. What separates them is `cause`: undici attaches the underlying
+ * system error, while a real programming fault has none.
+ *
+ * @param {unknown} error
+ */
+function isProgrammerError(error) {
+    if (!(error instanceof TypeError || error instanceof ReferenceError
+        || error instanceof RangeError || error instanceof SyntaxError)) return false;
+    return (/** @type {any} */ (error)).cause === undefined;
+}
+
+/**
+ * Record a lane failure, or rethrow it when it is our bug.
+ *
+ * @param {{ attempts: object[] }} trace
+ * @param {unknown} error
+ * @param {{ source: string, url: string, fallbackReason: string }} context
+ */
+function recordLaneFailure(trace, error, { source, url, fallbackReason }) {
+    if (isProgrammerError(error)) throw error;
+    appendAttempt(trace, {
+        source,
+        verdict: 'error',
+        url,
+        reason: (/** @type {any} */ (error))?.message || fallbackReason,
+    });
+}
+
+/**
  * @typedef {'strong_ok'|'weak_ok'|'blocked'|'auth_required'|'challenge'|'paywall'|'browser_required'|'unsupported'|'error'} AdaptiveFetchVerdict
  * @typedef {'public_endpoint'|'fetch'|'reader'|'metadata'|'third_party_reader'|'browser'|'browser_user'|'human_resolved'|'network_api'|'validation'} AdaptiveFetchSource
  * @typedef {'auto'|'never'|'required'} BrowserMode
@@ -127,11 +166,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 fetchImpl,
             });
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: candidate.source,
-                verdict: 'error',
                 url: candidate.url,
-                reason: (/** @type {any} */ (error)).message || 'fetch-candidate-error',
+                fallbackReason: 'fetch-candidate-error',
             });
             continue;
         }
@@ -220,11 +258,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     fetchImpl,
                 });
             } catch (error) {
-                appendAttempt(trace, {
+                recordLaneFailure(trace, error, {
                     source: 'public_endpoint',
-                    verdict: 'error',
                     url: discovered.url,
-                    reason: (/** @type {any} */ (error)).message || `${discovered.label}-error`,
+                    fallbackReason: `${discovered.label}-error`,
                 });
                 continue;
             }
@@ -268,11 +305,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 fetchImpl,
             });
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'third_party_reader',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'third-party-reader-error',
+                fallbackReason: 'third-party-reader-error',
             });
         }
         if (fetched) {
@@ -408,11 +444,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: true });
             }
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'browser_user',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'user-session-error',
+                fallbackReason: 'user-session-error',
             });
         }
     }
@@ -444,11 +479,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 });
             }
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'human_resolved',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'human-loop-error',
+                fallbackReason: 'human-loop-error',
             });
         }
     }
@@ -732,6 +766,7 @@ async function tryBrowserEscalation(url, options, deps, trace, challengeInfo) {
         // fetch and discarded text an earlier lane had already read. Classify
         // the verdict, but never let the error escape: a browser that will not
         // come up is an environment state, not an internal fault.
+        if (isProgrammerError(error)) throw error;
         const browserRequired = error instanceof BrowserRequiredError
             || (/** @type {any} */ (error))?.code === 'browser_required';
         const message = (/** @type {any} */ (error))?.message || 'browser-escalation-error';
