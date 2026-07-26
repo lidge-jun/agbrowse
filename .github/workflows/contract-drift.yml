@@ -26,7 +26,10 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npx playwright install chromium
+      # No browser install step: every command below runs against recorded
+      # fixtures. `npx playwright install` used to sit here, which fetched a
+      # playwright version unrelated to this repo's pinned playwright-core and
+      # planted a chromium revision nothing here resolves.
       - run: npm run test:contract-drift
       - run: npm run test:eval
       - run: npm run test:eval-fixtures
@@ -44,7 +47,6 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npx playwright install chromium
       - run: npm run test:contract-drift
         env:
           AGBROWSE_DRIFT_MODE: live

@@ -243,8 +243,8 @@ Experimental or deferred surfaces:
 
 - adaptive URL fetch (`agbrowse fetch <url>`) as a URL reader, not search
 - adaptive fetch 203.x modules: TLS impersonation, yt-dlp media reader,
-  Camoufox stealth lane, feed parser, BM25 reranker, structured extractor,
-  lane-classified candidate discovery
+  Camoufox hardened-fingerprint render, feed parser, BM25 reranker,
+  structured extractor, lane-classified candidate discovery
 - web-ai capability registry, interstitial detector, freshness gate,
   diagnostics stage taxonomy, and provider lifecycle adapter
 - hosted/cloud browser operation
@@ -331,6 +331,7 @@ rungs:
 | --- | --- |
 | 203.1 TLS impersonation | JA3 fingerprint spoofing via `curl-impersonate` on 403/429/challenge, inserted before browser escalation |
 | 203.2 yt-dlp media reader | Extracts metadata and transcripts from video URLs via `yt-dlp` |
+| 203.3 Camoufox render | Optional hardened-fingerprint Firefox render, tried after readers and before Chrome. Requires a separate `camoufox` Python install; a no-op otherwise |
 | 203.4 Feed parser | RSS, Atom, and JSON Feed detection and parsing into structured evidence |
 | 203.5 BM25 lexical reranker | Content-relevance scoring using BM25 term weighting |
 | 203.6 Structured extractor | Table and heading extraction from HTML into structured records |
@@ -367,6 +368,11 @@ the source was rejected. `--max-bytes` remains the per-attempt read limit.
 Automated CAPTCHA solving, credential stuffing, and stealth are forbidden.
 Human assistance (browser-grade headers, user session, human resolves) is
 allowed with explicit opt-in flags (`--browser-session user|interactive`).
+"Stealth" here means defeating a bot check the site put in your way. Sending
+browser-grade headers or rendering with a hardened fingerprint (203.1, 203.3)
+is not that: it makes an automated read look like an ordinary browser read, and
+neither one solves a challenge. A page that actually challenges you still needs
+`--browser-session user|interactive`, or it stays blocked.
 Built-in public endpoint candidates include GitHub, Reddit, Hacker News,
 Wikipedia, npm, PyPI, arXiv, Bluesky, Mastodon-compatible statuses, Stack
 Exchange, dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed,

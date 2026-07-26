@@ -317,8 +317,9 @@ export async function runAdaptiveFetch(input, deps = {}) {
         }
     }
 
-    // Phase 04c (203.3): Camoufox stealth-browser fallback. When TLS-impersonation also
-    // fails (or wasn't attempted), try a hardened-fingerprint render before CDP browser.
+    // Phase 04c (203.3): Camoufox hardened-fingerprint render. When TLS-impersonation
+    // also fails (or wasn't attempted), render through Camoufox before the CDP browser.
+    // It normalizes the fingerprint; it does not resolve challenges (README §Boundary).
     if (!readerCandidates.some(c => c.verdict === 'strong_ok') && options.browserMode !== 'never') {
         const camoResult = await fetchViaCamoufox(parsed.href, {
             timeoutMs: options.timeoutMs,
