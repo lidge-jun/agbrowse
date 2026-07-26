@@ -681,14 +681,22 @@ async function runWebAiCliInner(argv = [], deps) {
     // with `retryHint: report`, telling the user to file a bug for a missing
     // flag. Follows the `code-mode.prompt-missing` precedent below.
     //
-    // Reuses `hasContextPackage` deliberately: a hand-written second copy of
-    // this predicate missed `--context-file` and rejected a valid invocation.
-    if (isContextCommand(command) && !hasContextPackage && filePaths.length === 0) {
+    // The condition is exactly `hasContextPackage`, with no extra term. Adding
+    // `filePaths.length` here made the guard disagree with
+    // `hasContextPackaging` (builder.mjs:172), which recognises only
+    // --context-file, --context-from-files, and repomix. `--file` alone then
+    // passed this guard, `prepareContextForBrowser` returned null, and the
+    // report renderer crashed on `result.files.length` — the exact
+    // internal.unhandled this guard exists to prevent.
+    //
+    // `--file` is an upload path ("Upload a file", cli.mjs:158), not a context
+    // package, so the two predicates agreeing on that is the correct outcome.
+    if (isContextCommand(command) && !hasContextPackage) {
         throw new WebAiError({
             errorCode: 'input.context-source-missing',
             stage: 'input-preflight',
             retryHint: 'add-context-source',
-            message: `web-ai ${command} requires a context source: pass --context-from-files <glob>, --context-file <path>, or --file <path>`,
+            message: `web-ai ${command} requires a context package: pass --context-from-files <glob> or --context-file <path> (--file uploads a file, it does not build a context package)`,
             mutationAllowed: false,
         });
     }

@@ -329,6 +329,30 @@ describe('Q13 — a missing argument is an input error, not a crash', () => {
             temp.cleanup();
         }
     });
+
+    it('rejects --file as a context source instead of crashing on it', async () => {
+        // `--file` uploads a file; it does not build a context package. The
+        // guard once accepted it, `prepareContextForBrowser` then returned null
+        // because builder.mjs:172 does not count --file, and the report
+        // renderer crashed on `result.files.length` — surfacing
+        // internal.unhandled with retryHint report for what is a flag mistake.
+        //
+        // Two predicates disagreeing about what a context source is was the
+        // whole defect, so this pins them to the same answer.
+        const temp = createTempBrowserEnv('agbrowse-q13e-');
+        try {
+            const result = await execBrowser(
+                ['web-ai', 'context-dry-run', '--prompt', 'hi', '--file', 'web-ai/errors.mjs', '--json'],
+                { env: temp.env },
+            );
+            expect(result.code).toBe(1);
+            const parsed = JSON.parse(result.stdout || result.stderr);
+            expect(parsed.error.errorCode).toBe('input.context-source-missing');
+            expect(parsed.error.retryHint).not.toBe('report');
+        } finally {
+            temp.cleanup();
+        }
+    });
 });
 
 describe('Q11 — ok:false reaches the exit code', () => {
