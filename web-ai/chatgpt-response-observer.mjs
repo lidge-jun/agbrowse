@@ -13,7 +13,10 @@
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    ASSISTANT_READ_TIMED_OUT,
     readTopLevelAssistantTexts,
+    resolveAssistantReadBudgetMs,
+    withAssistantReadTimeout,
 } from './chatgpt-response-dom.mjs';
 
 const DEFAULT_QUIET_MS = 1_200;
@@ -90,18 +93,22 @@ export async function observeAssistantResponse(page, { baselineAssistantCount = 
  * rejecting placeholders via the injected `isFinalAnswer` predicate. Read-only;
  * never throws. Returns `null` when there is no usable final answer.
  * @param {{ evaluate: Function, waitForTimeout?: Function, locator?: Function }} page
- * @param {{ baselineAssistantCount?: number, isFinalAnswer?: (text: string) => boolean, readStreaming?: () => Promise<boolean>|boolean, readFinished?: () => Promise<boolean>|boolean, stabilityWindowMs?: number }} [opts]
+ * @param {{ baselineAssistantCount?: number, isFinalAnswer?: (text: string) => boolean, readStreaming?: () => Promise<boolean>|boolean, readFinished?: () => Promise<boolean>|boolean, stabilityWindowMs?: number, readTimeoutMs?: number }} [opts]
  * @returns {Promise<{ from: 'recovery', text: string, recovered: true, streaming: boolean, finished: boolean, responseStableMs: number } | null>}
  */
-export async function recoverAssistantResponse(page, { baselineAssistantCount = 0, isFinalAnswer, readStreaming, readFinished, stabilityWindowMs } = {}) {
+export async function recoverAssistantResponse(page, { baselineAssistantCount = 0, isFinalAnswer, readStreaming, readFinished, stabilityWindowMs, readTimeoutMs } = {}) {
     const minIdx = Math.max(0, Math.floor(Number(baselineAssistantCount) || 0));
+    const readBudgetMs = resolveAssistantReadBudgetMs(readTimeoutMs);
     const readCandidates = async () => {
         let texts;
-        try {
-            texts = await page.evaluate(readTopLevelAssistantTexts, CHATGPT_ASSISTANT_SELECTORS);
-        } catch {
-            return [];
-        }
+        // Recovery runs right after a poll timeout, so an unbounded read here
+        // would re-hang the command it is supposed to rescue (#88).
+        const evaluated = await withAssistantReadTimeout(
+            Promise.resolve().then(() => page.evaluate(readTopLevelAssistantTexts, CHATGPT_ASSISTANT_SELECTORS)),
+            readBudgetMs,
+        );
+        if (evaluated === ASSISTANT_READ_TIMED_OUT) return [];
+        texts = evaluated;
         if (!Array.isArray(texts) || !texts.length) return [];
         return texts.slice(minIdx).filter(text => {
             if (!text) return false;

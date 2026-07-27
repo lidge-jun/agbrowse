@@ -25,13 +25,13 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 872 | bundled agent workflow skill |
-| `web-ai/` | 113 | 27539 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 113 | 27754 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 8 | 858 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 12 | 1805 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 143 | 17979 | deterministic module tests |
+| `test/unit/` | 144 | 18137 | deterministic module tests |
 | `test/integration/` | 21 | 3196 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
@@ -82,9 +82,9 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/adaptive-fetch/browser-runtime.mjs` | 38 | browser page acquisition and cleanup |
 | `web-ai/cli.mjs` | 2043 | `web-ai` subcommand parser and command orchestration |
 | `web-ai/session-target-guard.mjs` | 151 | shared CDP session candidate selection, ambiguity errors, and target-mismatch recovery envelopes |
-| `web-ai/chatgpt.mjs` | 1113 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
-| `web-ai/chatgpt-response-dom.mjs` | 74 | shared ChatGPT top-level assistant DOM extraction helpers |
-| `web-ai/chatgpt-response-observer.mjs` | 190 | ChatGPT observer wake signal and timeout recovery metadata |
+| `web-ai/chatgpt.mjs` | 1225 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
+| `web-ai/chatgpt-response-dom.mjs` | 170 | shared ChatGPT top-level assistant DOM extraction helpers |
+| `web-ai/chatgpt-response-observer.mjs` | 197 | ChatGPT observer wake signal and timeout recovery metadata |
 | `web-ai/gemini-live.mjs` | 804 | Gemini provider send/poll/query/status |
 | `web-ai/grok-live.mjs` | 594 | Grok provider send/poll/query/status |
 | `web-ai/mcp-server.mjs` | 479 | stdio JSON-RPC MCP bridge |

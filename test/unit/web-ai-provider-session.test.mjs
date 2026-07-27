@@ -404,19 +404,23 @@ function createCopyMarkdownDeferredChatGptPage(text) {
         textContent: 'Answer now',
         contains: () => false,
     };
-    let evaluateCount = 0;
+    let readCount = 0;
     let stopVisible = false;
     return {
         url: () => 'https://chatgpt.com/c/copy-streaming',
-        evaluate: async (fn, selectors) => {
-            evaluateCount += 1;
-            const currentNode = evaluateCount === 1 ? node : placeholderNode;
+        evaluate: async (fn, arg) => {
+            // Assistant reads pass either the selector array or { selectors,
+            // minIndex }; count only those so unrelated evaluate calls (stop
+            // button, finished-actions probes) do not advance the sequence.
+            const selectors = Array.isArray(arg) ? arg : arg?.selectors;
+            if (selectors) readCount += 1;
+            const currentNode = readCount <= 1 ? node : placeholderNode;
             const previous = globalThis.document;
             globalThis.document = {
-                querySelectorAll: (selector) => selector === selectors[0] ? [currentNode] : [],
+                querySelectorAll: (selector) => selectors && selector === selectors[0] ? [currentNode] : [],
             };
             try {
-                return fn(selectors);
+                return fn(arg);
             } finally {
                 if (previous === undefined) delete globalThis.document;
                 else globalThis.document = previous;

@@ -54,8 +54,12 @@ import { buildTargetMismatchResult } from './session-target-guard.mjs';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    ASSISTANT_READ_TIMED_OUT,
+    readAssistantTextsAfterIndex,
     readTopLevelAssistantTexts,
     readTopLevelAssistantTextsFromLocators,
+    resolveAssistantReadBudgetMs,
+    withAssistantReadTimeout,
 } from './chatgpt-response-dom.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
@@ -366,6 +370,9 @@ export async function pollWebAi(deps, input = {}) {
     let stableText = '';
     let stableSince = 0;
     let lastHeartbeat = 0;
+    // Counts assistant-DOM reads that exceeded their budget, so a stalled read is
+    // reported distinctly from "provider is still streaming" (#88).
+    let domReadTimeouts = 0;
     // 33 short-circuit: a MutationObserver wakes the loop as soon as the response
     // settles (bounded so it self-disconnects). The poller stays AUTHORITATIVE —
     // it still reads + verifies every tick; this only reduces wait latency, so the
@@ -401,8 +408,32 @@ export async function pollWebAi(deps, input = {}) {
                 };
             }
         }
-        const answers = await readAssistantMessages(page);
-        const newAnswers = answers.slice(baseline.assistantCount).filter(isFinalAnswer);
+        // Bound every DOM read by the time actually left, so a stalled evaluate
+        // cannot hold the loop past `deadline` (#88).
+        const readBudgetMs = deadline - Date.now();
+        // Out of budget is the deadline itself, not a stalled read; leave the
+        // loop so the timeout path is not mislabeled as a DOM-read failure.
+        if (readBudgetMs <= 0) break;
+        const read = await readAssistantMessagesAfterBaseline(page, {
+            remainingMs: readBudgetMs,
+            minIndex: baseline.assistantCount,
+        });
+        if (read.timedOut) {
+            domReadTimeouts += 1;
+            // Keep emitting liveness while reads stall. Silence here was the
+            // original symptom: the process looked alive with no output (#88).
+            const stalledAt = Date.now();
+            if (stalledAt - lastHeartbeat >= 30_000) {
+                const elapsed = Math.round((stalledAt - startedAt) / 1000);
+                process.stderr.write(`[poll] ${elapsed}s — assistant DOM read timed out (${domReadTimeouts}x); retrying...\n`);
+                lastHeartbeat = stalledAt;
+            }
+            // Re-check the outer deadline immediately instead of blocking here.
+            if (Date.now() > deadline) break;
+            await page.waitForTimeout(500).catch(() => undefined);
+            continue;
+        }
+        const newAnswers = read.newAnswers.filter(isFinalAnswer);
         const latest = newAnswers.at(-1) || '';
         const streaming = await isStreaming(page);
         const now = Date.now();
@@ -562,6 +593,10 @@ export async function pollWebAi(deps, input = {}) {
             isFinalAnswer,
             readStreaming: () => isStreaming(page),
             readFinished: () => isResponseFinished(page),
+            // Reads were already stalling during the poll; keep the rescue read
+            // short so recovery cannot extend the command by another full
+            // per-read ceiling (#88).
+            ...(domReadTimeouts > 0 ? { readTimeoutMs: 2_000 } : {}),
         });
         if (recovered?.text) {
             if (recovered.streaming === true) {
@@ -686,7 +721,9 @@ export async function pollWebAi(deps, input = {}) {
         ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
         ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
         baseline,
-        warnings: [],
+        // Distinguish "provider never finished" from "we could not read the DOM
+        // in time"; the two need different operator responses (#88).
+        warnings: domReadTimeouts > 0 ? [`assistant-dom-read-timeout:${domReadTimeouts}`] : [],
         usedFallbacks: [],
         recoverable: true,
         retryHint: 'poll-or-resume',
@@ -1005,9 +1042,10 @@ function persistResolverTraceForSession(session, traceCtx) {
 
 /**
  * @param {any} page
+ * @param {number} [remainingMs]
  */
-async function countAssistantMessages(page) {
-    return (await readAssistantMessages(page)).length;
+async function countAssistantMessages(page, remainingMs) {
+    return (await readAssistantMessages(page, { remainingMs })).length;
 }
 
 /**
@@ -1019,7 +1057,7 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
     let previous = -1;
     let stableReads = 0;
     while (Date.now() < deadline) {
-        const count = await countAssistantMessages(page).catch(() => 0);
+        const count = await countAssistantMessages(page, deadline - Date.now()).catch(() => 0);
         if (count === previous) stableReads += 1;
         else stableReads = 0;
         previous = count;
@@ -1029,13 +1067,87 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
 }
 
 /**
+ * Read top-level assistant turns, bounded by the caller's remaining deadline.
+ *
+ * Playwright's `page.evaluate()` has no timeout option, so an evaluation that
+ * stalls (huge conversation, blocked main thread) used to suspend the poll loop
+ * indefinitely — the outer deadline was only re-checked at the loop boundary
+ * (#88). Every read is now raced against the remaining budget, and a read that
+ * exceeds it reports `timedOut` instead of parking the command.
+ *
  * @param {any} page
+ * @param {{ remainingMs?: number, minIndex?: number }} [options]
+ * @returns {Promise<string[] & { timedOut?: boolean, total?: number }>}
  */
-async function readAssistantMessages(page) {
-    const evaluated = await page.evaluate(readTopLevelAssistantTexts, ASSISTANT_SELECTORS).catch(() => []);
+async function readAssistantMessages(page, options = {}) {
+    const budgetMs = resolveAssistantReadBudgetMs(options.remainingMs);
+    if (budgetMs <= 0) return markTimedOut([]);
+    const evaluated = await withAssistantReadTimeout(
+        Promise.resolve().then(() => page.evaluate(readTopLevelAssistantTexts, ASSISTANT_SELECTORS)),
+        budgetMs,
+    );
+    if (evaluated === ASSISTANT_READ_TIMED_OUT) return markTimedOut([]);
     if (Array.isArray(evaluated) && evaluated.length) return evaluated.map(cleanAssistantText).filter(Boolean);
-    const fallback = await readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS);
+    // The locator fallback issues one round trip per turn, so bound it by the
+    // budget that is actually left after the evaluate attempt.
+    const fallback = await withAssistantReadTimeout(
+        Promise.resolve().then(() => readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS)),
+        resolveAssistantReadBudgetMs(options.remainingMs),
+    );
+    if (fallback === ASSISTANT_READ_TIMED_OUT) return markTimedOut([]);
     return fallback.map(cleanAssistantText).filter(Boolean);
+}
+
+/**
+ * Poll-tick read: count all turns in-page but serialize only the turns after the
+ * baseline. Avoids re-serializing the whole conversation every 500ms (#88).
+ * Falls back to the full read when the trimmed path is unavailable or times out.
+ * @param {any} page
+ * @param {{ remainingMs?: number, minIndex?: number }} options
+ * @returns {Promise<{ newAnswers: string[], total: number, timedOut: boolean }>}
+ */
+async function readAssistantMessagesAfterBaseline(page, options = {}) {
+    const minIndex = Math.max(0, Math.floor(Number(options.minIndex) || 0));
+    const budgetMs = resolveAssistantReadBudgetMs(options.remainingMs);
+    if (budgetMs <= 0) return { newAnswers: [], total: 0, timedOut: true };
+    const trimmed = await withAssistantReadTimeout(
+        Promise.resolve().then(() => page.evaluate(readAssistantTextsAfterIndex, {
+            selectors: ASSISTANT_SELECTORS,
+            minIndex,
+        })),
+        budgetMs,
+    );
+    if (trimmed === ASSISTANT_READ_TIMED_OUT) return { newAnswers: [], total: 0, timedOut: true };
+    // Only trust the trimmed shape when it actually observed turns. A page that
+    // cannot serialize the object argument (older stubs, restricted contexts)
+    // reports zero turns; fall back to the full read so behavior is unchanged.
+    if (trimmed && typeof trimmed === 'object' && Array.isArray((/** @type {any} */ (trimmed)).texts)
+        && Number((/** @type {any} */ (trimmed)).total) > 0) {
+        const result = /** @type {{ total: number, texts: string[] }} */ (trimmed);
+        return {
+            newAnswers: result.texts.map(cleanAssistantText).filter(Boolean),
+            total: Number(result.total) || 0,
+            timedOut: false,
+        };
+    }
+    // No turns observed through the trimmed path (or a legacy array shape came
+    // back): reuse the full read, which also covers the locator fallback.
+    const answers = await readAssistantMessages(page, { remainingMs: options.remainingMs });
+    return {
+        newAnswers: answers.slice(minIndex),
+        total: answers.length,
+        timedOut: answers.timedOut === true,
+    };
+}
+
+/**
+ * Tag an assistant read as deadline-exceeded while keeping the array shape all
+ * existing callers expect.
+ * @param {string[]} texts
+ * @returns {string[] & { timedOut?: boolean }}
+ */
+function markTimedOut(texts) {
+    return Object.assign(texts, { timedOut: true });
 }
 
 /**
