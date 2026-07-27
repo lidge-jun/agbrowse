@@ -30,8 +30,8 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
-| `scripts/` | 10 | 1621 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 141 | 17677 | deterministic module tests |
+| `scripts/` | 12 | 1805 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks, postinstall star prompt (inline yes/no selector + agent detection) |
+| `test/unit/` | 142 | 17803 | deterministic module tests |
 | `test/integration/` | 21 | 3167 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
