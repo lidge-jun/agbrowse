@@ -4,7 +4,9 @@
  *
  * Behavior:
  *   - TTY-only (skips CI / piped installs)
- *   - Requires `gh` CLI with auth
+ *   - Requires an installed and authenticated `gh` CLI
+ *   - Asks with an explicit Yes/No selector (arrow keys, `y`/`n`, Enter)
+ *   - When an agent drives the install, relays the question instead of answering
  *   - Prompts once; records state in ~/.agbrowse/state/star-prompt.json
  *   - Never blocks install (all errors silently caught)
  */
@@ -13,8 +15,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
+import { isAgentDriven } from "./agent-driven.mjs";
+import { interactiveConfirm } from "./interactive-confirm.mjs";
 
 const REPO = "lidge-jun/agbrowse";
 const STATE_DIR = join(homedir(), ".agbrowse", "state");
@@ -38,14 +41,27 @@ async function markPrompted() {
   );
 }
 
+/**
+ * Whether `gh` is both installed and logged in. Starring goes through the
+ * user's own `gh` auth, so an unauthenticated CLI cannot fulfil a "Yes" — in
+ * that case the prompt stays silent instead of asking for something it would
+ * then fail to do.
+ */
 function isGhInstalled() {
-  const result = spawnSync("gh", ["--version"], {
+  const version = spawnSync("gh", ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "ignore"],
     timeout: 3000,
     windowsHide: true,
   });
-  return !result.error && result.status === 0;
+  if (version.error || version.status !== 0) return false;
+  const auth = spawnSync("gh", ["auth", "status"], {
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "ignore"],
+    timeout: 5000,
+    windowsHide: true,
+  });
+  return !auth.error && auth.status === 0;
 }
 
 function starRepo() {
@@ -67,14 +83,17 @@ function starRepo() {
   return { ok: true };
 }
 
-async function askYesNo(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(question)).trim().toLowerCase();
-    return answer === "" || answer === "y" || answer === "yes";
-  } finally {
-    rl.close();
-  }
+/**
+ * Shown instead of the prompt when an agent is driving the install. The agent
+ * reads this as its instruction: it must not answer, it must ask the person.
+ */
+function printAgentDeferral() {
+  console.log(
+    `\n[agbrowse] agbrowse isn't starred on GitHub yet.\n` +
+    `[agbrowse] Agent: do not answer this yourself — it uses the user's GitHub identity.\n` +
+    `[agbrowse] Ask the user whether to star ${REPO}, and only run\n` +
+    `[agbrowse] \`gh api -X PUT /user/starred/${REPO}\` if they say yes.\n`,
+  );
 }
 
 async function main() {
@@ -83,11 +102,20 @@ async function main() {
   if (await hasBeenPrompted()) return;
   if (!isGhInstalled()) return;
 
+  // An agent would answer this on the user's behalf, using the user's GitHub
+  // identity. Hand the question to the agent to relay, and leave the state
+  // unwritten so the user still gets the real prompt on their own install.
+  if (isAgentDriven()) {
+    printAgentDeferral();
+    return;
+  }
+
   await markPrompted();
 
-  const approved = await askYesNo(
-    "[agbrowse] Enjoying agbrowse? Star it on GitHub? [Y/n] ",
-  );
+  const approved = await interactiveConfirm({
+    question: "\n[agbrowse] Enjoying agbrowse? Star it on GitHub (via gh)?",
+    defaultYes: true,
+  });
   if (!approved) return;
 
   const result = starRepo();
