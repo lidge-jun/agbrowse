@@ -109,7 +109,7 @@ export async function renderWebAi(input = {}) {
 export const chatGptCapabilities = [
     defineCapability('chatgpt-active-tab-verification', async (/** @type {any} */ deps) => probeHostMatches(await deps.getPage(), CHATGPT_HOSTS)),
     defineCapability('chatgpt-composer-visible', async (/** @type {any} */ deps) => probeFirstVisibleSelector(await deps.getPage(), CHATGPT_COMPOSER_SELECTORS)),
-    defineCapability('chatgpt-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, { effort: input.reasoningEffort })),
+    defineCapability('chatgpt-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, { family: input.family, effort: input.reasoningEffort })),
     defineCapability('chatgpt-upload-surface-visible', async (/** @type {any} */ deps, /** @type {any} */ input) => {
         if (!input.filePath && input.inlineOnly !== false) return { state: 'unknown', evidence: { required: false }, next: 'send' };
         return probeFirstVisibleSelector(await deps.getPage(), CHATGPT_UPLOAD_SELECTORS, { failNext: 'inline-only' });
@@ -176,7 +176,10 @@ export async function sendWebAi(deps, input = {}) {
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelope(envelope);
-    const selectedModel = await selectChatGptModel(page, input.model, { effort: input.reasoningEffort });
+    const selectedModel = await selectChatGptModel(page, input.model, {
+        family: input.family,
+        effort: input.reasoningEffort,
+    });
 
     await waitForStableAssistantCount(page);
     const assistantCount = await countAssistantMessages(page);

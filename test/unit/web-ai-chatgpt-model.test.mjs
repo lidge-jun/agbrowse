@@ -669,14 +669,18 @@ describe('web-ai ChatGPT model selector policy', () => {
         expect(result.usedFallbacks).toContain('composer-model-pill');
     });
 
-    it('wires ChatGPT effort options through the CLI surface', () => {
+    it('wires ChatGPT family and effort options through the CLI surface', () => {
         const cliSrc = readFileSync(join(process.cwd(), 'web-ai', 'cli.mjs'), 'utf8');
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
 
         expect(cliSrc).toContain("effort: { type: 'string' }");
         expect(cliSrc).toContain("'reasoning-effort': { type: 'string' }");
         expect(cliSrc).toContain('reasoningEffort: values.effort');
-        expect(chatgptSrc).toContain("selectChatGptModel(page, input.model, { effort: input.reasoningEffort })");
+        // #87: family must be declared by the parser, carried into the input, and
+        // handed to model selection alongside effort.
+        expect(cliSrc).toContain("family: { type: 'string' }");
+        expect(cliSrc).toContain('family: values.family');
+        expect(chatgptSrc).toMatch(/selectChatGptModel\(page, input\.model, \{[\s\S]*?family: input\.family,[\s\S]*?effort: input\.reasoningEffort,[\s\S]*?\}\)/);
         expect(chatgptSrc).toContain('updateSession(session.sessionId, { modelSelection: selectedModel.modelSelection });');
         expect(chatgptSrc).toContain('...(selectedModel?.warnings || [])');
     });

@@ -200,6 +200,17 @@ async function callMcpTool(name, args, deps, state) {
                 retryHint: 'use-work-send',
             };
         }
+        // family is a ChatGPT-only axis. Fail closed instead of forwarding it to
+        // a provider that cannot honor it (#87).
+        if (args.family && provider !== 'chatgpt') {
+            return {
+                ok: false,
+                code: 'capability.unsupported',
+                tool: name,
+                reason: `family is supported only for ChatGPT; ${provider} has no Chat family axis.`,
+                retryHint: 'omit-family-or-use-chatgpt',
+            };
+        }
         const rawPolicyKeys = new Set(Object.keys(args.policy === undefined ? {} : args.policy));
         const effectivePolicy = applyProviderDefaults(provider, policy, { explicitKeys: rawPolicyKeys });
         enforcePolicy(effectivePolicy, {
@@ -216,6 +227,7 @@ async function callMcpTool(name, args, deps, state) {
                 vendor: provider,
                 inlineOnly: args.inlineOnly !== false,
                 attachmentPolicy: 'inline-only',
+                family: args.family,
                 reasoningEffort: args.effort || args.reasoningEffort,
             })),
         );

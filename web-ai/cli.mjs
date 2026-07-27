@@ -17,7 +17,7 @@ import { maybeRecordChurn } from './churn-log.mjs';
 import { watchSession } from './watcher.mjs';
 import { buildWebAiSnapshot } from './ax-snapshot.mjs';
 import { runSessionsCommand, printSessionsHuman, parseDurationToMs } from './cli-sessions.mjs';
-import { isChatGptEffortSupported, normalizeChatGptFamilyChoice } from './chatgpt-model.mjs';
+import { CHATGPT_FAMILY_OPTIONS, isChatGptEffortSupported, normalizeChatGptFamilyChoice } from './chatgpt-model.mjs';
 import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/browser/tab-manager.mjs';
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
@@ -116,6 +116,11 @@ Provider:
                         Gemini  models: flash-lite, flash, pro
                         Gemini  tool:   deepthink
                         Grok:   auto, fast, expert, thinking, heavy
+  --family <alias>    ChatGPT Chat family (independent of the --model tier):
+                        gpt-5.6-sol | gpt-5.5 | gpt-5.4 | gpt-5.3 | o3
+                      Omit to preserve the family currently selected in the UI
+                      (zero submenu mutation). An unsupported alias fails closed
+                      before any browser mutation. ChatGPT only.
   --effort <alias>    ChatGPT reasoning effort. The reasoning-effort menu is
                       ONLY touched when this flag is provided; otherwise the
                       currently-checked effort in the browser is left as-is.
@@ -586,6 +591,7 @@ async function runWebAiCliInner(argv = [], deps) {
             archive: { type: 'string' },
             'follow-up': { type: 'string', multiple: true },
             model: { type: 'string' },
+            family: { type: 'string' },
             effort: { type: 'string' },
             'reasoning-effort': { type: 'string' },
             'thinking-time': { type: 'string' },
@@ -690,6 +696,7 @@ async function runWebAiCliInner(argv = [], deps) {
         followUps: values['follow-up'] || [],
         thinkingTime: values['thinking-time'],
         model: values.model,
+        family: values.family,
         reasoningEffort: values.effort || values['reasoning-effort'],
         contextFromFiles: values['context-from-files'] || [],
         contextExclude: values['context-exclude'] || [],
@@ -1582,6 +1589,32 @@ function rejectFutureScope(values) {
             message: `unsupported ${webAiVendorLabel(values.vendor || 'chatgpt')} model selection: ${values.model}`,
             evidence: { model: values.model },
         });
+    }
+    // Chat family is a ChatGPT-only axis and is validated before any browser
+    // mutation so an unsupported alias cannot be silently ignored (#87).
+    if (values.family) {
+        const vendorKey = String(values.vendor || 'chatgpt');
+        if (vendorKey !== 'chatgpt') {
+            throw new WebAiError({
+                errorCode: 'capability.unsupported',
+                stage: 'provider-select-mode',
+                vendor: vendorKey,
+                retryHint: 'omit-family-or-use-chatgpt',
+                message: `--family is supported only for ChatGPT; ${webAiVendorLabel(vendorKey)} has no Chat family axis`,
+                evidence: { family: values.family, vendor: vendorKey },
+                mutationAllowed: false,
+            });
+        }
+        if (!normalizeChatGptFamilyChoice(values.family)) {
+            throw new WebAiError({
+                errorCode: 'provider.model-mismatch',
+                stage: 'provider-select-mode',
+                vendor: 'chatgpt',
+                retryHint: 'model-fallback',
+                message: `unsupported ChatGPT family: ${values.family}`,
+                evidence: { family: values.family, supported: Object.keys(CHATGPT_FAMILY_OPTIONS) },
+            });
+        }
     }
     const effort = values.effort || values['reasoning-effort'];
     if (effort && !values.model) {

@@ -233,6 +233,35 @@ describe('web-ai CLI contract', () => {
         expect(result.stderr).toContain('unsupported ChatGPT model selection');
     });
 
+    it('accepts every canonical --family alias in CLI preflight', async () => {
+        for (const family of ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3', 'o3']) {
+            const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--family', family]);
+            expect(result.code, `family ${family} should pass preflight`).toBe(0);
+            expect(result.stderr).not.toContain('unsupported');
+        }
+    });
+
+    it('rejects an unsupported --family before any browser mutation', async () => {
+        const result = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--family', 'gpt-5.6-luna']);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('unsupported ChatGPT family');
+    });
+
+    it('rejects --family for non-ChatGPT vendors', async () => {
+        for (const vendor of ['gemini', 'grok']) {
+            const result = await execBrowser(['web-ai', 'render', '--vendor', vendor, '--prompt', 'hello', '--family', 'gpt-5.6-sol']);
+            expect(result.code, `${vendor} should reject --family`).not.toBe(0);
+            expect(result.stderr).toContain('--family is supported only for ChatGPT');
+        }
+    });
+
+    it('documents --family in web-ai help so docs and parser agree', async () => {
+        const result = await execBrowser(['web-ai', '--help']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('--family <alias>');
+        expect(result.stdout).toContain('gpt-5.6-sol | gpt-5.5 | gpt-5.4 | gpt-5.3 | o3');
+    });
+
     it('accepts observed Gemini and Grok model choices in CLI preflight', async () => {
         const gemini = await execBrowser(['web-ai', 'render', '--vendor', 'gemini', '--prompt', 'hello', '--model', 'thinking']);
         expect(gemini.stderr).not.toContain('unsupported gemini model selection');

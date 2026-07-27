@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     BROWSER_TOOLS,
     MCP_TOOLS,
@@ -70,6 +72,14 @@ describe('web-ai MCP tool schema', () => {
         expect(schema.inputSchema.properties.family.enum).toEqual([
             'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3', 'o3',
         ]);
+    });
+
+    it('web_ai_submit_prompt forwards the advertised family into provider send (#87)', async () => {
+        const mcpSrc = readFileSync(join(process.cwd(), 'web-ai', 'mcp-server.mjs'), 'utf8');
+        // The schema advertises family, so the send path must carry it and must
+        // fail closed for providers without a Chat family axis.
+        expect(mcpSrc).toContain('family: args.family');
+        expect(mcpSrc).toContain("args.family && provider !== 'chatgpt'");
     });
 
     it('web_ai_submit_prompt effort enum includes canonical and legacy aliases but not max/ultra', () => {

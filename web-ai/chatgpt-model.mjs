@@ -1506,6 +1506,7 @@ function escapeRegExp(value) {
 
 /**
  * @typedef {Object} CapabilityProbeOptions
+ * @property {string} [family]
  * @property {string} [effort]
  * @property {string} [reasoningEffort]
  */
@@ -1526,7 +1527,18 @@ function escapeRegExp(value) {
 export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     const requested = normalizeChatGptModelChoice(model);
     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
-    if (!model && !(options.effort || options.reasoningEffort)) return { state: 'unknown', evidence: { requested: null, effort: null }, next: 'send' };
+    const requestedFamily = normalizeChatGptFamilyChoice(options.family);
+    // An unsupported family alias must never look probe-clean: a rendered/probe
+    // pass is otherwise read as proof the family was enforced (#87).
+    if (options.family && !requestedFamily) {
+        return { state: 'fail', evidence: { family: options.family }, next: 'model-fallback' };
+    }
+    if (!model && !(options.effort || options.reasoningEffort) && !requestedFamily) return { state: 'unknown', evidence: { requested: null, effort: null, family: null }, next: 'send' };
+    if (!model && requestedFamily) {
+        // Family-only requests do not need a tier row; report the family axis as
+        // observable without claiming tier selectability.
+        return { state: 'unknown', evidence: { requested: null, effort: null, family: requestedFamily }, next: 'send' };
+    }
     if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
     if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested, effort: options.effort || options.reasoningEffort }, next: 'model-fallback' };
     if (requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) return { state: 'fail', evidence: { requested, effort: requestedEffort }, next: 'model-fallback' };
@@ -1557,5 +1569,5 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     }
     const selectable = Boolean(option) && (!requestedEffort || Boolean(effortOption));
     const state = selectable ? (menuClosed ? 'ok' : 'warn') : 'fail';
-    return { state, evidence: { requested, effort: requestedEffort || null, menuClosed, usedFallbacks }, next: state === 'ok' ? 'send' : 'model-fallback' };
+    return { state, evidence: { requested, effort: requestedEffort || null, family: requestedFamily || null, menuClosed, usedFallbacks }, next: state === 'ok' ? 'send' : 'model-fallback' };
 }
