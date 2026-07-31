@@ -30,13 +30,13 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
-| `scripts/` | 12 | 1805 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 157 | 24307 | deterministic module tests |
+| `scripts/` | 14 | 2248 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
+| `test/unit/` | 158 | 24472 | deterministic module tests |
 | `test/integration/` | 24 | 5188 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 3583 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
-| `devlog/` | 607 | 89890 | phased plan, research, implementation notes (incl. strict-migration phases) |
+| `devlog/` | 608 | 90163 | phased plan, research, implementation notes (incl. strict-migration phases) |
 
 `structure/` 자체는 이 문서가 검증 대상으로 삼는 source tree 밖의 문서 허브라서 위 집계에서 제외한다. `verify-counts.sh`는 이 표의 경로별 파일 수와 라인 수를 live source 기준으로 비교한다.
 
@@ -98,7 +98,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `scripts/run-web-ai-eval.mjs` | 59 | provider fixture eval CLI wrapper |
 | `scripts/release.sh` | 260 | latest release gate and dispatch helper |
 | `scripts/release-preview.sh` | 69 | preview release dispatcher wrapper |
-| `scripts/release-gates.mjs` | 596 | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) |
+| `scripts/release-gates.mjs` | 611 | Phase 22 named release gates (`gate:typecheck`, `gate:tests`, `gate:truth-table-fresh`, `gate:mcp-scope-frozen`, `gate:no-experimental-in-readme-ready-section`) |
 | `scripts/check-strict-baseline.mjs` | 135 | strict-mode baseline guard for `tsc --noEmit` JSDoc opt-in surface |
 | `scripts/check-module-graph.mjs` | 233 | module dependency graph regression check |
 | `scripts/smoke-bins.mjs` | 60 | published bin smoke check used in release gate |

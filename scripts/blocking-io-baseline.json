@@ -1,0 +1,178 @@
+{
+    "files": {
+        "skills/browser/adaptive-fetch/defuddle-extractor.mjs": {
+            "sync": 1,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/browser.mjs": {
+            "sync": 43,
+            "cdp": 18,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/extract.mjs": {
+            "sync": 2,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/profile-lock.mjs": {
+            "sync": 15,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/runway-generate.mjs": {
+            "sync": 1,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/runway-sequence.mjs": {
+            "sync": 3,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/skill-install.mjs": {
+            "sync": 13,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/tab-manager.mjs": {
+            "sync": 4,
+            "cdp": 7,
+            "nonLiteralSend": 1
+        },
+        "skills/browser/update-check.mjs": {
+            "sync": 5,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/action-cache.mjs": {
+            "sync": 5,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/active-command-store.mjs": {
+            "sync": 12,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/ax-snapshot.mjs": {
+            "sync": 0,
+            "cdp": 6,
+            "nonLiteralSend": 0
+        },
+        "web-ai/cache-metrics.mjs": {
+            "sync": 7,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-attachments.mjs": {
+            "sync": 1,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-composer.mjs": {
+            "sync": 0,
+            "cdp": 1,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-deep-research.mjs": {
+            "sync": 0,
+            "cdp": 1,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-files.mjs": {
+            "sync": 0,
+            "cdp": 2,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-images.mjs": {
+            "sync": 3,
+            "cdp": 2,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-multi-turn.mjs": {
+            "sync": 0,
+            "cdp": 1,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-project-sources.mjs": {
+            "sync": 3,
+            "cdp": 11,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt-upload-surface.mjs": {
+            "sync": 0,
+            "cdp": 3,
+            "nonLiteralSend": 0
+        },
+        "web-ai/chatgpt.mjs": {
+            "sync": 0,
+            "cdp": 1,
+            "nonLiteralSend": 0
+        },
+        "web-ai/churn-log.mjs": {
+            "sync": 5,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/claim-audit.mjs": {
+            "sync": 2,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/code-artifact.mjs": {
+            "sync": 3,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/context-pack/repomix-runner.mjs": {
+            "sync": 0,
+            "cdp": 0,
+            "nonLiteralSend": 1
+        },
+        "web-ai/context-pack/transformer.mjs": {
+            "sync": 0,
+            "cdp": 0,
+            "nonLiteralSend": 1
+        },
+        "web-ai/failure-diagnostics.mjs": {
+            "sync": 0,
+            "cdp": 1,
+            "nonLiteralSend": 0
+        },
+        "web-ai/gemini-live.mjs": {
+            "sync": 1,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/session-artifacts.mjs": {
+            "sync": 8,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/session-store.mjs": {
+            "sync": 24,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/session.mjs": {
+            "sync": 4,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/tab-lease-store.mjs": {
+            "sync": 12,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "web-ai/watcher.mjs": {
+            "sync": 7,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        }
+    },
+    "totals": {
+        "sync": 184,
+        "cdp": 54
+    }
+}
