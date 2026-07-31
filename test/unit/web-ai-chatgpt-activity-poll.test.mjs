@@ -1103,6 +1103,13 @@ describe('poll loop when every reader fails (B01)', () => {
         vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
         const snapshot = { text: 'answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
         let waits = 0;
+        let reads = 0;
+        // `failFrom`/`failUntil` describe a WINDOW of blind ticks: reads succeed,
+        // then fail, then recover. That sequence is the only one where a stale
+        // candidate left over from before the failure could actually be used.
+        const blind = () => plan.failFrom !== undefined
+            && reads > plan.failFrom
+            && (plan.failUntil === undefined || reads <= plan.failUntil);
         const page = {
             url: () => 'https://chatgpt.com/c/activity',
             waitForTimeout: async (ms) => {
@@ -1115,18 +1122,22 @@ describe('poll loop when every reader fails (B01)', () => {
                 if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
                 if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
                 if (source.startsWith('function readAssistantSnapshotSources')) {
-                    if (plan.splitFails) throw new Error('split detached');
+                    reads += 1;
+                    if (plan.splitFails || blind()) throw new Error('split detached');
                     return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
                 }
                 if (source.startsWith('function readTopLevelAssistantSnapshots')) {
-                    if (plan.snapshotFails) throw new Error('snapshot detached');
+                    if (plan.snapshotFails || blind()) throw new Error('snapshot detached');
                     return [snapshot];
                 }
                 if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
                 return true;
             },
             locator: () => ({
-                all: async () => { if (plan.snapshotFails) throw new Error('detached'); return []; },
+                all: async () => {
+                    if (plan.snapshotFails || blind()) throw new Error('detached');
+                    return [];
+                },
                 first: () => ({ isVisible: async () => false }),
                 count: async () => 0,
             }),
@@ -1142,6 +1153,18 @@ describe('poll loop when every reader fails (B01)', () => {
         expect(result.status).not.toBe('complete');
         expect(waitCount()).toBeGreaterThan(1);
         expect(result.warnings).toContain('assistant-read-unverified');
+    });
+
+    it('X11b: blind ticks do not count toward the quiet window once reads recover', async () => {
+        // Ticks 1-2 build stability, 3-6 read nothing, then reads recover with
+        // the SAME text. Keeping the earlier `stableSince` would let the blind
+        // interval count as quiet time and complete on evidence the poll never
+        // actually observed; it has to re-earn the window instead.
+        const { page, waitCount } = pollPage({ failFrom: 2, failUntil: 6 });
+        const { result } = await poll(page, 12);
+
+        expect(result.warnings).toContain('assistant-read-unverified');
+        expect(waitCount()).toBeGreaterThan(6);
     });
 
     it('X12: a failed split with a working fallback still completes', async () => {

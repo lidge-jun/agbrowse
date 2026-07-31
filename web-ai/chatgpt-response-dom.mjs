@@ -491,10 +491,16 @@ export async function readTopLevelAssistantTextsFromLocators(page, selectors = C
             text = String(text || '').trim();
             if (text) texts.push(text);
         }
+        // A PARTIAL read is not a smaller success. The caller turns this list
+        // into `baseline.assistantCount`, a positional slice point, so reading
+        // one of two turns records 1 and re-admits the other as a new answer —
+        // the same corruption as recording 0, only quieter. Discard this
+        // selector's result and let a fully-readable alternative path answer.
+        if (anyNodeUnread) {
+            anySelectorFailed = true;
+            continue;
+        }
         if (texts.length) return { ok: true, texts };
-        // Nodes were found but none could be read: that is a failed read, not an
-        // empty page.
-        if (anyNodeUnread) anySelectorFailed = true;
     }
     return { ok: !anySelectorFailed, texts: [] };
 }

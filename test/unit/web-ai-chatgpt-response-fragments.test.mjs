@@ -399,6 +399,35 @@ describe('locator fallback distinguishes an unread page from an empty one (B07)'
             .resolves.toEqual({ ok: true, texts: [] });
     });
 
+    it('X4c: a partially readable selector is discarded, not undercounted', async () => {
+        // Two assistant turns, one unreadable. Returning the one text would set
+        // `baseline.assistantCount` to 1 and re-admit the other turn as a new
+        // answer — the same corruption as recording 0, only quieter.
+        const page = pageWith({
+            'sel-a': {
+                all: async () => [
+                    { innerText: async () => 'first answer' },
+                    { innerText: async () => { throw new Error('detached'); } },
+                ],
+            },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X4d: a fully readable alternative selector still answers', async () => {
+        // Discarding a partial read must not discard a good path behind it.
+        const page = pageWith({
+            'sel-a': {
+                all: async () => [{ innerText: async () => { throw new Error('detached'); } }],
+            },
+            'sel-b': { all: async () => [{ innerText: async () => 'clean answer' }] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: ['clean answer'] });
+    });
+
     it('a readable node still short-circuits on the first match', async () => {
         const page = pageWith({
             'sel-a': { all: async () => [{ innerText: async () => 'answer' }] },
