@@ -983,8 +983,9 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
         // recovery probe then cannot read it — so the unverified verdict has to
         // survive `recoverSessionTab` and the forceRecover branch as well.
         //
-        // The final `withSessionPage` guard after a page death needs a live
-        // browser to reach and is defence-in-depth over this same policy.
+        // The guard after a callback page-death is a separate branch again; it
+        // needs `tab-manager` mocked to keep a page alive, so it lives in
+        // web-ai-shared-target-lock.test.mjs where that harness already exists.
         let listReads = 0;
         globalThis.fetch = async () => {
             listReads += 1;

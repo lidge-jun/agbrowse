@@ -179,6 +179,79 @@ describe('web-ai shared target lock guard', () => {
         }
     });
 
+    it('a page death whose recovery cannot verify liveness stays retryable', async () => {
+        // `withSessionPage` guards liveness twice: once on entry, once after the
+        // callback dies. Only the second one is exercised here — the first probe
+        // must succeed so the callback runs at all.
+        const page = createMockChatGptPage('https://chatgpt.com/c/live');
+        let probes = 0;
+        vi.doMock('../../skills/browser/tab-manager.mjs', () => ({
+            createTab: vi.fn(async () => { throw new Error('must not create a tab'); }),
+            getPageByTargetId: vi.fn(async () => page),
+            isTabAlive: vi.fn(async () => true),
+            probeTabAlive: vi.fn(async () => {
+                probes += 1;
+                return probes === 1 ? 'alive' : 'unknown';
+            }),
+            listManagedTabs: vi.fn(async () => []),
+            waitForPageByTargetId: vi.fn(async () => page),
+        }));
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { withSessionPage } = await import('../../web-ai/tab-recovery.mjs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'a', attachmentPolicy: 'inline-only' }, {
+            targetId: 'target-dies',
+            conversationUrl: 'https://chatgpt.com/c/live',
+        });
+
+        const failure = await withSessionPage(
+            { getPort: () => 9222 },
+            session.sessionId,
+            async () => { throw new Error('Target closed'); },
+        ).then(() => null, err => err);
+
+        expect(probes).toBeGreaterThan(1);
+        expect(failure).toMatchObject({
+            errorCode: 'cdp.unreachable',
+            retryHint: 'retry',
+            evidence: { liveness: 'unknown' },
+        });
+    });
+
+    it('unverified liveness is reported as retryable, not as a wrong tab', async () => {
+        // The CLI maps resolver outcomes to public errors independently of the
+        // resolver itself, so this branch needs its own coverage: advising
+        // `--navigate` here would replace a tab we merely could not read.
+        const page = createMockChatGptPage('https://chatgpt.com/c/live');
+        mockTabManagerUnreadable(page);
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { runWebAiCli } = await import('../../web-ai/cli.mjs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'a', attachmentPolicy: 'inline-only' }, {
+            targetId: 'target-unreadable',
+            conversationUrl: 'https://chatgpt.com/c/live',
+        });
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            const failure = await runWebAiCli(['stop', '--session', session.sessionId, '--json'], {
+                getPort: () => 9222,
+                getBrowserStatus: async () => ({ running: true }),
+                readBrowserState: () => ({ headless: false }),
+            }).then(() => null, err => err);
+
+            expect(failure).toMatchObject({
+                errorCode: 'cdp.unreachable',
+                stage: 'target-resolution',
+                retryHint: 'retry',
+                evidence: { liveness: 'unknown' },
+            });
+            // Recovery advice belongs to a tab we know is wrong, not one we
+            // could not observe.
+            expect(JSON.stringify(failure.evidence || {})).not.toContain('--navigate');
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
+
     it('ChatGPT target-mismatch result exposes structured recovery evidence', async () => {
         const { createSession, sessionToBaseline } = await import('../../web-ai/session.mjs');
         const { buildTargetMismatchResult } = await import('../../web-ai/session-target-guard.mjs');
@@ -233,6 +306,23 @@ function mockTabManagerPage(page) {
         getPageByTargetId: vi.fn(async () => page),
         isTabAlive: vi.fn(async () => true),
         probeTabAlive: vi.fn(async () => 'alive'),
+        listManagedTabs: vi.fn(async () => []),
+        waitForPageByTargetId: vi.fn(async () => page),
+    }));
+}
+
+/**
+ * The tab list cannot be read, so liveness is unknown for every target.
+ *
+ * @param {any} page
+ * @param {{ pageLookupFails?: boolean }} [options]
+ */
+function mockTabManagerUnreadable(page, options = {}) {
+    vi.doMock('../../skills/browser/tab-manager.mjs', () => ({
+        createTab: vi.fn(async () => { throw new Error('must not create a tab'); }),
+        getPageByTargetId: vi.fn(async () => (options.pageLookupFails ? null : page)),
+        isTabAlive: vi.fn(async () => false),
+        probeTabAlive: vi.fn(async () => 'unknown'),
         listManagedTabs: vi.fn(async () => []),
         waitForPageByTargetId: vi.fn(async () => page),
     }));
