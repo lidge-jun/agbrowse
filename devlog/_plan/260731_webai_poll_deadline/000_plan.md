@@ -56,7 +56,7 @@
 | 위험 | 놓친 동기 IO 하나가 계약을 깬다 | 프로세스 경계 도입, deps 직렬화, 디버깅 난이도 |
 | 범위 | `web-ai/` + `skills/browser/` 다수 파일 | 진입점 + 워커 래퍼 |
 
-**WP1이 두 모델을 비교해 하나를 고른다.** 이 선택이 이후 모든 work-phase를
+**WP1이 세 후보(in-process / worker / subprocess)를 비교해 하나를 고른다.** 이 선택이 이후 모든 work-phase를
 규정하므로 첫 작업이다. 자매 유닛(`artifact/finalizer`)도 같은 모델을 써야 하니
 결과를 양쪽에 기록한다.
 
