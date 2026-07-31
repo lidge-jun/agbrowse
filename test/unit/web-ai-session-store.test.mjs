@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -302,12 +302,44 @@ describe('web-ai session command lock waits without freezing the event loop', ()
 
     it('V2: an uncontended lock is acquired without waiting', async () => {
         const { withSessionCommandLock } = await freshStore();
-        const started = Date.now();
-        let ran = false;
-        await withSessionCommandLock('TESTSESSIONFREE', async () => { ran = true; }, { heartbeatMs: 0 });
-        expect(ran).toBe(true);
-        expect(Date.now() - started).toBeLessThan(200);
+        // A wall-clock bound would be flaky on a loaded CI box and would still
+        // pass with a needless delay in place. Count the retry waits instead.
+        const timers = vi.spyOn(globalThis, 'setTimeout');
+        try {
+            let ran = false;
+            await withSessionCommandLock('TESTSESSIONFREE', async () => { ran = true; }, { heartbeatMs: 0 });
+            expect(ran).toBe(true);
+            expect(timers).not.toHaveBeenCalled();
+        } finally {
+            timers.mockRestore();
+        }
     });
+
+    it('V5: a permanently held lock still gives up after a bounded number of retries', async () => {
+        // The safety claim of this change is that waiting is bounded. Turning a
+        // blocking loop into 200 sequential timers would be worse, not better,
+        // if the ceiling stopped applying.
+        const { withSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONHELD';
+        const { writeFileSync, mkdirSync } = await import('node:fs');
+        const { dirname } = await import('node:path');
+        const lockPath = join(tmpHome, `web-ai-sessions.json.cmd.${sessionId}.lock`);
+        mkdirSync(dirname(lockPath), { recursive: true });
+        // Our own PID and a far-future expiry, so the lock is never judged stale.
+        writeFileSync(lockPath, JSON.stringify({
+            pid: process.pid,
+            sessionId,
+            acquiredAt: new Date().toISOString(),
+            heartbeatAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        }));
+
+        let ran = false;
+        const attempt = withSessionCommandLock(sessionId, async () => { ran = true; }, { heartbeatMs: 0 });
+
+        await expect(attempt).rejects.toThrow(/failed to acquire lock .* after 200 attempts/);
+        expect(ran).toBe(false);
+    }, 30_000);
 
     it('V6: the lock is released when the callback throws', async () => {
         const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
