@@ -87,6 +87,39 @@ describe('web-ai context pack', () => {
         expect(renderContextDryRunReport(result)).toContain('[context-dry-run] 1 files');
     });
 
+    /**
+     * The package directory used to be an import-time constant, so this module
+     * — imported statically at the top of this file — wrote packages under
+     * whatever `BROWSER_AGENT_HOME` held at import. A test that points the
+     * variable elsewhere in its body ran too late, and package zips landed in
+     * the developer's real `~/.browser-agent`.
+     */
+    it('writes packages under the home current at call time, not at import time', async () => {
+        const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
+        await mkdir(join(dir, 'web-ai'), { recursive: true });
+        await writeFile(join(dir, 'web-ai', 'question.mjs'), 'export function ask() { return "ok"; }\n');
+        const lateHome = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-home-')));
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = lateHome;
+        try {
+            const result = await prepareContextForBrowser({
+                cwd: dir,
+                vendor: 'chatgpt',
+                model: 'pro',
+                prompt: 'review this',
+                contextFromFiles: ['web-ai/*.mjs'],
+                contextTransport: 'upload',
+            });
+            const packagePath = result.attachments[0].path;
+            expect(packagePath).toContain(join(lateHome, 'web-ai-context-packages'));
+            await expect(access(/** @type {string} */ (packagePath))).resolves.toBeUndefined();
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            await rm(lateHome, { recursive: true, force: true });
+        }
+    });
+
     it('can force inline transport for the old composer-only path', async () => {
         const dir = await realpath(await mkdtemp(join(tmpdir(), 'ctx-pack-')));
         await writeFile(join(dir, 'small.txt'), 'hello');

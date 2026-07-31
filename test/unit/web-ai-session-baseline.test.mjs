@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -66,5 +66,37 @@ describe('web-ai session baseline three-tier fallback', () => {
         expect(sameHost).toBeNull();
         const anyHost = getLatestBaseline('chatgpt');
         expect(anyHost?.url).toBe('https://chatgpt.com/c/x');
+    });
+
+    /**
+     * Every other test here imports a cache-busted module per test, so each one
+     * starts with an empty map. That hides the bug this covers: the map and its
+     * loaded flag are module-global, so ONE module instance seeing two homes
+     * answered reads from the wrong one and merged both homes' rows on save.
+     */
+    it('does not serve one home\'s baselines to another on the same module instance', async () => {
+        const session = await freshSession();
+        const envelope = { vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' };
+        const homeB = mkdtempSync(join(tmpdir(), 'agbrowse-baseline-b-'));
+        const homeC = mkdtempSync(join(tmpdir(), 'agbrowse-baseline-c-'));
+        try {
+            process.env.BROWSER_AGENT_HOME = homeB;
+            session.saveBaseline({ vendor: 'chatgpt', url: 'https://chatgpt.com/c/home-b', envelope, assistantCount: 0, textHash: '0' });
+
+            process.env.BROWSER_AGENT_HOME = homeC;
+            // Home C has no baselines. A shared map would hand back home B's.
+            expect(session.getLatestBaseline('chatgpt')).toBeNull();
+
+            session.saveBaseline({ vendor: 'chatgpt', url: 'https://chatgpt.com/c/home-c', envelope, assistantCount: 0, textHash: '0' });
+            const rowsInC = JSON.parse(readFileSync(join(homeC, 'web-ai-baselines.json'), 'utf8')).baselines;
+            expect(rowsInC.map((/** @type {any} */ row) => row.url)).toEqual(['https://chatgpt.com/c/home-c']);
+
+            // Going back must reload B rather than keep C's rows.
+            process.env.BROWSER_AGENT_HOME = homeB;
+            expect(session.getLatestBaseline('chatgpt')?.url).toBe('https://chatgpt.com/c/home-b');
+        } finally {
+            rmSync(homeB, { recursive: true, force: true });
+            rmSync(homeC, { recursive: true, force: true });
+        }
     });
 });

@@ -207,18 +207,20 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         });
         vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
 
-        const { createSession } = await import('../../web-ai/session.mjs');
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
         const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
             { targetId: 'target-late2', conversationUrl: 'https://chatgpt.com/c/late2' },
         );
 
-        // Alive through the session write and the transcript, expired by the
-        // time the archive would start. `archiveConversation` clicks through the
-        // provider UI, so an after-only check comes too late to prevent it.
-        let checks = 0;
-        const stillActive = () => { checks += 1; return checks <= 2; };
+        // Expires at the archive boundary, keyed on the PHASE rather than on a
+        // check count. The count version broke silently: adding an `expired()`
+        // between the transcript and the archive moved this test's exit point
+        // above the gate it was written for, and it kept passing while proving
+        // nothing. The artifact record is written in the phase immediately
+        // before the archive, so its presence marks that boundary.
+        const stillActive = () => (getSession(session.sessionId).artifacts ?? []).length === 0;
 
         const result = await finalizeProviderTab({ getPort: () => 9222 }, {
             vendor: 'chatgpt',
@@ -232,6 +234,42 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         expect(archiveConversation).not.toHaveBeenCalled();
         expect(poolTab).not.toHaveBeenCalled();
         expect(result.archiveSkippedReason).toBe('poll-deadline-exceeded');
+    });
+
+    it('does not mark the session archived when the deadline passes during the archive', async () => {
+        const poolTab = vi.fn(async () => ({ ok: true, pooled: true }));
+        // Expires INSIDE the archive. It drives the provider UI across several
+        // clicks and waits, so this is the realistic case: the run was alive
+        // when the archive started and is not when it returns.
+        let archiving = false;
+        const archiveConversation = vi.fn(async () => { archiving = true; return { ok: true }; });
+        vi.doMock('../../web-ai/chatgpt-archive.mjs', async () => {
+            const actual = await vi.importActual('../../web-ai/chatgpt-archive.mjs');
+            return { ...actual, archiveConversation };
+        });
+        vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
+
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
+            { targetId: 'target-during', conversationUrl: 'https://chatgpt.com/c/during' },
+        );
+
+        await finalizeProviderTab({ getPort: () => 9222 }, {
+            vendor: 'chatgpt',
+            session,
+            page: { url: () => 'https://chatgpt.com/c/during' },
+            answerText: 'late answer',
+            archiveFlag: 'always',
+            stillActive: () => !archiving,
+        });
+
+        expect(archiveConversation).toHaveBeenCalled();
+        // The archive itself could not be prevented — it had already started.
+        // What must not happen is the session write claiming it succeeded.
+        expect(getSession(session.sessionId).archived ?? false).toBe(false);
+        expect(poolTab).not.toHaveBeenCalled();
     });
 
     it('still finalizes normally when the run is active throughout', async () => {
