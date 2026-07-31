@@ -449,16 +449,33 @@ export function readTopLevelAssistantTexts(selectors) {
  * Fallback path for environments where page.evaluate fails but Playwright
  * locators still work. It applies the same descendant de-duplication rule as
  * readTopLevelAssistantTexts().
+ *
+ * Reports whether the read HAPPENED, not just what it found. The selectors are
+ * ALTERNATIVE search paths, so one of them throwing while another legitimately
+ * matches nothing is not evidence the page has no assistant turns — the answer
+ * may live behind the selector that failed. `ok: true` with an empty list means
+ * every path was actually examined.
+ *
  * @param {any} page
  * @param {string[]} selectors
- * @returns {Promise<string[]>}
+ * @returns {Promise<{ ok: boolean, texts: string[] }>}
  */
 export async function readTopLevelAssistantTextsFromLocators(page, selectors = CHATGPT_ASSISTANT_SELECTORS) {
+    let anySelectorFailed = false;
     for (const selector of selectors) {
-        const locators = await page.locator(selector).all().catch(() => []);
+        let locators;
+        try {
+            locators = await page.locator(selector).all();
+            if (!Array.isArray(locators)) throw new Error('locator.all() did not return a list');
+        } catch {
+            anySelectorFailed = true;
+            continue;
+        }
         const texts = [];
+        let anyNodeUnread = false;
         for (const locator of locators) {
             let text = '';
+            let read = true;
             if (typeof locator.evaluate === 'function') {
                 text = await locator.evaluate((/** @type {any} */ node, /** @type {string} */ activeSelector) => {
                     const matched = Array.from(document.querySelectorAll(activeSelector));
@@ -466,14 +483,18 @@ export async function readTopLevelAssistantTextsFromLocators(page, selectors = C
                         other !== node && typeof other.contains === 'function' && other.contains(node));
                     if (nested) return '';
                     return String(node.innerText || node.textContent || '').trim();
-                }, selector).catch(() => '');
+                }, selector).catch(() => { read = false; return ''; });
             } else {
-                text = await locator.innerText().catch(() => '');
+                text = await locator.innerText().catch(() => { read = false; return ''; });
             }
+            if (!read) anyNodeUnread = true;
             text = String(text || '').trim();
             if (text) texts.push(text);
         }
-        if (texts.length) return texts;
+        if (texts.length) return { ok: true, texts };
+        // Nodes were found but none could be read: that is a failed read, not an
+        // empty page.
+        if (anyNodeUnread) anySelectorFailed = true;
     }
-    return [];
+    return { ok: !anySelectorFailed, texts: [] };
 }

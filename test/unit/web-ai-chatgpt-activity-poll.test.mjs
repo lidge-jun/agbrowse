@@ -929,3 +929,66 @@ describe('degraded reads are reported, not hidden', () => {
         expect(result.warnings).toContain('file-artifact-cdp-unavailable');
     });
 });
+
+/**
+ * An unreadable assistant count is not zero (issue #88, boundaries B01/B02).
+ *
+ * `baseline.assistantCount` is the positional slice point: the poll takes
+ * `wrapped.slice(baseline.assistantCount)` to decide which turns are new. A
+ * failed read used to store 0, which re-admits the entire conversation as fresh
+ * candidates. WP10's ordering gate catches most of that, but not when ordering
+ * is `unverifiable` or when the image shortcut runs first — and relying on a
+ * later gate to undo a poisoned candidate set is the wrong place to fix it.
+ */
+describe('an uncountable baseline stops the send (B01/B02)', () => {
+    /** Every read path fails: split, snapshot retries, and the locator fallback. */
+    function unreadablePage() {
+        return {
+            url: () => 'https://chatgpt.com/c/unreadable',
+            waitForTimeout: async () => { await new Promise(resolve => setImmediate(resolve)); },
+            evaluate: async () => { throw new Error('evaluate detached'); },
+            locator: () => ({
+                all: async () => { throw new Error('detached'); },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+            innerText: async () => '',
+        };
+    }
+
+    it('X8: send fails typed instead of writing a zero baseline', async () => {
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const page = unreadablePage();
+
+        const failure = await sendWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+        ).then(() => null, err => err);
+
+        expect(failure).toMatchObject({
+            errorCode: 'snapshot.unavailable',
+            stage: 'baseline-snapshot',
+            retryHint: 're-snapshot',
+        });
+    });
+
+    it('X8b: deep research fails before creating a session or a lease', async () => {
+        // Ordering matters: `envelopeSummary.assistantCount` is read back later
+        // through `sessionToBaseline`, where `Number(null) || 0` would resurrect
+        // the false zero.
+        const { deepResearchWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const before = listSessions({ vendor: 'chatgpt' }).length;
+        const page = unreadablePage();
+
+        const failure = await deepResearchWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+        ).then(() => null, err => err);
+
+        expect(failure).toMatchObject({
+            errorCode: 'snapshot.unavailable',
+            stage: 'baseline-snapshot',
+        });
+        expect(listSessions({ vendor: 'chatgpt' }).length).toBe(before);
+    });
+});

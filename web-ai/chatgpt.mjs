@@ -334,6 +334,10 @@ export async function sendWebAi(deps, input = {}) {
 
     await waitForStableAssistantCount(page);
     const assistantCount = await countAssistantMessages(page);
+    // Sending without a countable baseline poisons every later poll on this
+    // session: 0 would re-admit the whole conversation as new candidates. Fail
+    // before the prompt goes out rather than after.
+    if (assistantCount === null) throw baselineSnapshotError();
     const baseline = saveBaseline({
         vendor: envelope.vendor,
         url: page.url(),
@@ -754,11 +758,25 @@ export async function pollWebAi(deps, input = {}) {
         // Only a FAILED acquisition falls back. A successful empty read means the
         // page genuinely has nothing yet, and must keep polling rather than have a
         // legacy reader invent candidates.
-        const wrapped = split.ok
-            ? split.wrapped
-            : (await readAssistantSnapshots(page)).map((sample, index) => ({
+        let wrapped = split.wrapped;
+        if (!split.ok) {
+            const fallbackRead = await readAssistantSnapshots(page);
+            // Both readers failed: there is no candidate set to reason about, so
+            // reset stability and let the shared pacing below run. Skipping the
+            // wait would spin the loop and, on the virtual clock, never reach the
+            // deadline.
+            if (!fallbackRead.ok) {
+                observations.add('assistant-read-unverified');
+                stableText = '';
+                stableSnapshot = null;
+                stableSince = 0;
+                await page.waitForTimeout(500);
+                continue;
+            }
+            wrapped = fallbackRead.snapshots.map((sample, index) => ({
                 ...sample, source: 'wrapped', domOrder: index,
             }));
+        }
         const wrapperless = split.wrapperless;
         // Wrapped turns are positional: slice against the pre-send count.
         // Wrapperless blocks are already correlated by DOM-following the latest
@@ -1341,6 +1359,11 @@ export async function deepResearchWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
     const page = await requireChatGptPage(deps);
     const assistantCount = await countAssistantMessages(page);
+    // Before `createSession` and `recordActiveLease` on purpose: this value is
+    // stored in `envelopeSummary` and later read back by `sessionToBaseline`,
+    // where `Number(null) || 0` would resurrect the false zero. Stopping here
+    // leaves no session or lease behind.
+    if (assistantCount === null) throw baselineSnapshotError();
     const targetId = await deps.getTargetId?.().catch(() => null) || null;
     const session = createSession(envelope, {
         targetId,
@@ -1580,6 +1603,27 @@ function persistResolverTraceForSession(session, traceCtx) {
 /**
  * @param {any} page
  */
+/**
+ * The baseline could not be read.
+ *
+ * Reuses the registered `snapshot.unavailable` rather than inventing a code:
+ * this is literally "a snapshot could not be captured", the same meaning it
+ * carries in `ax-snapshot.mjs`. `provider.commit-not-verified` would be wrong —
+ * that says a prompt was submitted but unconfirmed, and would tell the caller a
+ * duplicate send might be in flight when nothing has been sent at all.
+ *
+ * @returns {WebAiError}
+ */
+function baselineSnapshotError() {
+    return new WebAiError({
+        errorCode: 'snapshot.unavailable',
+        stage: 'baseline-snapshot',
+        vendor: 'chatgpt',
+        retryHint: 're-snapshot',
+        message: 'assistant baseline could not be read; refusing to start with an unknown turn count',
+    });
+}
+
 async function countAssistantMessages(page) {
     // WRAPPED only: `baseline.assistantCount` is a positional count, and
     // wrapperless blocks are correlated by DOM position instead, so counting them
@@ -1588,9 +1632,14 @@ async function countAssistantMessages(page) {
     // A successful empty read returns 0 — falling back to the legacy locator
     // reader there would count a user turn as an assistant message and shift the
     // baseline by one, silently dropping the next real answer.
+    //
+    // `null` means the count is UNKNOWN, which is not the same as 0. Recording 0
+    // for a page we could not read makes every later slice start from the
+    // beginning of the conversation.
     const split = await readAssistantSnapshotsSplit(page);
     if (split.ok) return split.wrapped.length;
-    return (await readAssistantMessages(page)).length;
+    const legacy = await readAssistantMessages(page);
+    return legacy.ok ? legacy.messages.length : null;
 }
 
 /**
@@ -1602,8 +1651,11 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
     let previous = -1;
     let stableReads = 0;
     while (Date.now() < deadline) {
-        const count = await countAssistantMessages(page).catch(() => 0);
-        if (count === previous) stableReads += 1;
+        const count = await countAssistantMessages(page).catch(() => null);
+        // An unreadable count is not a stable count. Reset rather than let two
+        // consecutive failures look like a settled page.
+        if (count === null) stableReads = 0;
+        else if (count === previous) stableReads += 1;
         else stableReads = 0;
         previous = count;
         if (stableReads >= 2) return;
@@ -1613,32 +1665,57 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
 
 /**
  * @param {any} page
+ * @returns {Promise<{ ok: boolean, messages: string[] }>}
  */
 async function readAssistantMessages(page) {
+    // Either reader actually observing the page is enough; the result is only
+    // unknown when NEITHER could read it.
     const snapshots = await readAssistantSnapshots(page);
-    if (snapshots.length) return snapshots.map(sample => cleanAssistantText(sample.text)).filter(Boolean);
+    if (snapshots.snapshots.length) {
+        return { ok: true, messages: snapshots.snapshots.map(sample => cleanAssistantText(sample.text)).filter(Boolean) };
+    }
     const fallback = await readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS);
-    return fallback.map(cleanAssistantText).filter(Boolean);
+    if (fallback.ok) return { ok: true, messages: fallback.texts.map(cleanAssistantText).filter(Boolean) };
+    return { ok: snapshots.ok, messages: [] };
 }
 
 /**
  * @param {any} page
- * @returns {Promise<import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[]>}
+ * @returns {Promise<{ ok: boolean, snapshots: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[] }>}
  */
 async function readAssistantSnapshots(page) {
-    try {
-        let snapshots = await page.evaluate(readTopLevelAssistantSnapshots, ASSISTANT_SELECTORS).catch(() => []);
-        if (!Array.isArray(snapshots) || snapshots.length === 0) snapshots = await page.evaluate(
-            readTopLevelAssistantSnapshots,
-            { selectors: ASSISTANT_SELECTORS, resolverSource: resolveTopLevelAssistantTurns.toString() },
-        );
-        if (!Array.isArray(snapshots)) return [];
-        return snapshots.map((sample, turnIndex) => typeof sample === 'string'
-            ? { text: sample, messageId: null, turnId: null, turnIndex }
-            : sample);
-    } catch {
-        return [];
-    }
+    // Reports whether the read HAPPENED. An empty result from a working page and
+    // a read that never completed used to be the same `[]`, and that value feeds
+    // `baseline.assistantCount` — the positional slice point for every later
+    // poll. A failed read therefore rewrote the baseline to 0 and re-admitted
+    // every historical answer as a fresh candidate.
+    //
+    // A non-array result counts as a failed attempt, not an empty page: nothing
+    // was actually read.
+    const attempt = async (/** @type {any} */ arg) => {
+        try {
+            const result = await page.evaluate(readTopLevelAssistantSnapshots, arg);
+            return Array.isArray(result) ? result : null;
+        } catch {
+            return null;
+        }
+    };
+    const normalize = (/** @type {any[]} */ rows) => rows.map((sample, turnIndex) => typeof sample === 'string'
+        ? { text: sample, messageId: null, turnId: null, turnIndex }
+        : sample);
+
+    const first = await attempt(ASSISTANT_SELECTORS);
+    if (first && first.length) return { ok: true, snapshots: normalize(first) };
+
+    const second = await attempt({
+        selectors: ASSISTANT_SELECTORS,
+        resolverSource: resolveTopLevelAssistantTurns.toString(),
+    });
+    if (second) return { ok: true, snapshots: normalize(second) };
+    // The first attempt succeeding-but-empty is still a real observation: the
+    // second attempt failing adds no information.
+    if (first) return { ok: true, snapshots: [] };
+    return { ok: false, snapshots: [] };
 }
 
 /**

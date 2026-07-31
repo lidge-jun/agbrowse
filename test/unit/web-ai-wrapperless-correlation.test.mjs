@@ -132,7 +132,12 @@ describe('wrapperless completion correlation (G11)', () => {
         expect(counterBody).not.toMatch(/if \(wrapped\.length\)/);
 
         // Poll-loop fallback: same rule.
-        expect(src).toContain('const wrapped = split.ok');
+        // The fallback is entered on `!split.ok` and never on emptiness. It used
+        // to read `const wrapped = split.ok ? …`; WP14 split it into a block so
+        // the fallback's OWN read failure can be handled, but the gate is the
+        // same condition.
+        expect(src).toContain('if (!split.ok) {');
+        expect(src).not.toMatch(/if \(!split\.wrapped\.length\)/);
         expect(src).not.toMatch(/\(split\.wrapped\.length \|\| split\.wrapperless\.length\)/);
     });
 });

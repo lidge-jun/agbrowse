@@ -61,7 +61,7 @@ describe('ChatGPT assistant response fragments', () => {
         };
 
         await expect(readTopLevelAssistantTextsFromLocators(page, CHATGPT_ASSISTANT_SELECTORS))
-            .resolves.toEqual(['Full assistant answer']);
+            .resolves.toEqual({ ok: true, texts: ['Full assistant answer'] });
     });
 
     it('extracts message id, turn id, and top-level turn index with assistant text', () => {
@@ -338,3 +338,72 @@ function readSnapshotsFixture(html) {
         else globalThis.document = previous;
     }
 }
+
+/**
+ * Locator reads report whether they HAPPENED (issue #88, boundary B07).
+ *
+ * The selectors are alternative search paths, so one of them throwing while
+ * another legitimately matches nothing is not evidence the page has no
+ * assistant turns — the answer may sit behind the path that failed. This value
+ * ends up in `baseline.assistantCount`, the slice point every later poll uses.
+ */
+describe('locator fallback distinguishes an unread page from an empty one (B07)', () => {
+    const selectors = ['sel-a', 'sel-b'];
+
+    /** @param {Record<string, any>} behaviour */
+    function pageWith(behaviour) {
+        return { locator: (selector) => behaviour[selector] ?? { all: async () => [] } };
+    }
+
+    it('X4: every selector failing reports ok:false', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => { throw new Error('detached'); } },
+            'sel-b': { all: async () => { throw new Error('detached'); } },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X4b: matched nodes that cannot be read report ok:false', async () => {
+        // `all()` worked, so the page has assistant nodes — failing to read them
+        // is a failed read, not an empty page.
+        const unreadable = { innerText: async () => { throw new Error('detached'); } };
+        const page = pageWith({ 'sel-a': { all: async () => [unreadable] } });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X5: a single selector that legitimately matches nothing reports ok:true', async () => {
+        const page = pageWith({ 'sel-a': { all: async () => [] } });
+        await expect(readTopLevelAssistantTextsFromLocators(page, ['sel-a']))
+            .resolves.toEqual({ ok: true, texts: [] });
+    });
+
+    it('X5b: one selector failing poisons the empty verdict', async () => {
+        // `sel-b` finding nothing says nothing about what `sel-a` would have
+        // matched. Reporting ok:true here would put a false 0 in the baseline.
+        const page = pageWith({
+            'sel-a': { all: async () => { throw new Error('detached'); } },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X5c: all selectors examined and empty reports ok:true', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => [] },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: [] });
+    });
+
+    it('a readable node still short-circuits on the first match', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => [{ innerText: async () => 'answer' }] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: ['answer'] });
+    });
+});
