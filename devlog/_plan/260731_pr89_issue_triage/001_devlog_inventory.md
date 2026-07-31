@@ -9,13 +9,13 @@
 
 | 폴더 | 문서 수 | 마지막 커밋 | 판정 | 근거 |
 | --- | ---: | --- | --- | --- |
-| `260621_cli_jaw_webai_parity` | 12 | 2026-06-25 | 조사 완료, 기능 미구현(외부 미러) | `00_plan.md:13` 문서 전용 명시, `00_plan.md:48-57` 최종 verdict |
-| `260625_webai_parity_impl` | 14 | 2026-06-27 | 부분 완료 — Cycle 12 verdict CONCERNS | `00_plan.md:128-141` |
+| `260621_cli_jaw_webai_parity` | 12 | 2026-06-25 | 조사 완료, 기능 미구현(외부 미러) | `devlog/_plan/260621_cli_jaw_webai_parity/00_plan.md:13` 문서 전용 명시, 같은 파일 `:48-57` 최종 verdict |
+| `260625_webai_parity_impl` | 14 | 2026-06-27 | 부분 완료 — Cycle 12 verdict CONCERNS | `devlog/_plan/260625_webai_parity_impl/00_plan.md:128-141` |
 | `260625_webai_streaming_recovery_false_complete` | 5 | 2026-06-25 | 완료 | `30_completion_audit.md:31-39`, `:43-52` |
 | `260627_gptpro_remediation` | 12 | 2026-06-27 | 미완료 — R2 CONCERNS 5 / FAIL 2 잔존 | `60_gptpro_r2_verdict.md:5-21` |
 | `260627_search_skill` | 1 | 2026-06-27 | 완료(추정) — closeout 문서 없음 | `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106` |
 | `260628_competitive_research` | 2 | 2026-06-28 | 리서치 완료, 구현 미착수 | `01_agent_browser_analysis.md:106-158` |
-| `260705_gapclose` | 16 | 2026-07-11 | 부분 완료 — 04·05·06·09 PLANNED 잔존 | `04_gap_schema_extract.md:1-3`, `06_gap_webai_showcase.md:1-3`, `09_launch_awareness.md:1-3` |
+| `260705_gapclose` | 16 | 2026-07-11 | 부분 완료 — 04·05·06·09 PLANNED 잔존 | `devlog/_plan/260705_gapclose/` 아래 `04_gap_schema_extract.md:1-3`, `05_gap_positioning_docs.md:1-3`, `06_gap_webai_showcase.md:1-3`, `09_launch_awareness.md:1-3` |
 | `260710_gpt56_update` | 11 + assets | 2026-07-10 | 완료 | `00_index.md:3-12`, `devlog/21_gpt56_ui_update.md:110-116` |
 | `260711_release_017` | 4 + 1 txt | 2026-07-11 | 검증 완료, publish 별도 | `010_release_evidence.md:19-32` |
 | `260711_upload_reliability` | 4 | 2026-07-11 | 기능 완료, **성공 기준 1 미충족** | focused suite 통과 `030_verification.md:8-35`, 그러나 전체 스위트 2파일 실패 `:37-46`이고 성공 기준은 0 failure를 요구한다 `010_plan.md:59-60` |

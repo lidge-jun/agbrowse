@@ -10,10 +10,10 @@
 | --- | --- | --- |
 | `260625_webai_streaming_recovery_false_complete` | `_fin`으로 이관 | `30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE |
 | `260710_gpt56_update` | `_fin`으로 이관 | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116` |
-| `260711_release_017` | **조건부** | `010_release_evidence.md:19-32` 16/16 게이트 통과. 단 같은 문서가 post-publish 증거를 요구한다(`:72-74`) |
-| `260711_upload_reliability` | **조건부** | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(`030_verification.md:37-46`) |
-| `260627_search_skill` | **조건부** | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있고(`00_plan.md:32-75`) closeout이 없다 |
-| `260628_competitive_research` | **조건부** | 리서치 산출물이고 후속이 `260705_gapclose`임이 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 단 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)의 disposition이 필요하다 |
+| `260711_release_017` | **조건부** | `devlog/_plan/260711_release_017/010_release_evidence.md:19-32` 16/16 게이트 통과. 단 같은 문서가 post-publish 증거를 요구한다(`:72-74`) |
+| `260711_upload_reliability` | **조건부** | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`devlog/_plan/260711_upload_reliability/010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(같은 유닛 `030_verification.md:37-46`) |
+| `260627_search_skill` | **조건부** | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있고(`devlog/_plan/260627_search_skill/00_plan.md:32-75`) closeout이 없다 |
+| `260628_competitive_research` | **조건부** | 리서치 산출물이고 후속이 `260705_gapclose`임이 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 단 미해결 질문 5개(`devlog/_plan/260628_competitive_research/02_schema_bound_extraction.md:212-218`)의 disposition이 필요하다 |
 | `260621_cli_jaw_webai_parity` | `_plan` 유지 | 외부 cli-jaw 미러 — closeout 권한이 이 저장소에 없음 |
 | `260625_webai_parity_impl` | `_plan` 유지 | Cycle 12 verdict CONCERNS, 후속이 `260627_gptpro_remediation` |
 | `260627_gptpro_remediation` | `_plan` 유지 | R2 CONCERNS 5 / FAIL 2 미해소 |
@@ -27,7 +27,7 @@
 
 | 유닛 | 조건 |
 | --- | --- |
-| `260711_upload_reliability` | 전체 `npm test`를 다시 돌려 0 failure를 얻거나(Playwright Chromium 설치 후), 환경 실패를 허용하도록 성공 기준을 수정한 판정을 유닛 안에 남긴다. 둘 다 못 하면 `_plan` 유지 |
+| `260711_upload_reliability` | Playwright Chromium을 설치하고 전체 `npm test`를 다시 돌려 0 failure를 얻는다. 얻지 못하면 `_plan` 유지 — **성공 기준을 사후에 완화하지 않는다**. 유닛이 스스로 정한 기준을 나중에 낮춰 통과시키는 것은 목표 하향이다(LOOP-CONTINUE-01) |
 | `260627_search_skill` | `900_closeout.md`에 5개 계획 cycle 대 실제 배포 대조표를 채운다. 미이행 cycle이 있으면 그 사실을 적고, 남은 게 실질적이면 `_plan` 유지 |
 | `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)의 disposition 표를 closeout에 넣는다. gapclose의 일반적 승계 선언만으로는 부족하다 — 근거는 배포된 소스에 있다(아래 표) |
 | `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`)를 실제 게시된 릴리스로 충족한 기록을 남긴다 |
@@ -154,7 +154,7 @@ closeout이므로 그 범위와 충돌하지 않는다.
 
 | 유닛 | 성공 기준 대조에서 반드시 다룰 것 | 증거로 필요한 것 |
 | --- | --- | --- |
-| `260711_upload_reliability` | 기준 1의 "전체 `npm test` 0 failures"(`010_plan.md:59-60`) | 재실행 결과, 또는 환경 실패를 허용하도록 기준을 수정한 판정 |
+| `260711_upload_reliability` | 기준 1의 "전체 `npm test` 0 failures"(`devlog/_plan/260711_upload_reliability/010_plan.md:59-60`) | Chromium 설치 후 재실행한 0 failure 출력. 기준 완화는 허용하지 않는다 |
 | `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`) | 실제 게시된 `v0.1.17` 릴리스 확인 |
 | `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`) | 위 disposition 표를 근거 재확인 후 기재 |
 
@@ -226,8 +226,17 @@ ls devlog/_fin
 rg -n '_plan/' devlog/00_index.md
 ```
 
-표의 모든 `_plan/` 경로가 실제로 존재하고, `ls devlog/_plan` 결과의 모든 폴더가
-표에 있어야 한다. 양방향 확인이다.
+검증 기준은 둘이다. `_fin` 표는 이름 그대로 `Recent`이고 전체 인덱스가 아니므로
+`_plan`과 같은 양방향 1:1을 요구하지 않는다.
+
+1. **`_plan`은 양방향 1:1.** 표의 모든 `_plan/` 경로가 실제로 존재하고,
+   `ls devlog/_plan` 결과의 모든 폴더가 표에 있어야 한다.
+2. **`_fin`은 단방향.** 표에 기재된 모든 `_fin/` 경로가 실제로 존재해야 한다.
+   그 역(모든 `_fin` 폴더가 표에 있어야 한다)은 요구하지 않는다 — `_fin`에는
+   수십 개 유닛이 쌓여 있고 `Recent` 표는 최근 것만 담는다.
+
+`c4`의 "1:1"은 이 두 기준을 뜻한다. `_fin` 전체 인덱스를 만드는 것은 이 유닛의
+범위가 아니다.
 
 `bash structure/check-doc-drift.sh`도 돌린다 — devlog 경로를 참조하는 문서가 있으면
 이관으로 깨질 수 있다.

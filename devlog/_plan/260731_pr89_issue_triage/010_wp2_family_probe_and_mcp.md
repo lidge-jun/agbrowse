@@ -89,8 +89,13 @@ effort 검증이 건너뛰어진다.
 +    if (!model && !(options.effort || options.reasoningEffort) && !options.family) {
 +        return { state: 'unknown', evidence: { requested: null, effort: null, family: null }, next: 'send' };
 +    }
-+    // model 없이 family만/family+effort로 요청할 수 있다. 이 경우 model 검증을
-+    // 건너뛰되 effort 검증은 그대로 수행한다.
++    // 명시된 model이 미지원이면 family 유효성과 무관하게 실패한다. 이 검사를
++    // family 허용 분기보다 먼저 두지 않으면, valid family가 invalid model을
++    // 가려 #87이 막으려던 무음 드롭을 model 축에 새로 만든다.
++    if (model && !requested) {
++        return { state: 'fail', evidence: { requested: model, family: requestedFamily || null }, next: 'model-fallback' };
++    }
++    // model을 아예 주지 않은 경우에만 family-only 경로가 열린다.
 +    if (!requested && !requestedFamily) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
 +    if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested: requested || null, effort: options.effort || options.reasoningEffort, family: requestedFamily || null }, next: 'model-fallback' };
 +    // effort 지원 여부는 model 축에 걸린다. model이 없으면 현재 tier 기준이므로
@@ -160,6 +165,7 @@ effort 검증이 건너뛰어진다.
 | effort만, model·family 없음 | `fail` | 위 guard가 그대로 걸러낸다. 기존 동작이며 #87 범위 밖이다 — CLI가 `rejectFutureScope`에서 이미 처리한다 |
 | model + family (+effort) | 세 축 모두 확인 | — |
 | 미지원 family alias | `fail` | 메뉴 열기 전 |
+| 미지원 model + 유효 family | `fail` | 명시된 model이 미지원이면 family로 가릴 수 없다. 기존 동작 유지 |
 
 `warn`은 이 probe에서 이미 쓰이는 상태값이며(`CapabilityProbeResult.state`가
 `'ok'|'warn'|'fail'|'unknown'`, `web-ai/chatgpt-model.mjs:1712-1717`) "선택은 될
@@ -229,7 +235,21 @@ Chat family 축이 없는 provider로 보내는 것.
 
 ## 테스트
 
-NEW `test/unit/web-ai-family-probe-and-mcp.test.mjs`:
+새 파일을 만들지 않고 **기존 스위트에 추가한다.** family 메뉴를 재현하는
+`createFakeModelPage`(`test/unit/web-ai-chatgpt-model.test.mjs:784`)가 export되지
+않은 파일-로컬 헬퍼라, 새 파일을 만들면 대형 page double을 복제하거나 계획에 없던
+헬퍼 추출을 하게 된다.
+
+- probe 테스트(1, 2, 3, 3a, 3c) → MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`
+  — 기존 `createFakeModelPage`를 그대로 쓴다
+- `warn` 소비 정책(3b) → MODIFY `test/unit/web-ai-capability.test.mjs`
+  — `worstCapabilityState`가 `warn`을 집계하고 `ok`를 유지하는지 직접 확인한다.
+  `statusWebAi` 전체를 태우지 않고 집계 함수 수준에서 고정하는 편이 fixture가
+  작고 의도가 분명하다
+- MCP 테스트(4, 5) → MODIFY `test/integration/web-ai-mcp-server.test.mjs`
+  — 이미 `handleMcpMessage`를 JSON-RPC로 호출하는 패턴이 있다(`:32`, `:36`)
+
+테스트 목록:
 
 1. **probe가 미지원 family에 fail** — `chatGptModelCapabilityProbe(page, 'thinking',
    { family: 'gpt-5.6-luna' })`가 `state: 'fail'`이고 evidence에 family가 담긴다.
@@ -241,6 +261,9 @@ NEW `test/unit/web-ai-family-probe-and-mcp.test.mjs`:
 3a. **model 없는 family+effort는 warn** — `{ family: 'gpt-5.6-sol', effort: 'high' }`
    에 model 없이 호출하면 `state: 'warn'`이고 `evidence.effortTierUnproven === true`.
    `ok`가 아니어야 한다 — 증명하지 못한 조합을 승인하지 않는다.
+3c. **미지원 model은 유효 family로 가려지지 않는다** — `{ model: 'bogus',
+   family: 'gpt-5.6-sol' }`이 `state: 'fail'`이고 메뉴가 열리지 않는다(mutation 0).
+   이 회귀 가드가 없으면 새 family 분기가 model 검증을 우회한다.
 4. **MCP가 gemini + family를 거부** — `callMcpTool`은 export되지 않으므로
    (`web-ai/mcp-server.mjs:134`) 공개 경계인 `handleMcpMessage`(`:387`)로 JSON-RPC
    `tools/call`을 보낸다.

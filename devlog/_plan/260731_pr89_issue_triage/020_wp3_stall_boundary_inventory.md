@@ -27,8 +27,16 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
 
 대신 **호출 그래프를 닫는다.**
 
-1. `pollWebAi`(`web-ai/chatgpt.mjs:582`) 본문의 **비동기 진입점 전부**를
-   열거한다. `await` 표현식만으로는 부족하다 — 다음 넷을 모두 센다.
+1. `pollWebAi`(`web-ai/chatgpt.mjs:582`) 본문의 **모든 call expression**을
+   열거한다. 비동기만 보면 안 된다 — `persistResolverTraceForSession`(`:738`)과
+   `markSessionTimeout`(`:983`)은 동기 호출이지만 session-store의 blocking lock과
+   동기 파일 쓰기로 이어진다(`web-ai/session-store.mjs:136`, `:337`). 명령을
+   멈추는 데 async일 필요는 없다.
+
+   각 호출을 셋으로 분류한다: `sync-pure`(계산만) · `sync-IO/lock`(파일·락) ·
+   `async`. 앞의 둘도 정체 원인이 될 수 있으므로 말단으로 끊지 않는다.
+
+   비동기 호출은 특히 다음 넷을 빠짐없이 센다.
    - `await` 표현식
    - **await 없이 생성·저장되는 Promise.** `observeAssistantResponse`가 그 예다:
      `:624-627`에서 await 없이 만들어져 `:835-841`의 `Promise.race`에서 소비된다.
@@ -58,9 +66,20 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
 최종 근거는 실제 파일 읽기다.
 
 각 행: 경계 ID(B01, B02…) / 파일:라인(**함수 소유 위치와 실제 blocking 호출
-위치를 구분해 둘 다**) / 접근 종류 / `pollWebAi`로부터의 전체 호출 사슬 /
-데드라인 전인지 후인지 / 도달 조건(항상 · 세션 폴 한정 · `diagnostics` ·
-`allowCopyMarkdownFallback` · `archiveFlag`).
+위치를 구분해 둘 다**) / 접근 종류(Page · Locator · CDP · sync-IO/lock) /
+`pollWebAi`로부터의 전체 호출 사슬 / **시간 구간** / 도달 조건(항상 · 세션 폴
+한정 · `diagnostics` · `allowCopyMarkdownFallback` · `archiveFlag`).
+
+시간 구간은 셋이다. 데드라인은 `:614`에서 생성되므로 그 앞은 예산 자체가 없다.
+
+| 구간 | 범위 | 예 |
+| --- | --- | --- |
+| `pre-budget` | 함수 진입 ~ `:614` 데드라인 생성 전 | `requireChatGptPage`(`:591`), session/baseline 조회 |
+| `in-budget` | 루프(`:628`~) | DOM read, activity, finished, ordering |
+| `post-budget` | 루프 종료 후 | recovery, diagnostics, copy, finalize |
+
+`pre-budget` 정체는 `--timeout`이 아직 시작도 안 한 상태에서 멈추는 것이라
+사용자 입장에서는 같은 증상이다. 구간을 나누되 어느 구간도 빼놓지 않는다.
 
 착수 시점의 기지 항목은 아래와 같다. **이것은 완전한 목록이 아니라 출발점이다** —
 아래 표는 직접 호출과 감사에서 드러난 전이 경로 일부만 담고 있고, 감사에서 드러난 전이적 경로(copy target
