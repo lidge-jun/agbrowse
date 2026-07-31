@@ -1,0 +1,143 @@
+# 260731 — PR #89 / 이슈 #87·#88 처리와 devlog 정리
+
+- unit: `devlog/_plan/260731_pr89_issue_triage/`
+- branch: `dev`
+- session: `019fb70f-6dd5-77e2-8535-548f39a8a257`
+- class: C3 (공개 CLI/MCP 계약 + 폴링 런타임 경로 + 문서 SoT)
+- 기준 시각: 2026-07-31, `origin` fetch 후
+
+## 목표
+
+열려 있는 GitHub 항목(PR #89, 이슈 #87, 이슈 #88)을 `dev` 기준으로 판정하고,
+실제로 남아 있는 결함만 구현하며, 그 과정을 devlog 규약대로 남긴다. devlog
+`_plan`에 쌓인 종료 유닛과 `00_index.md`의 드리프트도 같은 유닛에서 정리한다.
+
+## 제약
+
+- 원격 상태 변경 금지: push, PR 머지/클로즈, 이슈 코멘트/클로즈, npm publish,
+  릴리스 태그, Actions 승인. 이 유닛은 로컬 커밋까지만 만든다.
+- `dev`↔`main` 브랜치 재정렬이나 릴리스 전략 변경은 범위 밖이다.
+- `devlog/_fin/mvp/` 아래 파일은 수정하지 않는다.
+- 작업과 무관한 더티 파일(`.codexclaw/**` 산출물 등)은 스테이징하지 않는다.
+
+## 현재 상태 (조사 결과)
+
+### 브랜치
+
+```
+dev            c7e87c1   origin/main 대비 +93 커밋
+origin/main    1463a53   dev에 없는 커밋 6개 (v0.1.18/v0.1.19, #82 fix, postinstall star prompt)
+PR #89 head    4ada9cb   hanbinnoh 포크, base=main
+```
+
+`dev`가 실제 통합 브랜치이고 PR #89는 `main`을 대상으로 하므로, PR을 그대로
+머지해도 `dev`에는 반영되지 않는다. 판정은 PR 커밋 단위로 `dev` 소스와
+대조해야 한다.
+
+### PR #89의 두 커밋
+
+PR은 `main` @ v0.1.19 위로 리베이스되어 커밋이 재작성됐다. 아래는 현재 OID다
+(`gh pr view 89 --json commits` 기준). PR 본문이 언급하는 `a2dc3e1`/`79db5d1`은
+리베이스 이전 해시다.
+
+| 커밋 | 대상 이슈 | dev 상태 |
+| --- | --- | --- |
+| `d5d9475` | #87 `--family` 무음 드롭 | dev는 `f8e8b9b`로 독립 구현 — 부분 충족, 잔여 갭 2건 |
+| `4ada9cb` | #88 assistant DOM read deadline | dev에 대응 방어 없음 — 미충족 |
+
+상세 대조는 `002_pr89_delta_inventory.md`.
+
+### 이슈 #87 — dev 잔여 갭
+
+`dev`의 `f8e8b9b`가 CLI 파서/전달/프리플라이트와 selector 검증까지 이미 배선했다
+(`web-ai/cli.mjs:615`, `:761`, `:1692`; `web-ai/chatgpt.mjs:325-328`;
+`web-ai/chatgpt-model.mjs:400-409`). 이슈 본문의 핵심 주장은 해소됐다.
+
+남아 있는 갭 2건:
+
+1. **capability probe가 family를 읽지 않는다.**
+   `chatGptModelCapabilityProbe`(`web-ai/chatgpt-model.mjs:1725-1759`)의 본문에
+   `options.family` 참조가 없다. `web-ai/chatgpt.mjs:120`이 전달하지 않는 것은
+   표면 증상이고, 전달해도 probe는 무시한다. probe 함수 자체를 고쳐야 한다.
+2. **MCP가 비-ChatGPT + family 조합을 막지 않는다.**
+   `web-ai/tool-schema.mjs:55`의 enum이 잘못된 alias는 handler 전에 거부하고
+   (`web-ai/mcp-server.mjs:153`), 유효한 family는 `...args`로 이미 전달된다
+   (`:214-220`). 실제 갭은 CLI가 `rejectFutureScope`로 거부하는 조합
+   (`web-ai/cli.mjs:1692`)이 MCP에는 없다는 것뿐이다.
+
+### 이슈 #88 — dev 미충족
+
+`pollWebAi`는 루프 경계에서만 데드라인을 본다.
+
+- `web-ai/chatgpt.mjs:614` `const deadline = Date.now() + timeout * 1000;`
+- `web-ai/chatgpt.mjs:628` `while (Date.now() <= deadline) {`
+- `web-ai/chatgpt.mjs:655` `const split = await readAssistantSnapshotsSplit(page);`
+
+`readAssistantSnapshotsSplit`(`web-ai/chatgpt.mjs:1461`)은 `page.evaluate`를
+호출-단위 한도 없이 await한다. Playwright의 `page.evaluate()`에는 timeout
+옵션이 없으므로, 대화가 커져 평가가 정체되면 다음 데드라인 체크에 도달하지
+못한다. 같은 문제가 `readAssistantSnapshots`(`:1436`),
+`readAssistantMessages`(`:1425`), `readActivityState`(`:1027`), 그리고 루프 종료
+후 반드시 호출되는 `recoverAssistantResponse`
+(`web-ai/chatgpt-response-observer.mjs:98-113`, 호출 `web-ai/chatgpt.mjs:865`)에도
+있다. 마지막 지점을 빼놓으면 루프를 고쳐도 명령은 recovery에서 다시 정체한다.
+
+PR #89의 `4ada9cb`는 `readAssistantMessages` 기반 구버전 리더를 전제로 하므로
+`dev`에 그대로 적용되지 않는다(`dev`는 스냅샷 분할 리더로 리팩터됨). 방어
+아이디어만 채택하고, 배치는 개별 호출 지점이 아니라 데드라인 인지 page 프록시라는
+단일 경계로 다시 설계한다 — 상세와 그 설계 전환의 이유는 `020`에 있다.
+
+### devlog 드리프트
+
+`devlog/_plan`에 기존 11개 폴더(이 유닛을 더하면 12개)가 있으나
+`devlog/00_index.md`의 `_plan` 표에는 4개만
+개별 기재되어 있고, 종료된 최근 7개 `_fin` 유닛(`260712_oracle_chase`,
+`260723_pr86_repomix_dev_rebuild`, `260724_oracle_chase2`, `260725_oracle_chase3`,
+`260726_agbrowse_qa`, `260726_oracle_chase4`, `260726_qa_round6`)은 표에 없다.
+`00_index.md:22-30`의 `_plan` 표는 Oracle stability 행을 `_fin` 경로로 적어
+표 제목과 실제 위치가 어긋난다. 상세는 `001_devlog_inventory.md`.
+
+## work-phase 지도 (의존 순서)
+
+| WP | 내용 | 산출 문서 | 선행 |
+| --- | --- | --- | --- |
+| WP1 | docs-only 로드맵: 실태 조사 + decade 문서 작성 | `000`–`003`, `010`, `020`, `030`, `040` | — |
+| WP2 | #87 잔여 갭 2건 구현(probe family 계약, MCP fail-closed) | `010` | WP1 |
+| WP3 | #88 정체 경계 인벤토리 확정 (문서 전용, 코드 변경 없음) | `020` | WP2 |
+| WP4 | devlog `_plan`→`_fin` 이관 + `00_index.md` 동기화 | `030` | WP1 |
+| WP5 | 게이트 클로즈아웃 + 유닛 마감 + 커밋 정리 | `040` | WP2·WP3·WP4 |
+
+**WP3 범위 축소 (2026-07-31, A 페이즈 3라운드 FAIL 후).** 원래 WP3는 #88 방어를
+구현하는 것이었다. 독립 감사 3라운드가 모두 "덮어야 할 경계 목록"에서 실패해,
+목록 확정 자체를 독립 work-phase로 분리했다. 근본 원인 분석은
+`003_audit_synthesis.md`. 인벤토리가 근거와 함께 고정되면 실제 구현
+work-phase를 goalplan에 append한다(LOOP-UNIT-CHAIN-01).
+
+문서 역할: `000` 계획, `001`·`002`·`003` 리서치(diff 없음), `010`·`030`·`040`
+구현 diff, `020`은 WP3 축소에 따라 인벤토리 문서로 전환(LEXICO-SPLIT-01).
+
+의존 근거: WP2가 `web-ai/chatgpt.mjs`의 capability probe 라인을 건드리고 WP3가
+같은 파일의 폴링 루프를 건드리므로 순차 실행한다. WP4는 문서 전용이라 코드
+work-phase와 독립이지만, WP1의 인벤토리 결과를 소비한다. WP5는 세 결과를 모두
+합쳐 게이트를 돌린다.
+
+## 수용 기준
+
+1. PR #89의 두 커밋 각각에 대해 dev 충족/미충족 판정이 `file:line` 근거와 함께
+   `002_pr89_delta_inventory.md`에 있다.
+2. #88의 정체 가능 경계가 `pollWebAi` 전 구간에 대해 근거와 함께 열거되고, 각
+   경계의 방어 가능 여부(Page API / Locator API / 외부 모듈 위임)가 판정된다.
+   실제 방어 구현은 후속 work-phase로 분리한다.
+3. #87의 잔여 갭 2건이 수정되고 테스트 출력으로 확인된다. probe는 family를
+   evidence에 담고, MCP는 비-ChatGPT + family를 거부한다.
+4. `devlog/00_index.md`가 `_plan`/`_fin` 실제 디렉터리와 1:1로 맞는다.
+5. `npm run typecheck`, 대상 vitest, `npm run gate:all`,
+   `structure/check-doc-drift.sh`, `structure/verify-counts.sh`가 신선 출력으로
+   통과한다.
+6. 각 work-phase가 로컬 커밋으로 남는다.
+
+## 종료 판정
+
+PR #89 자체의 머지/클로즈와 이슈 #87·#88 클로즈는 원격 쓰기라 이 유닛에서
+수행하지 않는다. 해당 항목은 `NEEDS_HUMAN`으로 보고하고, 사용자가 판단할 수
+있도록 "dev에는 무엇이 이미 있고 PR에서 무엇을 가져왔는지"를 `040`에 정리한다.
