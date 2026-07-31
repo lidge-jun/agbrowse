@@ -7,6 +7,8 @@ import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitE
 import { probeTabAlive } from '../../skills/browser/tab-manager.mjs';
 import { recoverSessionTab, resolveSessionPage, verifySessionTab, withSessionPage } from '../../web-ai/tab-recovery.mjs';
 import { createSession, getSession } from '../../web-ai/session.mjs';
+import { runSessionsCommand } from '../../web-ai/cli-sessions.mjs';
+import { buildSessionDoctorReport } from '../../web-ai/session-doctor.mjs';
 import { TabMonitor } from '../../skills/browser/tab-monitor.mjs';
 
 /**
@@ -937,7 +939,8 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
     });
 
     it('U14: resolveSessionPage reports unverified rather than a mismatch', async () => {
-        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        let probes = 0;
+        globalThis.fetch = async () => { probes += 1; throw new Error('socket hang up'); };
         const session = makeSessionRecord();
 
         const resolved = await resolveSessionPage(
@@ -954,6 +957,9 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
             recovered: false,
             page: null,
         });
+        // It returned on the first verdict rather than falling through to a
+        // recovery attempt that happened to fail the same way.
+        expect(probes).toBe(1);
     });
 
     it('U15: withSessionPage raises a retryable typed error, not a generic mismatch', async () => {
@@ -964,6 +970,37 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
             { getPort: () => 9222 },
             session.sessionId,
             async () => 'never runs',
+        )).rejects.toMatchObject({
+            errorCode: 'cdp.unreachable',
+            retryHint: 'retry',
+            evidence: expect.objectContaining({ liveness: 'unknown' }),
+        });
+    });
+
+    it('U15b: a forced re-resolve that loses liveness is still typed', async () => {
+        // U15 exits at the first probe, before recovery is ever attempted. This
+        // drives the other order: the tab reads alive, page lookup fails, and the
+        // recovery probe then cannot read it — so the unverified verdict has to
+        // survive `recoverSessionTab` and the forceRecover branch as well.
+        //
+        // The final `withSessionPage` guard after a page death needs a live
+        // browser to reach and is defence-in-depth over this same policy.
+        let listReads = 0;
+        globalThis.fetch = async () => {
+            listReads += 1;
+            if (listReads === 1) {
+                return new Response(JSON.stringify([{ id: 'target-dies', type: 'page' }]), {
+                    headers: { 'content-type': 'application/json' },
+                });
+            }
+            throw new Error('socket hang up');
+        };
+        const session = makeSessionRecord('target-dies');
+
+        await expect(withSessionPage(
+            { getPort: () => 9222 },
+            session.sessionId,
+            async () => { throw new Error('Target closed'); },
         )).rejects.toMatchObject({
             errorCode: 'cdp.unreachable',
             retryHint: 'retry',
@@ -990,5 +1027,64 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
         // It got as far as dialling CDP to make the replacement tab, which is
         // strictly past the short-circuit.
         expect(String(outcome)).toMatch(/connectOverCDP|CDP session/);
+    });
+});
+
+/**
+ * Policies added by this work-phase, pinned at the surfaces users actually see.
+ *
+ * Each is an independent decision, not something the resolver contract enforces:
+ * reattach must not open a replacement tab, the CLI must not advise navigating,
+ * and the doctor must not recommend recovery. Deleting any one of them leaves
+ * the lower-level tests green.
+ */
+describe('callers advise retry, not replacement, when liveness is unknown (B36)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    function unreadableSession(targetId = 'target-live') {
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId,
+                conversationUrl: 'https://chatgpt.com/c/live',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('U16: reattach --navigate does not replace a tab it could not read', async () => {
+        const session = unreadableSession();
+
+        const result = await runSessionsCommand(
+            ['reattach', session.sessionId],
+            { navigate: true },
+            { getPort: () => 9222 },
+            { navigate: true },
+        );
+
+        expect(result.status).toBe('reattach-unverified');
+        // The session must still point at the original tab.
+        expect(getSession(session.sessionId).targetId).toBe('target-live');
+    });
+
+    it('U17: the doctor recommends retrying rather than recovering', async () => {
+        const session = unreadableSession('target-doctor');
+
+        const report = await buildSessionDoctorReport(
+            { getPort: () => 9222 },
+            session.sessionId,
+            { navigate: true },
+        );
+
+        expect(report.summary).toContain('liveness');
+        expect(report.recommendations.join(' ')).not.toContain('--navigate');
+        expect(report.recommendations.join(' ')).toMatch(/retry/i);
     });
 });
