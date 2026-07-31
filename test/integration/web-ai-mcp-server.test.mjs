@@ -28,6 +28,59 @@ function fakePage({ duplicateButtons = false, clicked = [], url = 'https://chatg
 }
 
 describe('web-ai MCP server', () => {
+    // #87: the schema advertises `family` but nothing paired it with the
+    // provider, so a family sent to a vendor without a Chat family axis was
+    // silently dropped — the same failure the CLI reported.
+    it('refuses a chat family on a provider that has no family axis', async () => {
+        let getPageCalls = 0;
+        const deps = {
+            getPage: async () => { getPageCalls += 1; return fakePage(); },
+            getTargetId: async () => 'target-1',
+        };
+
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 42,
+            method: 'tools/call',
+            params: {
+                name: 'web_ai_submit_prompt',
+                arguments: { provider: 'gemini', family: 'gpt-5.6-sol', prompt: 'hello' },
+            },
+        }, deps);
+
+        expect(response.result.structuredContent).toMatchObject({
+            ok: false,
+            code: 'capability.unsupported',
+            tool: 'web_ai_submit_prompt',
+        });
+        expect(response.result.structuredContent.reason).toContain('only for ChatGPT');
+        // Fails closed: the browser is never touched.
+        expect(getPageCalls).toBe(0);
+    });
+
+    it('rejects an unsupported family alias at the schema boundary', async () => {
+        // Regression guard for existing behavior: the enum stops bad aliases
+        // before the handler, so the handler only ever sees valid ones.
+        let getPageCalls = 0;
+        const deps = {
+            getPage: async () => { getPageCalls += 1; return fakePage(); },
+            getTargetId: async () => 'target-1',
+        };
+
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 43,
+            method: 'tools/call',
+            params: {
+                name: 'web_ai_submit_prompt',
+                arguments: { provider: 'chatgpt', family: 'gpt-5.6-luna', prompt: 'hello' },
+            },
+        }, deps);
+
+        expect(response.error || response.result?.isError).toBeTruthy();
+        expect(getPageCalls).toBe(0);
+    });
+
     it('responds to initialize and tools/list JSON-RPC requests', async () => {
         const init = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' }, {});
         expect(init.result.protocolVersion).toBe('2025-06-18');

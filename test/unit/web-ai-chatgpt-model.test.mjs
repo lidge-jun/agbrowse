@@ -745,6 +745,84 @@ describe('web-ai ChatGPT model selector policy', () => {
     });
 });
 
+
+// #87: `--family` reached the selector but never the capability probe, so a
+// probe `ok` was mistaken for proof that the requested family was enforced.
+describe('capability probe family contract (#87)', () => {
+    it('fails an unsupported family before touching the menu', async () => {
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ simplifiedIntelligenceMenu: true });
+        let touched = 0;
+        const watched = new Proxy(page, {
+            get(target, prop, receiver) {
+                if (prop === 'locator' || prop === 'keyboard') touched += 1;
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+
+        await expect(chatGptModelCapabilityProbe(watched, 'thinking', { family: 'gpt-5.6-luna' }))
+            .resolves.toMatchObject({ state: 'fail', evidence: { family: 'gpt-5.6-luna' } });
+        expect(touched).toBe(0);
+    });
+
+    it('fails an explicit unsupported model even when the family is valid', async () => {
+        // Otherwise a valid family masks an invalid model — the same silent
+        // drop #87 exists to stop, moved to the model axis.
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ simplifiedIntelligenceMenu: true });
+        let touched = 0;
+        const watched = new Proxy(page, {
+            get(target, prop, receiver) {
+                if (prop === 'locator' || prop === 'keyboard') touched += 1;
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+
+        await expect(chatGptModelCapabilityProbe(watched, 'bogus-model', { family: 'gpt-5.6-sol' }))
+            .resolves.toMatchObject({ state: 'fail', evidence: { requested: 'bogus-model' } });
+        expect(touched).toBe(0);
+    });
+
+    it('reports the family in evidence and leaves the selection untouched', async () => {
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ simplifiedIntelligenceMenu: true, family: 'gpt-5.5' });
+
+        const result = await chatGptModelCapabilityProbe(page, 'thinking', { family: 'gpt-5.6-sol' });
+
+        expect(result).toMatchObject({ evidence: { family: 'gpt-5.6-sol' } });
+        expect(result.state).not.toBe('fail');
+        // The probe answers "can this be selected", not "select it".
+        expect(page.__state.currentFamily).toBe('gpt-5.5');
+    });
+
+    it('fails when the requested family row is present but not selectable', async () => {
+        // Label equality alone would report `ok` for a hidden row, recreating
+        // the false success this contract exists to remove.
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ simplifiedIntelligenceMenu: true, hiddenFamilyRows: true });
+
+        await expect(chatGptModelCapabilityProbe(page, 'thinking', { family: 'gpt-5.6-sol' }))
+            .resolves.toMatchObject({ state: 'fail' });
+    });
+
+    it('will not certify an effort tier it never selected', async () => {
+        // Without a model the effort applies to whatever tier is active, and
+        // this probe does not select the family, so `ok` would overclaim.
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const page = createFakeModelPage({ simplifiedIntelligenceMenu: true });
+
+        const result = await chatGptModelCapabilityProbe(page, undefined, {
+            family: 'gpt-5.6-sol',
+            effort: 'high',
+        });
+
+        expect(result.state).toBe('warn');
+        expect(result.evidence).toMatchObject({ effortTierUnproven: true, family: 'gpt-5.6-sol' });
+    });
+});
+
 // Legacy effort text helpers — used by tests that exercise old-key normalization
 // and the legacy effort trigger/submenu paths.
 function thinkingEffortTexts() {
@@ -810,11 +888,17 @@ function createFakeModelPage({
     modelPickerUnavailable = false,
     simplifiedIntelligenceMenu = false,
     advanceClock = null,
+    hiddenFamilyRows = false,
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
     const state = {
         modelMenuOpen: initialModelMenuOpen,
         effortMenuOpen: false,
+        // The real family submenu only exists after its trigger is hovered,
+        // focus+ArrowRight'd, or clicked. Modelling it as "always open once the
+        // model menu is open" made family assertions pass even when the code
+        // never opened the submenu at all.
+        familySubmenuOpen: false,
         currentModel: model,
         currentFamily: family,
         selectedEffort: initialSelectedEffort,
@@ -882,9 +966,17 @@ function createFakeModelPage({
         text,
         get checked() { return state.currentFamily === key; },
         onClick: () => { state.currentFamily = key; },
+        // A row can be present in the DOM yet not selectable. Probes that only
+        // match the label would report success for exactly this shape.
+        visible: !hiddenFamilyRows,
     }));
     const familyTrigger = createElement({
         text: () => familyLabels[state.currentFamily],
+        // Any of the three real interactions opens the submenu, matching
+        // openSimplifiedIntelligenceSubmenu's hover -> ArrowRight -> click ladder.
+        onHover: () => { state.familySubmenuOpen = true; },
+        onFocus: () => { state.familySubmenuOpen = true; },
+        onClick: () => { state.familySubmenuOpen = true; },
     });
     const exactTrigger = createElement({
         text: exactEffortTriggerText,
@@ -923,6 +1015,9 @@ function createFakeModelPage({
     });
 
     return {
+        // Test-only handle so assertions can prove the probe left the
+        // selection alone.
+        __state: state,
         keyboard: {
             press: async key => {
                 if (key === 'Escape') {
@@ -1018,7 +1113,12 @@ function createFakeModelPage({
             return [];
         }
         if (selector === '[role="menu"][data-state="open"]') {
-            return state.modelMenuOpen ? [createElement({ text: familyRows.map(row => row.text).join('\n') })] : [];
+            // The family submenu is a distinct surface: it only exists once its
+            // trigger has been interacted with. Gating it here is what makes the
+            // family assertions fail if the selector code stops opening it.
+            return state.modelMenuOpen && state.familySubmenuOpen
+                ? [createElement({ text: familyRows.map(row => row.text).join('\n') })]
+                : [];
         }
         if (selector === '[role="menuitem"][data-has-submenu]') return state.modelMenuOpen ? [familyTrigger] : [];
         if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
@@ -1030,7 +1130,9 @@ function createFakeModelPage({
         }
         if (selector === '[role="menuitemradio"]') {
             if (state.effortMenuOpen && effortOptionRole === 'menuitemradio') return currentEffortRows();
-            if (simplifiedIntelligenceMenu && state.modelMenuOpen) return [...familyRows, ...simplifiedRows];
+            if (simplifiedIntelligenceMenu && state.modelMenuOpen) {
+                return state.familySubmenuOpen ? [...familyRows, ...simplifiedRows] : [...simplifiedRows];
+            }
             return [];
         }
         if (selector === '[role="menuitem"]') return state.effortMenuOpen && effortOptionRole === 'menuitem' ? currentEffortRows() : [];
@@ -1057,6 +1159,8 @@ function createElement(input = {}) {
         testId: input.testId || null,
         get checked() { return input.checked ?? false; },
         onClick: input.onClick || (() => undefined),
+        onHover: input.onHover || (() => undefined),
+        onFocus: input.onFocus || (() => undefined),
         visible: input.visible ?? true,
         rect: input.rect || { x: 10, y: 10, width: 120, height: 32 },
     };
@@ -1083,8 +1187,8 @@ function makeLocator(elements, selector = '') {
             if (elements[0]?.visible === false) throw new Error('element not visible');
             return elements[0]?.onClick();
         },
-        hover: async () => undefined,
-        focus: async () => undefined,
+        hover: async () => elements[0]?.onHover?.(),
+        focus: async () => elements[0]?.onFocus?.(),
         boundingBox: async () => elements[0]?.rect || null,
         innerText: async () => elements[0]?.text || '',
         evaluateAll: async (fn, arg) => fn(elements.map(element => ({
