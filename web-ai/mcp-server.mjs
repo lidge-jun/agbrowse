@@ -200,6 +200,18 @@ async function callMcpTool(name, args, deps, state) {
                 retryHint: 'use-work-send',
             };
         }
+        // The Chat family axis is ChatGPT-only. The schema validates the alias
+        // but not the pairing, so without this a family sent to Gemini or Grok
+        // is silently dropped — the same failure #87 reported on the CLI.
+        if (args.family && provider !== 'chatgpt') {
+            return {
+                ok: false,
+                code: 'capability.unsupported',
+                tool: name,
+                reason: `family selection is supported only for ChatGPT; ${provider} has no Chat family axis`,
+                retryHint: 'omit-family-or-use-chatgpt',
+            };
+        }
         const rawPolicyKeys = new Set(Object.keys(args.policy === undefined ? {} : args.policy));
         const effectivePolicy = applyProviderDefaults(provider, policy, { explicitKeys: rawPolicyKeys });
         enforcePolicy(effectivePolicy, {

@@ -1705,9 +1705,40 @@ function escapeRegExp(value) {
 
 /**
  * @typedef {Object} CapabilityProbeOptions
+ * @property {string} [family]
  * @property {string} [effort]
  * @property {string} [reasoningEffort]
  */
+
+/**
+ * Report whether the requested family can be selected right now, WITHOUT
+ * selecting it. A probe that changed the selection would be answering a
+ * different question than the one the caller asked (#87).
+ *
+ * Label equality alone is not enough: a hidden or disabled row left in the DOM
+ * would let the probe answer `ok` while the real selection fails.
+ *
+ * @param {Page} page
+ * @param {FamilyChoice} family
+ * @returns {Promise<boolean>}
+ */
+async function isChatGptFamilyOptionAvailable(page, family) {
+    const expected = CHATGPT_FAMILY_OPTIONS[family]?.label;
+    if (!expected) return false;
+    const familyLabels = Object.values(CHATGPT_FAMILY_OPTIONS).map(option => option.label);
+    await openSimplifiedIntelligenceSubmenu(page, { forceFamily: true }).catch(() => undefined);
+    const submenu = await findOpenFamilySubmenu(page, familyLabels);
+    if (!submenu) return false;
+    const rows = await submenu.locator('[role="menuitemradio"]').all().catch(() => /** @type {Locator[]} */ ([]));
+    for (const row of rows) {
+        const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (!menuTextHasExactLine(text, expected)) continue;
+        if (typeof row.isVisible === 'function' && !(await row.isVisible().catch(() => false))) continue;
+        if (typeof row.isEnabled === 'function' && !(await row.isEnabled().catch(() => false))) continue;
+        return true;
+    }
+    return false;
+}
 
 /**
  * @typedef {Object} CapabilityProbeResult
@@ -1725,10 +1756,30 @@ function escapeRegExp(value) {
 export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     const requested = normalizeChatGptModelChoice(model);
     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
-    if (!model && !(options.effort || options.reasoningEffort)) return { state: 'unknown', evidence: { requested: null, effort: null }, next: 'send' };
-    if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
-    if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested, effort: options.effort || options.reasoningEffort }, next: 'model-fallback' };
-    if (requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) return { state: 'fail', evidence: { requested, effort: requestedEffort }, next: 'model-fallback' };
+    const requestedFamily = normalizeChatGptFamilyChoice(options.family);
+    // Unsupported aliases fail before the menu opens. A caller reads `ok` as
+    // "this request can be enforced", so an alias we cannot select must never
+    // reach the browser (#87).
+    if (options.family && !requestedFamily) {
+        return { state: 'fail', evidence: { requested: requested || null, effort: null, family: options.family }, next: 'model-fallback' };
+    }
+    // An explicitly named model that we cannot resolve fails regardless of the
+    // family, otherwise a valid family would mask an invalid model — the same
+    // silent drop #87 exists to stop, moved to the model axis.
+    if (model && !requested) {
+        return { state: 'fail', evidence: { requested: model, family: requestedFamily || null }, next: 'model-fallback' };
+    }
+    if (!model && !(options.effort || options.reasoningEffort) && !options.family) {
+        return { state: 'unknown', evidence: { requested: null, effort: null, family: null }, next: 'send' };
+    }
+    if (!requested && !requestedFamily) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
+    if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested: requested || null, effort: options.effort || options.reasoningEffort, family: requestedFamily || null }, next: 'model-fallback' };
+    // Effort support is keyed by the model axis. Without a model the effort
+    // applies to whatever tier is currently selected, which this probe cannot
+    // confirm, so the compatibility check only runs when a model was named.
+    if (requested && requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) {
+        return { state: 'fail', evidence: { requested, effort: requestedEffort, family: requestedFamily || null }, next: 'model-fallback' };
+    }
     /** @type {string[]} */
     const usedFallbacks = [];
     try {
@@ -1736,7 +1787,13 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     } catch {
         return { state: 'fail', evidence: { requested, menuOpenFailed: true, usedFallbacks }, next: 'model-fallback' };
     }
-    const option = await findModelOption(page, requested).catch(() => null);
+    const option = requested ? await findModelOption(page, requested).catch(() => null) : null;
+    // Family availability is independent of the model row: both axes have to be
+    // reachable before `ok` can mean "the whole request can be enforced".
+    let familyAvailable = true;
+    if (requestedFamily) {
+        familyAvailable = await isChatGptFamilyOptionAvailable(page, requestedFamily).catch(() => false);
+    }
     /** @type {Locator | null} */
     let effortOption = null;
     if (option && requestedEffort) {
@@ -1754,7 +1811,27 @@ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
     } catch {
         menuClosed = false;
     }
-    const selectable = Boolean(option) && (!requestedEffort || Boolean(effortOption));
-    const state = selectable ? (menuClosed ? 'ok' : 'warn') : 'fail';
-    return { state, evidence: { requested, effort: requestedEffort || null, menuClosed, usedFallbacks }, next: state === 'ok' ? 'send' : 'model-fallback' };
+    const selectable = (requested ? Boolean(option) : true)
+        && (!requestedEffort || !requested || Boolean(effortOption))
+        && familyAvailable;
+    // An effort without a model targets the tier that happens to be selected.
+    // This probe never selects the family, so it cannot prove that the resulting
+    // tier accepts the effort — reporting `ok` would recreate the illusion #87
+    // was about.
+    const unprovenEffortTier = Boolean(requestedEffort) && !requested;
+    const state = selectable
+        ? (menuClosed && !unprovenEffortTier ? 'ok' : 'warn')
+        : 'fail';
+    return {
+        state,
+        evidence: {
+            requested: requested || null,
+            effort: requestedEffort || null,
+            family: requestedFamily || null,
+            menuClosed,
+            ...(unprovenEffortTier ? { effortTierUnproven: true } : {}),
+            usedFallbacks,
+        },
+        next: state === 'ok' ? 'send' : 'model-fallback',
+    };
 }
