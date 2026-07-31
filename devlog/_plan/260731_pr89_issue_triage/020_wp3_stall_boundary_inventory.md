@@ -38,15 +38,15 @@ rg -n "page\.evaluate|locator\(" web-ai/chatgpt-response-dom.mjs web-ai/chatgpt-
 | --- | --- | --- | --- |
 | `chatgpt.mjs:557` | Page.evaluate | `doesAssistantFollowUser` ← 루프 `:719` | 항상 |
 | `chatgpt.mjs:1035` | Page.evaluate | `readActivityState` ← 루프 `:674` | 항상 |
-| `chatgpt.mjs:1067` | Page.evaluate | `isResponseFinished` ← 루프 `:709`, recovery `:869` | 항상 |
+| `chatgpt.mjs:1067` | Page.evaluate | `isResponseFinished` ← 루프 `:710`, recovery `:870` | 항상 |
 | `chatgpt.mjs:1438-1439` | Page.evaluate | `readAssistantSnapshots` | split 실패 시 |
 | `chatgpt.mjs:1466` | Page.evaluate | `readAssistantSnapshotsSplit` ← 루프 `:655` | 항상 |
 | `chatgpt-response-dom.mjs:30` | Locator | `anyStopButtonVisible` ← `readActivityState:1031` | 항상 |
 | `chatgpt-response-dom.mjs:415` | Locator | `readTopLevelAssistantTextsFromLocators` ← `:1428` | evaluate 실패 시 |
 | `chatgpt-response-observer.mjs:103-104` | Page.evaluate | `recoverAssistantResponse` ← `:865` | 세션 폴, 데드라인 후 |
-| `failure-diagnostics.mjs:29` | 외부 모듈 | `captureFailureDiagnostics` ← `:915` | `diagnostics` 활성, 데드라인 후 |
-| `copy-markdown.mjs:71` | 외부 모듈 | `captureCopiedResponseText` ← `:958` | `allowCopyMarkdownFallback`, 데드라인 후 |
-| `chatgpt.mjs:919`, `:939` | 간접 | copy fallback의 `isStreaming`/`isResponseFinished` | `allowCopyMarkdownFallback`, 데드라인 후 |
+| `failure-diagnostics.mjs:29` | 외부 모듈 | `captureFailureDiagnostics` ← `:916` | `diagnostics` 활성, 데드라인 후 |
+| `copy-markdown.mjs:71` | 외부 모듈 | `captureCopiedResponseText` ← `:959` | `allowCopyMarkdownFallback`, 데드라인 후 |
+| `chatgpt.mjs:920`, `:940` | 간접 | copy fallback의 `isStreaming`/`isResponseFinished` | `allowCopyMarkdownFallback`, 데드라인 후 |
 | `chatgpt-response-observer.mjs:81` | Page.evaluate | `observeAssistantResponse` ← `:626` | 항상 — **이미 `timeoutMs` 예산 있음** |
 
 `countAssistantMessages` 경로(`chatgpt.mjs:331`, `:1151`, `:1413`)는 `pollWebAi`
