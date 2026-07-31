@@ -110,6 +110,9 @@ B10, B14~B25, B28, B30~B36 — 21개.
 | WP5 | diagnostics (B10, B28) | WP3 |
 | WP6 | 탭 lease와 finalizer (B16, B17, B33, B34, B35, B36의 **예산·수명주기**) | WP2, WP3 |
 | WP7 | fail-open 교정 (B23, B24, B25, B36의 **sentinel 소비 계약**) | WP1, WP3, WP6 |
+| WP11 | fail-open 교정 선행분 — B24, B36 (완료) | — |
+| WP19 | **B25 요구 계약 확정 (문서 전용, 완료)** — `020` | — |
+| WP20 | **B25 strict enforcement 구현** | WP19 |
 
 ### WP11 — fail-open 교정을 앞으로 뺐다 (2026-07-31)
 
@@ -132,6 +135,42 @@ B10, B14~B25, B28, B30~B36 — 21개.
 - **B25** fail-closed — WP11은 fail-visible(무음 제거)까지다. 답은 여전히
   `complete`로 나가므로, 진짜 fail-closed는 명시적 artifact 요청 계약이
   생긴 뒤에 가능하다.
+
+### WP19 — B25의 요구 계약을 확정했다 (2026-08-01, 문서 전용)
+
+위에서 "명시적 artifact 요청 계약이 생긴 뒤에 가능하다"고 미뤄 둔 그 계약이다.
+`020_wp19_file_artifact_contract.md`에 고정했다.
+
+핵심은 대칭이다 — **명시적으로 요구했으면 fail-closed, 요구하지 않은
+opportunistic 수집은 warning을 남기는 best-effort.** 이미지 계약
+(`_fin/260508_oracle_parity/11_generated_images_public_contract.md`)이 이미
+세운 비대칭을 그대로 따랐다. 새 원칙을 만들지 않았다.
+
+조사에서 확인한 것: 이 경로에는 **호출자가 요구를 표현할 방법이 아예 없다.**
+CLI 플래그도, envelope 필드도, 세션 상태도, MCP schema에도 없다. 그래서 요구
+신호를 먼저 만들지 않으면 fail-closed가 성립하지 않는다 — 무작정 실패시키면
+첨부가 없는 평범한 응답까지 깨진다.
+
+**WP19가 닫는 것**: 없다. 문서 전용이다. B25 자체는 구현 work-phase에서 닫는다.
+
+**구현 work-phase가 받는 것**: helper 두 개의 정확한 반환 union, 지원/거부
+행렬, 부분 저장 rollback 의미, hard deadline과의 우선순위, 정책 단조 병합
+규칙, 변경 대상 표와 mutation 짝을 갖춘 테스트 행렬.
+
+**WP20 (구현)의 선행은 WP19뿐이다.** WP0~WP7의 예산 계약을 기다리지 않는다.
+WP11과 같은 논리다 — strict 계약은 예산 상한이 아니라 요구·증명 계약이고, 어떤
+예산 모델을 고르든 "요구했으면 증명 없이 성공으로 보내지 않는다"는 유지된다.
+
+다만 하나가 예산과 얽힌다. hard deadline이 우선이라는 결정 때문에 WP20은
+데드라인 이후 write를 막는 배선을 **반드시 포함해야 한다**. 그러지 않으면
+자매 유닛이 WP16~WP18에서 닫은 late-side-effect fencing이 이 계약 때문에 다시
+열린다. `020`의 해당 절이 그 조건이다.
+
+**WP20이 닫는 것과 닫지 못하는 것을 구분한다.** WP20은 async continuation의
+post-timeout write를 막는다. 동기 구간 — `writeFileSync`와 `withStoreLock`의
+blocking retry — 의 wall-time 상한은 못 만든다. 이 문서가 처음부터 적어둔
+"동기 IO에는 race가 작동하지 않는다"가 그대로 적용된다. 그건 WP2(G1)의 몫이고
+그때까지 c7의 그 부분은 open이다. WP20 완료를 c7 종료로 적으면 안 된다.
 
 분할은 021 7절의 유닛 B 순서를 따르되 fail-open 교정을 독립 work-phase로
 분리했다 — 예산 계약과 성격이 달라 섞으면 어느 쪽이 효과를 냈는지 알 수 없다.
@@ -200,7 +239,19 @@ IN — 테스트:
 `test/unit/chatgpt-images.test.mjs`, `test/unit/chatgpt-files.test.mjs`,
 `test/unit/tab-lifecycle.test.mjs`, 신규 프로세스 하네스.
 
+IN — WP19/WP20 추가분: `web-ai/cli.mjs`(flag·help·preflight),
+`web-ai/chatgpt-files.mjs`(detector/save 반환 계약, staging·rollback),
+`web-ai/session.mjs`(`envelopeSummary` 보존과 단조 병합),
+`web-ai/watcher.mjs`(CDP 주입), `web-ai/mcp-server.mjs`(저장 정책 집행).
+테스트: `test/unit/web-ai-chatgpt-activity-poll.test.mjs`,
+`test/integration/web-ai-cli-contract.test.mjs`, watcher·MCP wait 계약 테스트.
+
 OUT: 답변 읽기와 완료 판정 경로 — 자매 유닛 소유. #87 관련 코드. devlog 정리.
+
+**WP19/WP20 한정 범위 예외**: 위 OUT에도 불구하고 `chatgpt.mjs`의
+`status: 'complete'` 반환 네 곳은 IN이다. strict 계약을 집행할 지점이 거기뿐이라
+한 곳만 배선하면 나머지 셋이 우회한다. 완료 **판정**은 바꾸지 않고 그 직전에
+artifact 계약을 끼워 넣는 것이므로 자매 유닛의 소유권과 충돌하지 않는다.
 
 ## 종료 판정
 
