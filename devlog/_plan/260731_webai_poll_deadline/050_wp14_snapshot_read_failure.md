@@ -275,6 +275,52 @@ X13이 결함 자체의 회귀 테스트다. baseline만 다른 짝을 만들어
 `readTopLevelAssistantTextsFromLocators`는 export이므로 다른 소비자를 먼저
 전수 확인한다.
 
+## 실행 결과 (2026-08-01)
+
+커밋 다섯: `52ebed3`(소스), `6feddeb`(혼합 분기 테스트), `9635426`(부분 읽기
+교정), `d86f394`(X10 falsifiable + 8초 단축), 문서.
+
+### 감사가 잡은 것
+
+처방 4라운드 + 구현 4라운드. 실제 결함 둘이 나왔다.
+
+| # | 발견 |
+| --- | --- |
+| 1 | **소비자 `:759` 누락** — 구조체에 `.map`을 호출해 런타임 오류. 처방 단계에서 잡혔다 |
+| 2 | **부분 읽기가 성공으로 반환** — node 둘 중 하나만 읽히면 `ok:true`에 텍스트 하나. baseline이 1이 되어 나머지 turn을 새 답으로 재유입한다. 0을 기록하는 것과 같은 오염인데 더 조용하다 |
+
+2번이 이 유닛의 교훈을 다시 보여준다. "전부 실패"만 실패로 본 것이 틀렸다 —
+positional count에서는 **덜 센 것도 틀린 것**이다.
+
+### 테스트가 통과하는 이유가 틀렸던 것 셋
+
+| 테스트 | 문제 |
+| --- | --- |
+| X11b(초판) | 첫 tick부터 실패해 `stableText`가 채워진 적이 없다. reset 세 줄을 지워도 GREEN. 내가 돌린 mutation은 pacing까지 함께 지워서 hang이 pacing 탓이었다 |
+| X8/X8b(초판) | error shape만 검사. `saveBaseline` 뒤에 throw해도 통과했고, X8b는 `getTargetId`를 안 넣어 lease 경로가 비활성이라 "lease 없음"이 공허했다 |
+| X10 | 아예 없었다. 반복 `null`을 stable로 세도 뒤이은 최종 count가 같은 error를 내므로 GREEN |
+
+X10은 가상시계로 해결했다 — 가드가 있으면 8초 예산을 다 쓰고 없으면 2회 만에
+반환한다. 부수적으로 X8이 8002ms → 3ms가 됐다.
+
+### 내 fixture 버그
+
+`waitForStableAssistantCount`가 카운터를 반복 호출하는데 절대 호출순서로
+스크립팅해서 두 번째 라운드부터 desync됐다. parity로 바꿨다.
+
+### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 180 passed (180); Tests 2046 passed (2046)
+npm run gate:all              All 17 gate(s) passed (exit 0)
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
+mutation 6건 RED: `:336` throw, locator `ok:false`, 1차-성공-빈 규칙,
+`:759` stable reset, 부분 읽기 폐기, null stable 가드.
+
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
 닫는 것: **B01·B02·B07**의 실패/빈 구별. `021` 3절이 "빈 읽기와 구별 불가"로

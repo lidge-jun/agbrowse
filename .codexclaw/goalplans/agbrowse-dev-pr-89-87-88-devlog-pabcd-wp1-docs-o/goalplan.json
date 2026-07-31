@@ -217,6 +217,12 @@
       "status": "done",
       "title": "WP13 유입 방지 게이트 (G3 partial — enumerated ingress forms closed)",
       "tasks": []
+    },
+    {
+      "id": "wp14",
+      "status": "done",
+      "title": "WP14 스냅샷 읽기 실패와 빈 페이지 구분 (B01/B02/B07). B04는 OPEN",
+      "tasks": []
     }
   ],
   "criteria": [
