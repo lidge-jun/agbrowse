@@ -205,6 +205,12 @@
       "status": "done",
       "title": "WP11 자매 유닛 fail-open 교정: B24 target identity + B36 tab liveness (예산 계약과 독립)",
       "tasks": []
+    },
+    {
+      "id": "wp12",
+      "status": "done",
+      "title": "WP12 withSessionCommandLock의 blocking wait 제거 (G1 부분 — P2 command-lock subprobe)",
+      "tasks": []
     }
   ],
   "criteria": [

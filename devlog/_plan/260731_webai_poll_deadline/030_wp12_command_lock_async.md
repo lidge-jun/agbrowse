@@ -112,6 +112,44 @@ blocking mutation이면 두 번째 호출이 이벤트 루프를 막아 타이�
 | `web-ai/session-store.mjs` | `delayMs` 추가, `:298` 한 줄 교체 |
 | `test/unit/web-ai-session-command-lock.test.mjs` 또는 기존 스위트 | V1~V6 |
 
+## 실행 결과 (2026-07-31)
+
+커밋 둘: `cf19c3e`(소스), `937b4d6`(테스트 보강).
+
+측정된 상한이 처방의 추정과 일치했다. V5가 실제로 200회 재시도를 돌아
+**5407ms**에 throw한다 — 200 x 25ms다. 수정 전이라면 그 5.4초 동안 이벤트
+루프가 통째로 멈춰 있었다는 뜻이다.
+
+mutation: blocking 복원 시 V1이 **6432ms에 RED**(수정본 85ms).
+
+### 감사가 잡은 것
+
+| # | 지적 |
+| --- | --- |
+| 1 | 호출부를 5곳으로 셌으나 실제 6곳 (`cli-sessions.mjs:123` 누락) |
+| 2 | "전체 P2 반전"으로 과대 표기 — subprobe다 |
+| 3 | V1이 "타이머 발화"만 보면 waiter 종료 후 발화해도 통과 |
+| 4 | **V5 부재** — "약 5초로 유한하다"가 이 변경의 안전 주장인데 테스트가 없었다 |
+| 5 | V2의 wall-clock 200ms가 flaky이고, 150ms 지연을 넣어도 통과 |
+
+4번이 가장 중요하다. blocking loop를 200개 순차 타이머로 바꾸는 것은 **상한이
+유지될 때만** 개선이다. 그 전제를 검증하지 않았다.
+
+5번은 반대 방향의 같은 실수다 — 테스트가 통과하지만 아무것도 보장하지 않는다.
+`setTimeout` spy로 바꾸니 acquire 경로에 `await delayMs(1)` 하나만 넣어도
+RED가 된다.
+
+### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 179 passed (179); Tests 2007 passed (2007)
+npm run gate:all              All 16 gate(s) passed (exit 0)
+npm run typecheck             exit 0   (.mjs 미대상)
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
 닫는 것: command-lock 경합 재시도의 **결정적 5초 event-loop freeze** 제거.

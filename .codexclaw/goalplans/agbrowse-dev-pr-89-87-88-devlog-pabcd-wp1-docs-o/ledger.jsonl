@@ -15,3 +15,4 @@
 {"ts":"2026-07-31T13:07:05.439Z","slug":"agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o","event":"workphase_done","detail":"closed wp9"}
 {"ts":"2026-07-31T14:55:15.000Z","slug":"agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o","event":"workphase_done","detail":"closed wp10 — B03/B06 fail-closed 구현, 감사 3라운드 PASS, mutation 4건 RED"}
 {"ts":"2026-07-31T17:04:55.000Z","slug":"agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o","event":"workphase_done","detail":"closed wp11 — B24/B36 fail-closed, 감사 6라운드 PASS, mutation 13건 RED"}
+{"ts":"2026-07-31T17:32:05.000Z","slug":"agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o","event":"workphase_done","detail":"closed wp12 — command lock async wait, 감사 2라운드 PASS. G1은 여전히 unmet(withStoreLock 87곳 캐스케이드)"}
