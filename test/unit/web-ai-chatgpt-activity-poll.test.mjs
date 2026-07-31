@@ -417,12 +417,21 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
      * The text is deliberately substantive: gating on image-chrome strings alone
      * would let this through, which is exactly the hole being closed.
      */
-    it('T12a/T12c/T12g: recovery defers instead of completing', async () => {
+    /**
+     * Drives a poll to the deadline WITHOUT blocking on ordering, so the
+     * output-image invariant is the only thing that can stop completion.
+     *
+     * A failing activity read buys the 5s quiet window, which a 2s budget cannot
+     * satisfy; ordering stays `ordered` so recovery's own gate lets the candidate
+     * through. Blocking with `turnOrdering: 'stale'` instead would mask the
+     * invariant: recovery would defer even with it deleted.
+     */
+    function pollPastDeadline(extraInput = {}) {
         const { page } = makePage({
-            activity: { strength: 'none', evidence: '' },
+            activity: () => { throw new Error('stalled'); },
             text: 'a real substantive answer',
             finished: true,
-            turnOrdering: 'stale', // forces the loop to the deadline
+            turnOrdering: 'ordered',
         });
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
@@ -433,17 +442,29 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
                 envelopeSummary: { assistantCount: 0 },
             },
         );
-        const result = await pollWebAi(
+        return pollWebAi(
             { getPage: async () => page, getTargetId: async () => 'target-activity' },
             {
                 vendor: 'chatgpt',
                 session: session.sessionId,
                 timeout: 2,
                 skipFinalize: true,
-                outputImage: '/tmp/agbrowse-never-written.png',
+                ...extraInput,
             },
         );
+    }
+
+    it('T12a/T12c/T12g: recovery defers instead of completing', async () => {
+        const result = await pollPastDeadline({ outputImage: '/tmp/agbrowse-never-written.png' });
         expect(result.status).not.toBe('complete');
+    });
+
+    it('proves the invariant is load-bearing: the same poll completes without it', async () => {
+        // Identical page, identical deadline overrun, only `outputImage` differs.
+        // Deleting the recovery invariant makes the test above match this one.
+        const result = await pollPastDeadline();
+        expect(result.status).toBe('complete');
+        expect(result.usedFallbacks).toContain('recovery');
     });
 
     it('completes normally when no output image was requested', async () => {
@@ -455,5 +476,162 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
         });
         const { result } = await poll(page, 2);
         expect(result.status).toBe('complete');
+    });
+
+    /**
+     * The copy fallback is a SEPARATE post-deadline exit. A no-session poll skips
+     * recovery entirely, so guarding recovery alone leaves this route open.
+     */
+    function makeCopyPage({ text }) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        return {
+            url: () => 'https://chatgpt.com/c/copy',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                if (arg?.selectorSet?.copyButtonSelectors) return { ok: true, text };
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+        };
+    }
+
+    function pollCopyNoSession(page, extraInput = {}) {
+        return pollWebAi(
+            { getPage: async () => page },
+            {
+                vendor: 'chatgpt',
+                timeout: 2,
+                skipFinalize: true,
+                allowCopyMarkdownFallback: true,
+                ...extraInput,
+            },
+        );
+    }
+
+    it('T12d/T12f: the no-session copy route never completes an unsatisfied output image', async () => {
+        // Both shapes must fail closed. Image chrome may raise the typed
+        // `provider.image-output` error before copy is reached — that is the
+        // contract's own failure mode and equally acceptable. What is NOT
+        // acceptable is `status: 'complete'`.
+        for (const text of ['Edit', 'a real substantive markdown answer']) {
+            const page = makeCopyPage({ text });
+            const outcome = await pollCopyNoSession(page, { outputImage: '/tmp/agbrowse-never-written.png' })
+                .then(result => result.status, err => `threw:${err?.errorCode || 'unknown'}`);
+            expect(outcome).not.toBe('complete');
+        }
+    });
+
+    it('T12e: image-chrome text still completes when no output image was asked for', async () => {
+        // Classification is observational. Over-blocking on the chrome string
+        // alone would break ordinary polls whose answer happens to be short.
+        const page = makeCopyPage({ text: 'Edit' });
+        const result = await pollCopyNoSession(page);
+        expect(result.status).toBe('complete');
+    });
+});
+
+/**
+ * An observation that reaches only the top-level `warnings` is half-recorded.
+ * The same list is copied into `answerArtifact` at construction time, persisted
+ * to the session by the deferred builder, and handed to the finalizer before the
+ * return — so each has to be checked separately.
+ */
+describe('observation warnings reach every envelope', () => {
+    function makeSession() {
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('T17: answerArtifact carries the same warnings as the result', async () => {
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+        });
+        const { result } = await poll(page, 12);
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('activity-read-unverified');
+        expect(result.answerArtifact.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T18/T14a: a deferred result and its persisted session agree', async () => {
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'stale',
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+        expect(result.status).toBe('polling');
+        expect(result.warnings).toContain('activity-read-unverified');
+        expect(getSession(session.sessionId).warnings).toContain('activity-read-unverified');
+    });
+
+    it('T19: the finalizer receives the observation too', async () => {
+        // The finalizer runs BEFORE the return and stores what it is given, so
+        // merging after the fact would leave the stored copy short.
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 12 },
+        );
+        expect(result.status).toBe('complete');
+        expect(getSession(session.sessionId).warnings).toContain('activity-read-unverified');
+    });
+
+    it('T16: an early target-mismatch return still reports the earlier failed read', async () => {
+        // Mismatch exits before every other envelope; a per-return merge is easy
+        // to forget exactly here.
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: false,
+        });
+        const session = makeSession();
+        let calls = 0;
+        const result = await pollWebAi(
+            {
+                getPage: async () => page,
+                getTargetId: async () => { calls += 1; return calls > 1 ? 'moved-target' : 'target-activity'; },
+                getPort: () => 9222,
+            },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, skipFinalize: true },
+        );
+        expect(result.status).toBe('target-mismatch');
+        expect(result.warnings).toContain('activity-read-unverified');
     });
 });
