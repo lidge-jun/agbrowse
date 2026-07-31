@@ -2,8 +2,8 @@
   "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
   "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
   "createdAt": "2026-07-31T07:28:37.608Z",
-  "updatedAt": "2026-07-31T09:58:04.527Z",
-  "activeWorkPhaseId": "wp2",
+  "updatedAt": "2026-07-31T10:59:35.958Z",
+  "activeWorkPhaseId": "wp5",
   "workPhases": [
     {
       "id": "wp1",
@@ -38,22 +38,22 @@
     {
       "id": "wp2",
       "title": "WP2 #87 잔여 갭 2건 구현: probe family 계약 + MCP non-ChatGPT fail-closed",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "wp2-t1",
           "title": "chatGptModelCapabilityProbe에 family 계약 추가(미지원 model은 family로 가려지지 않음)",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp2-t2",
           "title": "MCP web_ai_submit_prompt에 비-ChatGPT + family fail-closed",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp2-t3",
           "title": "기존 스위트에 테스트 추가(chatgpt-model / capability / mcp-server)",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
@@ -64,22 +64,22 @@
     {
       "id": "wp3",
       "title": "WP3 #88 정체 경계 인벤토리 + 후속 유닛 두 개의 로드맵 (문서 전용)",
-      "status": "pending",
+      "status": "done",
       "tasks": [
         {
           "id": "wp3-t1",
           "title": "call graph 폐쇄로 pollWebAi 정체 경계 전수 (Page/Locator/CDP/순수계산)",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp3-t2",
           "title": "각 경계의 방어 가능성 판정 + Playwright/owner 근거",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp3-t3",
           "title": "모든 경계를 후속 두 유닛에 배정 + 각 유닛 로드맵 작성",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
@@ -89,7 +89,7 @@
     {
       "id": "wp5",
       "title": "WP5 게이트 클로즈아웃: typecheck/gate:all/doc-drift/verify-counts + 커밋",
-      "status": "pending",
+      "status": "in_progress",
       "tasks": [
         {
           "id": "wp5-t1",
@@ -177,17 +177,17 @@
     },
     {
       "id": "c2",
-      "scenario": "#88 정체 경계가 전수 열거되고 방어 가능성이 판정되며, 모든 도달 가능 경계가 후속 두 유닛에 배정된다",
-      "expectedEvidence": "021 인벤토리 문서: 폐쇄 증명 + 경계별 판정 + 유닛 배정표",
-      "capturedEvidence": "",
-      "status": "open"
+      "scenario": "#88의 정체 경계가 확인된 표본으로 열거되고 각 경계의 방어 가능성이 판정되며, 예산 계약(sync isolation·fencing·single-flight 또는 격리 모델)과 검증 시나리오가 명세되어 모든 표본 경계가 후속 유닛에 배정된다. 전수 열거는 달성 조건이 아니다 — 두 차례 시도가 반증됐고 020/021이 그 진단과 대안 계약을 담고 있다",
+      "expectedEvidence": "021 문서: 경계 표본표 + 처분 + 예산 계약 3요소 + C1~C5 + 유닛 배정표",
+      "capturedEvidence": "devlog/_plan/260731_pr89_issue_triage/021_stall_boundary_map.md (커밋 286e998→9c9ea88). 경계 표본 36개(B01~B36), bounded 0개, fail-open 6개(B03/B06/B23/B24/B25/B36). 방어 가능성 판정: page.evaluate/locator.all/CDPSession.send 모두 timeout 옵션 없음(types.d.ts 근거), 동기 IO는 race 불가. §0에 폐쇄 열거가 두 번 반증된 진단과 예산 계약(sync isolation·fencing·single-flight 또는 격리 모델) 전환 근거. 검증 시나리오 C1~C5. 유닛 A 15개 / 유닛 B 21개 배정과 선행관계(B 1~2번 → A 4번 이후). 리뷰어 4라운드 near-pass. typecheck 0, doc-drift 164, verify-counts 76 통과, 코드 변경 0줄",
+      "status": "met"
     },
     {
       "id": "c3",
       "scenario": "probe가 family를 evidence에 담고 미지원 family/미지원 model을 메뉴 열기 전 fail하며, MCP가 비-ChatGPT provider + family를 브라우저 접근 없이 capability.unsupported로 거부한다",
       "expectedEvidence": "chatgpt-model/capability/mcp-server 스위트 실행 출력 + state/evidence/code 어서션",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "커밋 76e4793. probe family 계약: web-ai/chatgpt-model.mjs의 typedef+guard+isChatGptFamilyOptionAvailable. MCP fail-closed: web-ai/mcp-server.mjs submit_prompt. 테스트 출력 — vitest 5파일 129 passed(chatgpt-model 49건에 신규 probe 5건 포함), 통합 3파일 70 passed(mcp-server 14건에 신규 2건 포함). gate:all 16/16 PASS, typecheck exit 0, doc-drift 164 PASS, verify-counts 76 PASS. 활성화 관측: 미지원 family fail(mutation 0), 미지원 model+유효 family fail, currentFamily 불변, hidden 행 fail, effortTierUnproven warn, gemini+family 거부(getPage 0회)",
+      "status": "met"
     },
     {
       "id": "c4",
