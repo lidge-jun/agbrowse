@@ -482,13 +482,19 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
      * The copy fallback is a SEPARATE post-deadline exit. A no-session poll skips
      * recovery entirely, so guarding recovery alone leaves this route open.
      */
+    // Unique per page: a shared conversation URL let `findActiveSession` adopt a
+    // session left behind by an earlier poll, which is the opposite of what the
+    // session-free copy route is supposed to exercise.
+    let copyPageSeq = 0;
+
     function makeCopyPage({ text, activity }) {
         const start = Date.now();
         let offset = 0;
         vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
         const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        const conversationUrl = `https://chatgpt.com/c/copy-${Date.now()}-${copyPageSeq += 1}`;
         return {
-            url: () => 'https://chatgpt.com/c/copy',
+            url: () => conversationUrl,
             waitForTimeout: async (ms) => {
                 offset += Math.max(Number(ms) || 250, 250);
                 await new Promise(resolve => setImmediate(resolve));
@@ -524,6 +530,9 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
      * never reaching the copy route this covers.
      */
     function retireActiveSessions() {
+        // `findActiveSession` falls back to `active.at(-1)` when nothing matches
+        // by target or conversation URL, so ANY active ChatGPT session left by an
+        // earlier test gets adopted and the route stops being session-free.
         for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
             updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
         }
@@ -546,7 +555,7 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
         retireActiveSessions();
         saveBaseline({
             vendor: 'chatgpt',
-            url: 'https://chatgpt.com/c/copy',
+            url: page.url(),
             assistantCount: 0,
             envelope: { vendor: 'chatgpt', prompt: 'q' },
         });
