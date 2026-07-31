@@ -33,19 +33,23 @@
 모델 선택 probe(P1~P9)와 판정 기준은 자매 유닛의
 `010_wp1_budget_model.md`에 있다. 중복 작성하지 않는다.
 
-### 모델 결정 (2026-07-31, WP0 완료)
+### 모델 결정 (2026-07-31, WP0 — 조건부)
 
-**후보 A (in-process)로 확정됐다.** 근거는 자매 유닛
-`011_model_decision.md`.
+**후보 A (in-process)를 조건부로 선택했다.** 확정이 아니다 — 자매 유닛
+`011_model_decision.md`의 reversal gate G1~G4 중 하나라도 실패하면 B/C로
+복귀한다. 특히 **G1(동기 store의 async 전환)이 이 유닛 WP2와 같은 작업**이므로,
+이 유닛의 진행이 곧 A의 존폐를 결정한다.
 
 이 유닛에 직접 영향을 주는 측정 결과:
 
 | probe | 결과 | 이 유닛에 대한 함의 |
 | --- | --- | --- |
-| P1 | `page.close()`가 pending `evaluate`를 reject시켜 drain. 20회 반복 시 handle 증가 0 | 취소 수단이 존재하므로 격리가 불필요 |
+| P1c/P1d | `Page.reload`(CDP)가 **탭을 유지한 채** pending `evaluate`를 drain. 20회 반복 시 session identity 보존, handle 증가 0 | 세션 유지 취소 수단이 존재한다. `page.close()` 경로는 재사용 불가라 기각 |
 | P2 | `Atomics.wait` 309ms 동안 50ms 타이머 미발화 | **WP2(동기 IO 처방)가 A의 전제 조건이다.** 락을 async로 못 바꾸면 A 전체가 무너진다 |
 | P7 | worker 10ms / subprocess 19ms (임계 200ms) | 기동 비용은 격리 탈락 사유가 아니었다 — 되돌아갈 여지가 남아 있다 |
-| P3~P6 | **미측정** | A를 골라 해당 없음. B/C로 돌아가면 그때 측정 |
+| P3 | 감사가 측정 — worker에서 targetId 재연결 성공(138ms) | 격리도 기술적으로 가능하다. descriptor만 넘기면 된다 |
+| P4~P6 | **미측정** | A 조건부 선택으로 보류. B/C 복귀 시 측정 |
+| P8·P9 | **미측정** | reversal gate G2·G3의 대상 |
 
 WP2가 이 유닛의 critical path인 이유가 P2에서 확정됐다. 동기 IO를 async로
 옮기지 못하면 예산 계약 자체가 성립하지 않는다.
