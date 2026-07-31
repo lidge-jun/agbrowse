@@ -481,8 +481,14 @@ function createCopyMarkdownDeferredChatGptPage(text) {
             }
         },
         waitForTimeout: async () => {
+            // Flip the stop button and let the loop budget lapse. Sleeping past
+            // the whole `--timeout` used to be harmless because nothing enforced
+            // it; now it races the hard deadline and, under load, the poll
+            // correctly expires before reaching the copy path this test is
+            // about. 800ms clears the 750ms loop budget with room to spare while
+            // staying inside the 1s bound.
             stopVisible = true;
-            await new Promise(resolve => setTimeout(resolve, 1050));
+            await new Promise(resolve => setTimeout(resolve, 800));
         },
         locator: (selector) => ({
             first: () => ({

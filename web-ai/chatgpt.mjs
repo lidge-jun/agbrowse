@@ -68,6 +68,20 @@ import {
 } from './chatgpt-response-dom.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
+/**
+ * Budget handed to the post-deadline recovery path, carved OUT of `--timeout`
+ * rather than added to it. The caller's bound stays exactly what they asked for.
+ */
+const RECOVERY_RESERVE_MS = 2_000;
+const MAX_RECOVERY_RESERVE_RATIO = 0.25;
+/** Never starve the loop below one tick, even on a tiny timeout. */
+const MIN_LOOP_BUDGET_MS = 500;
+/** One poll tick. The reserve prefers the budget remainder after whole ticks. */
+const PACING_INTERVAL_MS = 500;
+/** How often the hard-deadline timer re-checks the clock the loop reads. */
+const POLL_EXPIRY_CHECK_MS = 250;
+/** Thrown by the commit gate so an expired run cannot return a normal envelope. */
+const POLL_EXPIRED = Symbol('poll-expired');
 const ASSISTANT_SELECTORS = CHATGPT_ASSISTANT_SELECTORS;
 const FINISHED_ACTIONS_SELECTOR = [
     'button[data-testid="copy-turn-action-button"]',
@@ -659,10 +673,98 @@ function mergeObservationList(warnings, observations) {
 }
 
 /**
+ * Poll for an answer, guaranteeing the CALLER gets a result within `--timeout`.
+ *
+ * The loop's own deadline is only checked between ticks, so a `page.evaluate`
+ * that never settles used to hold the caller past the timeout indefinitely —
+ * issue #88. This wrapper races the whole run against a hard deadline.
+ *
+ * Scope, stated precisely: containment starts once the deadline is armed, so it
+ * covers the poll loop and the recovery path but NOT pre-poll setup. It bounds
+ * the RETURN, not the stall — the losing `evaluate` stays pending, because
+ * cancelling it needs a primitive this codebase does not yet have.
+ *
  * @param {any} deps
  * @param {any} input
  */
 export async function pollWebAi(deps, input = {}) {
+    const timeoutMs = Math.max(1, Number(input.timeout) > 0 ? Number(input.timeout) : 1) * 1000;
+    /** @type {any} */
+    let expire = () => undefined;
+    let timer = null;
+    const started = Date.now();
+    const hardDeadline = started + timeoutMs;
+    const expiry = new Promise(resolve => {
+        expire = resolve;
+        // Resolves a plain envelope and nothing else. Recording the timeout in
+        // the session store here would take a SYNCHRONOUS lock inside a timer
+        // callback and stall the event loop — the very failure this is fixing.
+        // Re-check the CLOCK when the timer fires rather than trusting the
+        // delay. Callers (and tests) can advance `Date.now` independently of
+        // real time; expiring on wall time alone would cut short a poll that,
+        // by the clock the loop reads, still has budget. Re-arm until the
+        // clock agrees the deadline has passed.
+        const arm = () => {
+            const remaining = hardDeadline - Date.now();
+            if (remaining <= 0) { resolve(POLL_EXPIRED); return; }
+            timer = setTimeout(arm, Math.min(remaining, POLL_EXPIRY_CHECK_MS));
+        };
+        arm();
+    });
+    // Shared with the inner run so a hard-deadline return still reports what the
+    // poll managed to observe. Losing those warnings would make an expired poll
+    // indistinguishable from a clean one.
+    /** @type {Set<string>} */
+    const observations = new Set();
+    try {
+        const run = runPollWebAi(deps, input, hardDeadline, observations).then(
+            // Normalise BOTH settlement paths before the race: a stalled promise
+            // that settles just after the deadline can have its continuation
+            // scheduled ahead of the timer, and would otherwise deliver a normal
+            // result — or a normal error — past the bound.
+            result => (Date.now() >= hardDeadline ? POLL_EXPIRED : result),
+            err => (Date.now() >= hardDeadline || err === POLL_EXPIRED
+                ? POLL_EXPIRED
+                : Promise.reject(err)),
+        );
+        const outcome = await Promise.race([run, expiry]);
+        if (outcome !== POLL_EXPIRED) return outcome;
+        return buildHardTimeoutResult(input, observations);
+    } finally {
+        if (timer) clearTimeout(timer);
+        expire(POLL_EXPIRED);
+    }
+}
+
+/**
+ * The timeout envelope the hard deadline returns.
+ *
+ * Deliberately free of session writes: see the timer comment above.
+ *
+ * @param {any} input
+ */
+function buildHardTimeoutResult(input, observations) {
+    return {
+        ok: false,
+        vendor: input.vendor || 'chatgpt',
+        status: 'timeout',
+        ...(input.session ? { sessionId: input.session } : {}),
+        answerText: '',
+        usedFallbacks: [],
+        warnings: mergeObservationList(['poll-deadline-exceeded'], observations),
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {number} hardDeadlineAt
+ * @param {Set<string>} [sharedObservations]
+ */
+async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_INFINITY, sharedObservations) {
     const vendor = input.vendor || 'chatgpt';
     const timeout = Math.max(1, Number(input.timeout) > 0
         ? Number(input.timeout)
@@ -684,7 +786,7 @@ export async function pollWebAi(deps, input = {}) {
     // envelope merges it, so a fail-closed sentinel never disappears silently.
     // Declared before baseline resolution because that step can already record.
     /** @type {Set<string>} */
-    const observations = new Set();
+    const observations = sharedObservations || new Set();
     let baseline = (session && sessionToBaseline(session)) || getBaseline(vendor, url);
     if (!baseline) {
         // Last resort: the newest baseline for this HOST, which may belong to a
@@ -706,8 +808,74 @@ export async function pollWebAi(deps, input = {}) {
         ? createTraceContext(session.sessionId)
         : null;
 
-    const deadline = Date.now() + timeout * 1000;
+    // Two deadlines. `--timeout` is the HARD upper bound the caller is promised;
+    // the loop stops earlier so the post-deadline recovery path has budget left.
+    // Spending the whole timeout in the loop meant recovery ran at or past the
+    // bound, which is how a stalled read outlived `--timeout` entirely.
+    const hardDeadline = Number.isFinite(hardDeadlineAt)
+        ? hardDeadlineAt
+        : Date.now() + timeout * 1000;
+    // Derive from the hard deadline actually in force, not from `timeout`: the
+    // wrapper owns the bound and may have armed it slightly earlier.
+    const budgetMs = Math.max(0, hardDeadline - Date.now());
+    // Reserve is carved OUT of the budget so recovery runs inside the caller's
+    // bound rather than past it. It costs the loop its final tick, which is the
+    // point: that tick previously ran up to the deadline and left recovery to
+    // start already expired.
+    //
+    // Never more than a quarter of the budget: a small poll must not lose half
+    // its loop to a reserve, and the post-loop path is cheap when it is reached
+    // at all.
+    const reserveMs = Math.min(
+        RECOVERY_RESERVE_MS,
+        Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS),
+        Math.max(0, Math.floor(budgetMs * MAX_RECOVERY_RESERVE_RATIO)),
+        Math.max(0, budgetMs - MIN_LOOP_BUDGET_MS),
+    );
+    const deadline = hardDeadline - reserveMs;
     const startedAt = Date.now();
+    /**
+     * Owned by THIS invocation. Deliberately not module-level: a second poll on
+     * another session must not expire this one, and single-flight is explicitly
+     * out of scope for this change.
+     *
+     * @type {{ expired: boolean, hardDeadline: number }}
+     */
+    const run = { expired: false, hardDeadline };
+    /**
+     * Refuse to START a new side effect once the hard deadline has passed.
+     *
+     * Checks the clock as well as the flag: the timer callback may not have run
+     * yet even though wall time is past the deadline, because a promise
+     * continuation can be scheduled ahead of it.
+     *
+     * Throws rather than returning a sentinel — a caller that ignored the
+     * sentinel could still build a `complete` envelope and win the race after
+     * the deadline, which keeps the side effect out but breaks the time
+     * contract.
+     *
+     * @template T
+     * @param {() => T} fn
+     * @returns {T}
+     */
+    const commitIfActive = (fn) => {
+        if (run.expired || Date.now() >= run.hardDeadline) throw POLL_EXPIRED;
+        return fn();
+    };
+    /**
+     * Wait out one tick without overrunning the loop budget.
+     *
+     * @param {Promise<unknown>|null} [wake] observer promise, tail call only
+     * @returns {Promise<boolean>} false when the budget is spent
+     */
+    const paceTick = async (wake) => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        const waited = page.waitForTimeout(Math.min(PACING_INTERVAL_MS, remaining));
+        if (wake) await Promise.race([waited, wake]);
+        else await waited;
+        return true;
+    };
     let stableText = '';
     let stableSnapshot = null;
     let stableSince = 0;
@@ -720,7 +888,7 @@ export async function pollWebAi(deps, input = {}) {
     let observerWake = observerBudgetMs > 1_000
         ? observeAssistantResponse(page, { baselineAssistantCount: baseline.assistantCount, timeoutMs: observerBudgetMs })
         : null;
-    while (Date.now() <= deadline) {
+    while (Date.now() < deadline) {
         try {
         let identityOk = true;
         if (session?.targetId) {
@@ -770,7 +938,9 @@ export async function pollWebAi(deps, input = {}) {
                 stableText = '';
                 stableSnapshot = null;
                 stableSince = 0;
-                await page.waitForTimeout(500);
+                // Same budget cap as the tail: a flat 500ms here would eat the
+                // recovery reserve whenever both readers keep failing.
+                if (!await paceTick()) break;
                 continue;
             }
             wrapped = fallbackRead.snapshots.map((sample, index) => ({
@@ -973,16 +1143,12 @@ export async function pollWebAi(deps, input = {}) {
             stableSnapshot = null;
             stableSince = 0;
         }
-        if (observerWake) {
-            // Wake early when the observer signals settle; else cap at 500ms.
-            // Once it resolves, stop racing it (plain polling thereafter).
-            await Promise.race([
-                page.waitForTimeout(500),
-                observerWake.then(() => { observerWake = null; }, () => { observerWake = null; }),
-            ]);
-        } else {
-            await page.waitForTimeout(500);
-        }
+        // Wake early when the observer signals settle; else cap at whatever is
+        // left of the loop budget. Once it resolves, stop racing it.
+        const wake = observerWake
+            ? observerWake.then(() => { observerWake = null; }, () => { observerWake = null; })
+            : null;
+        if (!await paceTick(wake)) break;
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
                 if (session) updateSession(session.sessionId, { status: 'crashed' });
