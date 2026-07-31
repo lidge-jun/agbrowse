@@ -18,8 +18,16 @@
  * So this closes enumerated ingress forms, not "all ingress".
  */
 
-/** Identifier suffix that marks a synchronous Node API. */
-const SYNC_CALL = /\b([A-Za-z_$][A-Za-z0-9_$]*Sync)\s*\(/g;
+/**
+ * Any REFERENCE to a `Sync`-suffixed identifier, not just a call.
+ *
+ * Matching `name(` misses `readFileSync?.(p)`, `(readFileSync)(p)` and
+ * `const read = fs.readFileSync`, all of which are ordinary JavaScript rather
+ * than obfuscation. Counting references costs nothing here — a `Sync` binding
+ * that is mentioned but never invoked does not exist in this tree — and it
+ * cannot be dodged by changing call syntax.
+ */
+const SYNC_CALL = /\b[A-Za-z_$][A-Za-z0-9_$]*Sync\b/g;
 /** Event-loop blockers that do not end in `Sync`. */
 const OTHER_BLOCKING = /\bAtomics\.wait\s*\(/g;
 /** A CDP command: `.send('Domain.method'` with a literal. */
@@ -29,18 +37,26 @@ const ANY_SEND = /\.send\s*\(/g;
 
 /** `import { readFileSync as read }` / `export { … as … } from 'node:…'`. */
 const NODE_BINDING = /\b(?:import|export)\s*\{([^}]*)\}\s*from\s*['"]node:[^'"]+['"]/g;
-/** `fs[name](…)` — cannot be counted, so it must not pass. */
-const COMPUTED_CALL = /\b[A-Za-z_$][A-Za-z0-9_$]*\s*\[\s*[^\]'"`]+\s*\]\s*\(/g;
+/**
+ * `fs[name](…)` where the receiver is a filesystem-ish binding. Scoped to those
+ * names on purpose: banning every `obj[i](…)` would reject `arr[i](value)`,
+ * which is unrelated and legitimate.
+ */
+const COMPUTED_FS_CALL = /\b(?:fs|fsp|nodeFs|promises)\s*\[\s*[^\]]+\s*\]\s*\(/g;
+/** `(fs)['readFileSync'](…)` — a parenthesised receiver dodges the `\bfs[` form. */
+const COMPUTED_STRING_MEMBER = /\[\s*['"`][A-Za-z_$][A-Za-z0-9_$]*Sync['"`]\s*\]/g;
 /** `cdp['send'](…)` — a literal computed member dodges the `.send(` rule. */
 const COMPUTED_SEND = /\[\s*['"`]send['"`]\s*\]\s*\(/g;
 /** `cdp.send.bind(…)` — the call site then has no `.send(`. */
 const BOUND_SEND = /\.send\s*\.\s*bind\s*\(/g;
 
 /**
- * `const read = readFileSync;` — no `as` in the import, no `readFileSync(` at
- * the call site, so every other rule here misses it.
+ * `const read = readFileSync;` / `const read = fs.readFileSync;`
+ *
+ * The reference rule above already counts these, but naming them separately
+ * produces an error that says WHY rather than just reporting a count.
  */
-const SYNC_VALUE_ALIAS = /(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[A-Za-z_$][A-Za-z0-9_$]*Sync\s*[;,\n]/g;
+const SYNC_VALUE_ALIAS = /(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[A-Za-z_$][A-Za-z0-9_$.]*Sync\s*[;,\n]/g;
 
 /**
  * @param {string} source
@@ -80,7 +96,8 @@ export function scanSource(source) {
     const literalSend = countMatches(source, CDP_LITERAL_SEND);
     /** @type {string[]} */
     const evasions = [];
-    if (countMatches(source, COMPUTED_CALL) > 0) evasions.push('computed-member-call');
+    if (countMatches(source, COMPUTED_FS_CALL) > 0) evasions.push('computed-member-call');
+    if (countMatches(source, COMPUTED_STRING_MEMBER) > 0) evasions.push('computed-sync-member');
     if (countMatches(source, COMPUTED_SEND) > 0) evasions.push('computed-send');
     if (countMatches(source, BOUND_SEND) > 0) evasions.push('bound-send');
     if (countMatches(source, SYNC_VALUE_ALIAS) > 0) evasions.push('sync-value-alias');
@@ -162,6 +179,10 @@ export function evaluateBlockingIoGate({ sources, baseline }) {
 
 /** Runtime directories this gate governs. Tests and build scripts are exempt. */
 const SCANNED_DIRS = ['web-ai', 'skills/browser'];
+/** `"type": "module"` means a `.js` file here is runtime code too. */
+const SCANNED_EXTENSIONS = ['.mjs', '.js', '.cjs'];
+/** Browser-injected bundles: shipped as-is, never executed in the Node runtime. */
+const VENDOR_PATHS = ['skills/browser/adaptive-fetch/vendor/'];
 
 /**
  * Read every runtime source as `relativePath → text`.
@@ -183,8 +204,18 @@ export async function readRuntimeSources(repoRoot) {
         if (!fs.existsSync(abs)) return;
         for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
             const rel = `${dir}/${entry.name}`;
+            // A symlink is neither followed nor ignored: following one needs
+            // realpath containment and cycle handling, and ignoring it would
+            // hide a whole subtree. There are none today, so refuse instead.
+            if (entry.isSymbolicLink()) {
+                sources.set(rel, '/* gate: symlink */ fs[unscannable](0);');
+                continue;
+            }
             if (entry.isDirectory()) walk(rel);
-            else if (entry.name.endsWith('.mjs')) sources.set(rel, fs.readFileSync(path.join(repoRoot, rel), 'utf8'));
+            else if (SCANNED_EXTENSIONS.some(ext => entry.name.endsWith(ext))
+                && !VENDOR_PATHS.some(prefix => rel.startsWith(prefix))) {
+                sources.set(rel, fs.readFileSync(path.join(repoRoot, rel), 'utf8'));
+            }
         }
     };
     for (const dir of SCANNED_DIRS) walk(dir);

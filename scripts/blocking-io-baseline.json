@@ -1,57 +1,57 @@
 {
     "files": {
         "skills/browser/adaptive-fetch/defuddle-extractor.mjs": {
-            "sync": 1,
-            "cdp": 0,
-            "nonLiteralSend": 0
-        },
-        "skills/browser/browser.mjs": {
-            "sync": 43,
-            "cdp": 18,
-            "nonLiteralSend": 0
-        },
-        "skills/browser/extract.mjs": {
             "sync": 2,
             "cdp": 0,
             "nonLiteralSend": 0
         },
-        "skills/browser/profile-lock.mjs": {
-            "sync": 15,
-            "cdp": 0,
+        "skills/browser/browser.mjs": {
+            "sync": 53,
+            "cdp": 18,
             "nonLiteralSend": 0
         },
-        "skills/browser/runway-generate.mjs": {
-            "sync": 1,
-            "cdp": 0,
-            "nonLiteralSend": 0
-        },
-        "skills/browser/runway-sequence.mjs": {
+        "skills/browser/extract.mjs": {
             "sync": 3,
             "cdp": 0,
             "nonLiteralSend": 0
         },
+        "skills/browser/profile-lock.mjs": {
+            "sync": 23,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/runway-generate.mjs": {
+            "sync": 2,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/runway-sequence.mjs": {
+            "sync": 5,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
         "skills/browser/skill-install.mjs": {
-            "sync": 13,
+            "sync": 21,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "skills/browser/tab-manager.mjs": {
-            "sync": 4,
+            "sync": 8,
             "cdp": 7,
             "nonLiteralSend": 1
         },
         "skills/browser/update-check.mjs": {
-            "sync": 5,
+            "sync": 9,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/action-cache.mjs": {
-            "sync": 5,
+            "sync": 10,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/active-command-store.mjs": {
-            "sync": 12,
+            "sync": 20,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -61,12 +61,12 @@
             "nonLiteralSend": 0
         },
         "web-ai/cache-metrics.mjs": {
-            "sync": 7,
+            "sync": 12,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/chatgpt-attachments.mjs": {
-            "sync": 1,
+            "sync": 2,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -86,7 +86,7 @@
             "nonLiteralSend": 0
         },
         "web-ai/chatgpt-images.mjs": {
-            "sync": 3,
+            "sync": 6,
             "cdp": 2,
             "nonLiteralSend": 0
         },
@@ -96,7 +96,7 @@
             "nonLiteralSend": 0
         },
         "web-ai/chatgpt-project-sources.mjs": {
-            "sync": 3,
+            "sync": 6,
             "cdp": 11,
             "nonLiteralSend": 0
         },
@@ -111,7 +111,7 @@
             "nonLiteralSend": 0
         },
         "web-ai/churn-log.mjs": {
-            "sync": 5,
+            "sync": 10,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -121,7 +121,7 @@
             "nonLiteralSend": 0
         },
         "web-ai/code-artifact.mjs": {
-            "sync": 3,
+            "sync": 6,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -141,38 +141,38 @@
             "nonLiteralSend": 0
         },
         "web-ai/gemini-live.mjs": {
-            "sync": 1,
+            "sync": 2,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/session-artifacts.mjs": {
-            "sync": 8,
+            "sync": 11,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/session-store.mjs": {
-            "sync": 24,
+            "sync": 32,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/session.mjs": {
-            "sync": 4,
+            "sync": 8,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/tab-lease-store.mjs": {
-            "sync": 12,
+            "sync": 20,
             "cdp": 0,
             "nonLiteralSend": 0
         },
         "web-ai/watcher.mjs": {
-            "sync": 7,
+            "sync": 12,
             "cdp": 0,
             "nonLiteralSend": 0
         }
     },
     "totals": {
-        "sync": 184,
+        "sync": 285,
         "cdp": 54
     }
 }

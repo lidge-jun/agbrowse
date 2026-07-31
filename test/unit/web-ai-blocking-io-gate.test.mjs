@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateBlockingIoGate, runBlockingIoGate, scanSource } from '../../scripts/blocking-io-gate.mjs';
+import { evaluateBlockingIoGate, readRuntimeSources, runBlockingIoGate, scanSource } from '../../scripts/blocking-io-gate.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -160,5 +160,41 @@ describe('blocking IO ratchet gate (#88 G3)', () => {
 
     it('counts Atomics.wait, which blocks without a Sync suffix', () => {
         expect(scanSource('Atomics.wait(view, 0, 0, 25);').sync).toBe(1);
+    });
+
+    it('W10: call-syntax variants do not slip past the counter', () => {
+        // Every one of these is ordinary JavaScript, not obfuscation, and every
+        // one passed while the rule matched `name(` instead of the reference.
+        const variants = [
+            'readFileSync?.(p);',
+            '(readFileSync)(p);',
+            "(fs)['readFileSync'](p);",
+            'const read = fs.readFileSync;\nread(p);',
+        ];
+        for (const body of variants) {
+            const result = evaluate({ 'web-ai/a.mjs': body }, { files: {}, totals: { sync: 0, cdp: 0 } });
+            expect(result.ok, `should have been caught: ${body}`).toBe(false);
+        }
+    });
+
+    it('W10b: unrelated dynamic dispatch is not flagged', () => {
+        // Rejecting every `obj[i](…)` would fail on plain array and handler
+        // lookups, so the computed rule is scoped to filesystem receivers.
+        const result = evaluate({
+            'web-ai/a.mjs': 'arr[i](value);\nconst h = handlers[key];\nh(payload);',
+        }, { files: {}, totals: { sync: 0, cdp: 0 } });
+        expect(result.ok).toBe(true);
+    });
+
+    it('W11: the walker covers .js and refuses symlinks', async () => {
+        // `"type": "module"` makes a `.js` file here runtime code, and a
+        // directory symlink would hide an entire subtree from the scan.
+        const sources = await readRuntimeSources(repoRoot);
+        const scanned = [...sources.keys()];
+        expect(scanned.every(f => /\.(mjs|js|cjs)$/.test(f))).toBe(true);
+        // The browser-injected bundle is shipped as-is and never runs in Node.
+        expect(scanned.some(f => f.includes('/vendor/'))).toBe(false);
+        // Whatever exists today must still satisfy the manifest.
+        await expect(runBlockingIoGate(repoRoot)).resolves.toMatchObject({ ok: true });
     });
 });
