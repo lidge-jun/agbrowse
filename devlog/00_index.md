@@ -26,7 +26,7 @@ must be treated as historical  do not edit them after release.evidence
 | cli-jaw web-ai parity mirror | `_plan/260621_cli_jaw_webai_parity/` | 📄 문서 전용 미러. closeout 권한이 cli-jaw 쪽에 있어 여기서 닫지 않는다. |
 | Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 🔧 Cycle 1–12 실행 완료, Cycle 12 verdict = CONCERNS. 후속은 `260627_gptpro_remediation`. |
 | GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 5 PABCD 사이클 실행 완료. R2 verdict의 CONCERNS 5 / FAIL 2 미해소. |
-| Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 Phase 10/20/30/40 구현 완료. 04·05·06·09는 PLANNED 잔존. |
+| Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 기능 트랙(Phase 10/20/30/40) 구현 완료. 런칭 트랙 Phase 100/110/120이 잔존(`10_roadmap.md:97-140`). |
 | devlog 정리 | `_plan/260731_devlog_reorg/` | 🔧 진행 중 — 이 표를 만든 유닛. |
 | Strict migration | `_plan/strict-migration/` | ⏸ Deferred. 실행 소스는 여전히 `.mjs`, TS는 declaration만. |
 
@@ -62,7 +62,7 @@ must be treated as historical  do not edit them after release.evidence
 | Oracle ZIP browser bundle proposal | `_fin/260513_oracle_zip_bundle_proposal/` | External upstream proposal draft closed as reference material; no local agbrowse implementation authority. |
 | Oracle follow-up guardrails | `_fin/260513_oracle_followup_guardrails_diff_plan.md` | Implemented by `085cc83`. |
 | Adaptive Fetch v1 / Insane Search mirror | `_fin/260514_insane_search_adaptive_fetch/` | README status `implemented-v1`; shipped by `39708a3` and follow-ups. |
-| Adaptive Fetch v2 | `_fin/260515_adaptive_fetch_v2/` | Index status `implemented`; hardening follow-up remains in `_plan/`. |
+| Adaptive Fetch v2 | `_fin/260515_adaptive_fetch_v2/` | Index status `implemented`; hardening follow-up closed in `_fin/260515_adaptive_fetch_v2_hardening/`. |
 | Adaptive Fetch v2 hardening | `_fin/260515_adaptive_fetch_v2_hardening/` | Follow-up hardening research/patch matrix closed as planning evidence. |
 | Competitor skill trigger research | `_fin/260519_competitor_skill_trigger_research/` | Competitive, media, MCP, Runway, and skill-trigger research corpus closed; future work should fork focused implementation plans. |
 | Provider expansion | `_fin/260519_provider_expansion/` | Claude, Perplexity, and Gemini alias expansion plans closed as roadmap/reference material. |
