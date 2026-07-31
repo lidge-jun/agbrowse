@@ -83,9 +83,10 @@ PR은 `main` @ v0.1.19 위로 리베이스되어 커밋이 재작성됐다. 아�
 있다. 마지막 지점을 빼놓으면 루프를 고쳐도 명령은 recovery에서 다시 정체한다.
 
 PR #89의 `4ada9cb`는 `readAssistantMessages` 기반 구버전 리더를 전제로 하므로
-`dev`에 그대로 적용되지 않는다(`dev`는 스냅샷 분할 리더로 리팩터됨). 방어
-아이디어만 채택하고, 배치는 개별 호출 지점이 아니라 데드라인 인지 page 프록시라는
-단일 경계로 다시 설계한다 — 상세와 그 설계 전환의 이유는 `020`에 있다.
+`dev`에 그대로 적용되지 않는다(`dev`는 스냅샷 분할 리더로 리팩터됨). 더 중요한
+것은 `dev`의 정체 표면이 PR이 가정한 것보다 넓다는 점이다 — `Page.evaluate`뿐
+아니라 Locator API와 외부 모듈 위임(diagnostics·copy fallback)까지 걸쳐 있다.
+이식이 아니라 재설계가 필요하며, 그 범위를 확정하는 것이 WP3다.
 
 ### devlog 드리프트
 
@@ -113,8 +114,20 @@ PR #89의 `4ada9cb`는 `readAssistantMessages` 기반 구버전 리더를 전제
 `003_audit_synthesis.md`. 인벤토리가 근거와 함께 고정되면 실제 구현
 work-phase를 goalplan에 append한다(LOOP-UNIT-CHAIN-01).
 
-문서 역할: `000` 계획, `001`·`002`·`003` 리서치(diff 없음), `010`·`030`·`040`
-구현 diff, `020`은 WP3 축소에 따라 인벤토리 문서로 전환(LEXICO-SPLIT-01).
+문서 역할(LEXICO-SPLIT-01):
+
+| 문서 | 역할 |
+| --- | --- |
+| `000_plan.md` | 이 계획 |
+| `001_devlog_inventory.md` | devlog 실태 리서치 |
+| `002_pr89_delta_inventory.md` | PR #89 대조 리서치 |
+| `003_audit_synthesis.md` | 감사 3라운드 종합과 재구성 근거 |
+| `010_wp2_family_probe_and_mcp.md` | WP2 구현 diff |
+| `020_wp3_stall_boundary_inventory.md` | WP3 인벤토리 명세(코드 변경 없음) |
+| `030_wp4_devlog_reorg.md` | WP4 구현 diff |
+| `040_wp5_closeout.md` | WP5 게이트·마감 |
+
+WP3가 산출할 `021_stall_boundary_map.md`는 그 사이클에서 작성한다.
 
 의존 근거: WP2가 `web-ai/chatgpt.mjs`의 capability probe 라인을 건드리고 WP3가
 같은 파일의 폴링 루프를 건드리므로 순차 실행한다. WP4는 문서 전용이라 코드

@@ -7,19 +7,16 @@
 순서대로 실행하고 각 출력을 이 문서에 기록한다.
 
 ```
-# 새 테스트
-npx vitest run test/unit/web-ai-assistant-read-deadline.test.mjs \
-               test/unit/web-ai-family-probe-and-mcp.test.mjs
+# 새 테스트 (WP2만 — WP3는 문서 전용이라 테스트가 없다)
+npx vitest run test/unit/web-ai-family-probe-and-mcp.test.mjs
 
-# 변경 파일의 영향권 — WP2/WP3가 건드리는 모듈을 덮는 기존 스위트.
-# response-observer와 activity-poll은 recovery/activity 방어 때문에 필수다.
+# 변경 파일의 영향권 — WP2가 건드리는 모듈을 덮는 기존 스위트.
 npx vitest run test/unit/web-ai-tool-schema.test.mjs \
                test/unit/web-ai-chatgpt-model.test.mjs \
-               test/unit/web-ai-provider-session.test.mjs \
-               test/unit/web-ai-chatgpt-activity-poll.test.mjs \
-               test/unit/web-ai-timeout-default.test.mjs \
+               test/unit/web-ai-tool-validation.test.mjs \
                test/integration/web-ai-cli-contract.test.mjs \
-               test/integration/web-ai-fake-chatgpt.test.mjs
+               test/integration/web-ai-policy-mcp.test.mjs \
+               test/integration/web-ai-mcp-server.test.mjs
 
 npm run typecheck
 npm run fix:counts          # str_func.md 카운트 갱신
@@ -28,11 +25,13 @@ bash structure/check-doc-drift.sh
 npm run gate:all
 ```
 
-영향권 선정 근거: WP2는 `web-ai/chatgpt-model.mjs`, `web-ai/chatgpt.mjs`,
-`web-ai/mcp-server.mjs`를 바꾸고, WP3는 `web-ai/chatgpt.mjs`,
-`web-ai/chatgpt-response-dom.mjs`, `web-ai/chatgpt-response-observer.mjs`를 바꾼다.
-`rg -l "pollWebAi" test/`로 폴링 하네스를 가진 스위트를 찾아 위 목록에 넣었다.
-page double 계약이 바뀌므로 `web-ai-provider-session`이 특히 중요하다.
+영향권 선정 근거: 이 유닛에서 코드를 바꾸는 것은 WP2뿐이다
+(`web-ai/chatgpt-model.mjs` probe, `web-ai/chatgpt.mjs:120` capability 정의,
+`web-ai/mcp-server.mjs` submit_prompt 분기). `rg -l "web_ai_submit_prompt" test/`와
+`rg -l "CapabilityProbe\|chatGptModelCapabilityProbe" test/`로 영향권을 골랐다.
+
+WP3는 문서만 만들므로 게이트 대상이 아니다. #88 구현이 후속 work-phase로
+append되면 그 사이클이 자체 게이트를 갖는다.
 
 `typecheck:checkjs` / `typecheck:checkjs-dom`은 `dev`에 선행 오류가 있으므로
 파일별 오류 수를 변경 전후로 비교한다. 새 오류를 도입하지 않았음이 기준이지
@@ -63,7 +62,7 @@ MODIFY `devlog/00_index.md` — WP4가 만든 `_plan` 표에서 이 유닛 행�
 ```diff
  | Topic | Path | Closeout signal |
  | --- | --- | --- |
-+| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | `040_wp5_closeout.md`에 게이트 출력과 인계 사항 기록. dev에 #87 probe/MCP 갭과 #88 read deadline 방어 반영. |
++| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | `040_wp5_closeout.md`에 게이트 출력과 인계 기록. #87 probe/MCP 갭 수정, #88은 경계 인벤토리까지. |
  | QA round 6 | `_fin/260726_qa_round6/` | ... |
 ```
 
@@ -74,7 +73,7 @@ work-phase마다 하나씩, 로컬만.
 ```
 WP1  docs(devlog): PR #89 / 이슈 #87·#88 처리 로드맵 유닛
 WP2  fix(web-ai): make the model probe and MCP honor the requested chat family
-WP3  fix(web-ai): bound assistant DOM reads by the polling deadline
+WP3  docs(devlog): map every stall boundary in the ChatGPT poll path
 WP4  docs(devlog): sync the index with the real _plan/_fin layout
 WP5  docs(devlog): close out the PR #89 / issue triage unit
 ```
@@ -89,11 +88,13 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 이 유닛이 끝나도 원격에는 다음이 남는다. 모두 사용자 결정이 필요하다.
 
 1. **PR #89 처분.** base가 `main`이라 머지해도 `dev`에 반영되지 않는다. dev에는
-   #87 배선이 이미 있고, #88 방어는 이 유닛이 dev 구조에 맞춰 다시 구현했다.
+   #87 배선이 이미 있고, #88 방어는 이 유닛이 경계 인벤토리까지만 진행했다.
    선택지: (a) 기여를 인정하며 "dev에서 다르게 반영됨"으로 닫기, (b) `main`에
    머지한 뒤 dev와의 정합을 별도로 처리, (c) 기여자에게 dev 대상 재작성을 요청.
-2. **이슈 #87 / #88 클로즈.** dev에 수정이 들어갔지만 릴리스 전이다. 클로즈
-   시점을 릴리스에 맞출지 지금 닫을지는 사용자 판단이다.
+2. **이슈 #87 클로즈.** dev에 수정이 들어갔지만 릴리스 전이다. 클로즈 시점을
+   릴리스에 맞출지 지금 닫을지는 사용자 판단이다.
+   **이슈 #88은 열어 둔다** — 이 유닛은 경계를 확정했을 뿐 방어를 구현하지
+   않았다. 구현 work-phase가 남아 있다.
 3. **dev↔main 정합.** `main`에 있고 `dev`에 없는 6커밋(v0.1.18/v0.1.19 릴리스,
    #82 fix, postinstall star prompt)은 이 유닛의 범위 밖이다.
 
