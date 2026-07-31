@@ -5,7 +5,7 @@ import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } fro
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
 import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitEnv, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 import { probeTabAlive } from '../../skills/browser/tab-manager.mjs';
-import { verifySessionTab } from '../../web-ai/tab-recovery.mjs';
+import { recoverSessionTab, verifySessionTab } from '../../web-ai/tab-recovery.mjs';
 import { TabMonitor } from '../../skills/browser/tab-monitor.mjs';
 
 /**
@@ -811,5 +811,99 @@ describe('unreadable liveness does not destroy lease or health state (B36)', () 
 
         expect(events).toEqual(['closed']);
         monitor.stopMonitoring('watched');
+    });
+});
+
+/**
+ * The remaining two destructive consumers: pool checkout and session recovery.
+ *
+ * Both were left unguarded by tests, so reverting either guard kept the suite
+ * green. Checkout discards lease records it believes are dead; recovery opens a
+ * replacement tab and rebinds the session to it.
+ */
+describe('unreadable liveness does not discard pooled leases or rebind sessions (B36)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('U8: checkout neither reuses nor forgets a lease it could not observe', async () => {
+        const temp = createTempBrowserEnv('agbrowse-checkout-unknown-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        try {
+            const port = 9222;
+            await recordActiveLease({
+                port, vendor: 'chatgpt', targetId: 'pooled-unknown',
+                sessionId: 'session-unknown', url: 'https://chatgpt.com/c/unknown',
+            });
+            await releaseCompletedLease(port, {
+                port, vendor: 'chatgpt', targetId: 'pooled-unknown',
+                sessionId: 'session-unknown', url: 'https://chatgpt.com/c/unknown',
+            });
+
+            const checkedOut = await checkoutPooledLease(port, {
+                port, vendor: 'chatgpt', url: 'https://chatgpt.com/c/unknown',
+            });
+
+            // Conservative on reuse, conservative on bookkeeping: skip the
+            // candidate, but keep the record so a later probe can settle it.
+            expect(checkedOut).toBeNull();
+            expect((await listLeases()).map(lease => lease.targetId)).toEqual(['pooled-unknown']);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U8b: checkout still forgets a lease whose tab is confirmed gone', async () => {
+        const temp = createTempBrowserEnv('agbrowse-checkout-gone-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        const restoreFetch = serveEmptyTabList();
+        try {
+            const port = 9222;
+            await recordActiveLease({
+                port, vendor: 'chatgpt', targetId: 'pooled-gone',
+                sessionId: 'session-gone', url: 'https://chatgpt.com/c/gone',
+            });
+            await releaseCompletedLease(port, {
+                port, vendor: 'chatgpt', targetId: 'pooled-gone',
+                sessionId: 'session-gone', url: 'https://chatgpt.com/c/gone',
+            });
+
+            const checkedOut = await checkoutPooledLease(port, {
+                port, vendor: 'chatgpt', url: 'https://chatgpt.com/c/gone',
+            });
+
+            expect(checkedOut).toBeNull();
+            expect(await listLeases()).toEqual([]);
+        } finally {
+            restoreFetch();
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U12: recovery does not open a replacement tab it cannot justify', async () => {
+        // Creating a tab here rebinds the session target, abandoning a live
+        // conversation because one fetch failed.
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        const result = await recoverSessionTab(
+            { getPort: () => 9222 },
+            {
+                sessionId: 'session-x',
+                targetId: 'target-x',
+                vendor: 'chatgpt',
+                conversationUrl: 'https://chatgpt.com/c/live',
+                status: 'polling',
+            },
+        );
+        expect(result).toMatchObject({ recovered: false, strategy: 'unverified', liveness: 'unknown' });
     });
 });

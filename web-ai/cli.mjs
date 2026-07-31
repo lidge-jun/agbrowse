@@ -1360,8 +1360,12 @@ function sessionResolutionError(command, deps, input, resolved) {
     // it a target mismatch tells the user to navigate — which replaces a tab
     // that may be perfectly fine.
     if (resolved.strategy === 'unverified') {
+        // Reuses the registered `cdp.unreachable` code rather than minting an
+        // unregistered one: the browser did not answer. What must differ is the
+        // ADVICE — retry, not navigate — plus `liveness` evidence so callers can
+        // tell this apart from a genuinely wrong tab.
         return new WebAiError({
-            errorCode: 'cdp.liveness-unverified',
+            errorCode: 'cdp.unreachable',
             stage: 'target-resolution',
             vendor,
             retryHint: 'retry',

@@ -4,6 +4,7 @@ import { updateSession, getSession, incrementRecoveryCount, listSessions } from 
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
 import { isDurableConversationUrl } from './conversation-url.mjs';
+import { WebAiError } from './errors.mjs';
 
 /** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
 
@@ -689,15 +690,44 @@ export async function reattachSessionPage(deps, sessionId) {
  */
 export async function withSessionPage(deps, sessionId, fn) {
     const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true });
+    if (/** @type {any} */ (first).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, first);
     if (first.mismatch) throw new Error(`Session ${sessionId} resolver returned mismatch with allowNavigate=true`);
     try {
         return await fn(/** @type {ResolvedPage<T>} */ ({ page: first.page, targetId: first.targetId, session: first.session }));
     } catch (err) {
         if (!isPageDeathError(err)) throw err;
         const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true });
+        if (/** @type {any} */ (recovered).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, recovered);
         if (recovered.mismatch) throw new Error(`Session ${sessionId} recovery resolver returned mismatch with allowNavigate=true`);
         return fn(/** @type {ResolvedPage<T>} */ ({ page: recovered.page, targetId: recovered.targetId, session: recovered.session }));
     }
+}
+
+/**
+ * A tab we could not observe is not a wrong tab. Falling through to the generic
+ * "resolver returned mismatch" error loses the one fact the caller needs: retry
+ * once the browser answers, rather than replace the tab.
+ *
+ * @param {string} sessionId
+ * @param {RecoverDeps} deps
+ * @param {any} resolved
+ * @returns {WebAiError}
+ */
+function livenessUnverifiedError(sessionId, deps, resolved) {
+    return new WebAiError({
+        errorCode: 'cdp.unreachable',
+        stage: 'target-resolution',
+        vendor: resolved?.session?.vendor || 'chatgpt',
+        retryHint: 'retry',
+        message: resolved?.warnings?.[0] || `session ${sessionId} tab liveness could not be verified`,
+        mutationAllowed: false,
+        evidence: {
+            sessionId,
+            targetId: resolved?.targetId || null,
+            port: Number(deps.getPort?.() || process.env.CDP_PORT || 9222),
+            liveness: 'unknown',
+        },
+    });
 }
 
 /**
