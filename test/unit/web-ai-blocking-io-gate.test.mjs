@@ -186,14 +186,14 @@ describe('blocking IO ratchet gate (#88 G3)', () => {
         expect(result.ok).toBe(true);
     });
 
-    it('W11: the walker covers .js and refuses symlinks', async () => {
-        // `"type": "module"` makes a `.js` file here runtime code, and a
-        // directory symlink would hide an entire subtree from the scan.
+    it('W11: the real tree is scanned with only the bundle exempt', async () => {
         const sources = await readRuntimeSources(repoRoot);
         const scanned = [...sources.keys()];
         expect(scanned.every(f => /\.(mjs|js|cjs)$/.test(f))).toBe(true);
-        // The browser-injected bundle is shipped as-is and never runs in Node.
-        expect(scanned.some(f => f.includes('/vendor/'))).toBe(false);
+        // Only the browser-injected bundle is exempt, not the directory: asking
+        // for no `/vendor/` at all would contradict W11b, which requires a
+        // `vendor/runtime.mjs` to be scanned.
+        expect(scanned).not.toContain('skills/browser/adaptive-fetch/vendor/defuddle.iife.min.js');
         // Whatever exists today must still satisfy the manifest.
         await expect(runBlockingIoGate(repoRoot)).resolves.toMatchObject({ ok: true });
     });

@@ -517,7 +517,7 @@ const GATES = {
         },
     },
     'no-new-blocking-io': {
-        description: 'G3 (#88): no new synchronous IO or CDP commands enter the web-ai runtime',
+        description: 'G3 partial (#88): enumerated Sync/Atomics/CDP ingress forms are ratcheted against a committed baseline',
         async check() {
             // Ratchet, not a cleanup: the existing calls are grandfathered by the
             // committed manifest, and only ADDITIONS fail. Enumerating stall
