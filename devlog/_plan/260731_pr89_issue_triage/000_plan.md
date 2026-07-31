@@ -149,7 +149,7 @@ closeout에 그 구분을 명시한다.
 | `003_audit_synthesis.md` | 감사 3라운드 종합과 재구성 근거 |
 | `010_wp2_family_probe_and_mcp.md` | WP2 구현 diff |
 | `020_wp3_stall_boundary_inventory.md` | WP3 인벤토리 명세(코드 변경 없음) |
-| `030_wp4_devlog_reorg.md` | WP4 구현 diff |
+| `030_wp4_devlog_reorg.md` | devlog 정리 유닛(wp8) 인계 초안 |
 | `040_wp5_closeout.md` | WP5 게이트·마감 |
 
 WP3가 산출할 `021_stall_boundary_map.md`는 그 사이클에서 작성한다.

@@ -1,6 +1,6 @@
 # 010 — WP2: 이슈 #87 잔여 갭 구현
 
-선행: WP1. 후행: WP3(같은 파일군).
+선행: WP1. WP3와는 서로 의존하지 않는다.
 판정 근거는 `002_pr89_delta_inventory.md`. 이 문서는 구현 diff만 담는다.
 
 대상은 두 갭이다. 갭 A는 capability probe가 family를 읽지 않는 것, 갭 B는 MCP가
@@ -177,8 +177,18 @@ effort 검증이 건너뛰어진다.
 남는다. 기존 호출자를 깨뜨리지 않으면서 "확정 못 했다"는 신호는 보존된다 —
 이 정책을 테스트 3b로 고정한다.
 
-3b. **`warn`이 status를 막지 않는다** — probe가 `warn`을 돌려줄 때
-   `worstCapabilityState`가 `'warn'`을 내고 status의 `ok`가 `true`로 유지된다.
+3b. **`warn`이 status를 막지 않는다** — `statusWebAi`까지 태운다. 기존 fake는
+   `url()`을 노출하지 않는데(`test/unit/web-ai-chatgpt-model.test.mjs:925-953`)
+   `statusWebAi`는 마지막에 반드시 호출하므로(`web-ai/chatgpt.mjs:144-158`)
+   보강이 필요하다. 조건을 정확히 고정한다.
+
+   - fake page에 `url: () => 'https://chatgpt.com/'`를 더한다(래퍼로 감싸도 된다)
+   - 입력에 `probe: 'chatgpt-model-alias-selectable'`을 준다 — 생략하면 모든
+     capability가 실행되어(`web-ai/capability.mjs:41-48`) 이 fake가 지원하지 않는
+     probe가 `fail`을 만들고 테스트 의도가 오염된다
+   - `family: 'gpt-5.6-sol'`, `reasoningEffort: 'high'`, `model`은 생략
+   - 기대: `capabilityState === 'warn'`, `ok === true`, capability 행이 하나
+
    `warn`을 `fail`처럼 다루는 회귀를 막는 가드다.
 
 기존 probe와 같이 `closeModelMenu`로 원복한다.
@@ -256,7 +266,9 @@ Chat family 축이 없는 provider로 보내는 것.
 
 1. **probe가 미지원 family에 fail** — `chatGptModelCapabilityProbe(page, 'thinking',
    { family: 'gpt-5.6-luna' })`가 `state: 'fail'`이고 evidence에 family가 담긴다.
-   페이지 메뉴는 열리지 않는다(스텁의 호출 카운트로 확인).
+   페이지 메뉴는 열리지 않는다. 기존 fake에는 호출 카운터가 없으므로, 메뉴 조작
+   메서드에 `vi.fn()` spy를 걸거나 호출 시 throw하는 page를 써서 mutation 0을
+   증명한다(테스트 3c도 같은 방식).
 2. **probe가 family 미가용 시 fail** — model 옵션은 찾지만 family 서브메뉴가 없는
    page double에서 `state: 'fail'`.
 3. **probe가 family 가용 시 ok** — model과 family를 둘 다 찾으면 `state: 'ok'`이고

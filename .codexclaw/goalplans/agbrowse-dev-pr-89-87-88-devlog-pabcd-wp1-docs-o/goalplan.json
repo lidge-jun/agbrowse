@@ -1,0 +1,233 @@
+{
+  "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
+  "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
+  "createdAt": "2026-07-31T07:28:37.608Z",
+  "updatedAt": "2026-07-31T07:28:37.609Z",
+  "activeWorkPhaseId": "wp1",
+  "workPhases": [
+    {
+      "id": "wp1",
+      "title": "WP1 docs-only 로드맵 사이클: PR/이슈/devlog 실태 조사 + decade 문서 작성",
+      "status": "in_progress",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "PR #89 두 커밋과 dev 소스 실차이 조사",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "이슈 #87/#88의 dev 기준 상태 조사",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t3",
+          "title": "devlog _plan/_fin/00_index 드리프트 인벤토리",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t4",
+          "title": "000-009 리서치 + 010/020/030/040 decade 문서 diff-level 작성",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "WP2 #87 잔여 갭 2건 구현: probe family 계약 + MCP non-ChatGPT fail-closed",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "chatGptModelCapabilityProbe에 family 계약 추가(미지원 model은 family로 가려지지 않음)",
+          "status": "pending"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "MCP web_ai_submit_prompt에 비-ChatGPT + family fail-closed",
+          "status": "pending"
+        },
+        {
+          "id": "wp2-t3",
+          "title": "기존 스위트에 테스트 추가(chatgpt-model / capability / mcp-server)",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c1",
+        "c3"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "WP3 #88 정체 경계 인벤토리 + 후속 유닛 두 개의 로드맵 (문서 전용)",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "call graph 폐쇄로 pollWebAi 정체 경계 전수 (Page/Locator/CDP/순수계산)",
+          "status": "pending"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "각 경계의 방어 가능성 판정 + Playwright/owner 근거",
+          "status": "pending"
+        },
+        {
+          "id": "wp3-t3",
+          "title": "모든 경계를 후속 두 유닛에 배정 + 각 유닛 로드맵 작성",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c2"
+      ]
+    },
+    {
+      "id": "wp5",
+      "title": "WP5 게이트 클로즈아웃: typecheck/gate:all/doc-drift/verify-counts + 커밋",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp5-t1",
+          "title": "structure 카운트/드리프트 동기화",
+          "status": "pending"
+        },
+        {
+          "id": "wp5-t2",
+          "title": "게이트 신선 출력 캡처",
+          "status": "pending"
+        },
+        {
+          "id": "wp5-t3",
+          "title": "work-phase별 로컬 커밋 확인",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "c5",
+        "c6"
+      ]
+    },
+    {
+      "id": "wp6",
+      "title": "후속 유닛 1 로드맵: #88 DOM deadline 계약 (docs-only 사이클)",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp6-t1",
+          "title": "021이 배정한 경계로 #88 DOM deadline 유닛의 decade 문서를 diff-level 작성",
+          "status": "pending"
+        },
+        {
+          "id": "wp6-t2",
+          "title": "D에서 구현 work-phase를 goalplan에 append하고 c7를 거기에 연결",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp7",
+      "title": "후속 유닛 2 로드맵: artifact/finalizer hardening (docs-only 사이클)",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp7-t1",
+          "title": "021이 배정한 경계로 artifact/finalizer 유닛의 decade 문서를 diff-level 작성",
+          "status": "pending"
+        },
+        {
+          "id": "wp7-t2",
+          "title": "D에서 구현 work-phase를 goalplan에 append하고 c8를 거기에 연결",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp8",
+      "title": "후속 유닛 3 로드맵: devlog 정리 (docs-only 사이클)",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "wp8-t1",
+          "title": "030을 그 유닛으로 옮기고 devlog 정리 로드맵을 확정",
+          "status": "pending"
+        },
+        {
+          "id": "wp8-t2",
+          "title": "D에서 구현 work-phase를 goalplan에 append하고 c4를 거기에 연결",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": []
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1",
+      "scenario": "PR #89의 두 커밋 각각이 dev에서 이미 충족인지 미충족인지 파일:라인 근거로 판정된 devlog 문서가 존재한다",
+      "expectedEvidence": "devlog 유닛 내 대조 문서 경로 + 인용된 file:line + git show/rg 출력",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c2",
+      "scenario": "#88 정체 경계가 전수 열거되고 방어 가능성이 판정되며, 모든 도달 가능 경계가 후속 두 유닛에 배정된다",
+      "expectedEvidence": "021 인벤토리 문서: 폐쇄 증명 + 경계별 판정 + 유닛 배정표",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c3",
+      "scenario": "probe가 family를 evidence에 담고 미지원 family/미지원 model을 메뉴 열기 전 fail하며, MCP가 비-ChatGPT provider + family를 브라우저 접근 없이 capability.unsupported로 거부한다",
+      "expectedEvidence": "chatgpt-model/capability/mcp-server 스위트 실행 출력 + state/evidence/code 어서션",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c4",
+      "scenario": "devlog 정리 유닛: _plan 표가 실제 폴더와 양방향 1:1이고, 표에 기재된 모든 _fin 경로가 존재한다",
+      "expectedEvidence": "ls devlog/_plan, ls devlog/_fin 출력과 00_index.md 표 대조 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c5",
+      "scenario": "typecheck, 대상 vitest, gate:all(또는 영향 게이트), check-doc-drift.sh, verify-counts.sh가 신선 출력으로 통과",
+      "expectedEvidence": "각 명령의 실제 stdout tail과 exit code",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c6",
+      "scenario": "각 work-phase가 로컬 커밋으로 남고 무관한 더티 파일은 건드리지 않는다",
+      "expectedEvidence": "git log --oneline과 git status 출력",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c7",
+      "scenario": "#88 DOM deadline 유닛: 021이 그 유닛에 배정한 모든 경계(read/activity/finished/ordering/recovery/diagnostics/copy)가 데드라인을 인지하고, 각 정체 경로의 발화가 관측된다",
+      "expectedEvidence": "경계 ID별 테스트 출력 + timeout 사유 문자열. 배정 경계 전부가 대상이며 일부만으로는 met 아님 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "c8",
+      "scenario": "artifact/finalizer 유닛: 021이 그 유닛에 배정한 모든 경계(이미지/파일 다운로드, 탭 lease, CDP, sync-IO/lock)가 데드라인을 인지하거나 bounded임이 증명된다",
+      "expectedEvidence": "경계 ID별 테스트 출력 또는 bounded 근거. 배정 경계 전부가 대상 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
+      "capturedEvidence": "",
+      "status": "open"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

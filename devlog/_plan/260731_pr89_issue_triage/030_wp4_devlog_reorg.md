@@ -1,6 +1,7 @@
-# 030 — WP4: devlog `_plan`/`_fin` 정리와 `00_index.md` 동기화
+# 030 — devlog 정리 유닛 인계 초안 (wp8)
 
-선행: WP1(인벤토리). 코드 work-phase와 독립.
+이 유닛에서는 실행하지 않는다. devlog 정리 유닛(goalplan `wp8`)이 시작될 때
+그 유닛으로 옮겨 계획 문서로 쓴다. 입력은 `001_devlog_inventory.md`.
 
 ## 이관 결정
 

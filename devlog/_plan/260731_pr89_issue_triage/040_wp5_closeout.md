@@ -86,8 +86,14 @@ WP3  docs(devlog): map every stall boundary and route it to a successor unit
 WP5  docs(devlog): close out the PR #89 / issue triage unit
 ```
 
-`git add`는 이 유닛이 만든 경로만 지정한다. `.codexclaw/**`의 기존 더티 파일과
-미추적 goalplan 폴더는 사용자 것이므로 스테이징하지 않는다.
+`git add`는 이 유닛이 만든 경로만 지정한다. `.codexclaw/**`의 기존 더티 파일은
+사용자 것이므로 스테이징하지 않는다.
+
+**예외: 이 유닛이 소유한 goalplan은 커밋한다.**
+`.codexclaw/goalplans/agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o/`는 이
+작업이 만든 산출물이고, 후속 유닛 세 개의 총량이 거기 기록된다. 커밋하지 않으면
+"분할이 목표 축소가 아니다"라는 주장의 증거가 디스크에만 남는다. 다른 세션의
+goalplan 폴더와 `.codexclaw`의 나머지는 계속 제외한다.
 
 push는 하지 않는다(DEV-GIT-PUSH-01).
 
