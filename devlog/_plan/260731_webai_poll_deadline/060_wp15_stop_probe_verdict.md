@@ -218,6 +218,52 @@ GREEN으로 남는 일이 반복됐다.**
 `readWorkTaskState`의 `status` 소비자는 `:926`(work poll 루프) 하나이고
 `'unknown'`을 이미 typed error로 처리한다 — 확인했다.
 
+## 실행 결과 (2026-08-01)
+
+커밋 셋: `d2a99c5`(producer + 소비자 7곳), `14a576c`(R1 blocker 반영),
+`b3f7612`(T12d 세션 격리).
+
+### 감사가 잡은 것
+
+처방 3라운드 + 구현 1라운드. 내 오판이 둘 나왔다.
+
+| # | 내용 |
+| --- | --- |
+| 1 | **work-picker가 이미 fail-closed라는 초판 주장** — `:1060`의 unknown 분기만 보고 멈췄는데 `:1043`의 Copy 게이트가 먼저 빠져나간다. Copy는 이전 turn에도 보이므로 생성 중 stop을 못 읽으면 `complete`가 됐다 |
+| 2 | **`scopeToMainRegion`의 page fallback** — throw를 삼키면서 `page`를 반환했더니 main-scoping의 존재 이유(사이드바·dictation 오탐 차단)를 우회했다. `null`로 바꿔 probe가 `unknown`으로 받게 했다 |
+
+2번은 **내가 R1 blocker를 고치면서 만든 새 구멍**이다. 감사가 다음 라운드에서
+잡았다.
+
+### 검증 환경 — 작업트리 오염
+
+전체 스위트 검증 중 `web-ai/chatgpt.mjs`에 **내가 작성하지 않은 미커밋 변경
+약 194줄**(hard poll deadline: `RECOVERY_RESERVE_MS`, `POLL_EXPIRED`,
+`buildHardTimeoutResult`)이 있는 것을 발견했다. `git stash pop` 이후 나타났고
+`HEAD`에는 없다.
+
+**손대지 않았다.** 대신 `git worktree add --detach HEAD`로 격리 검증했다.
+
+```
+detached worktree @ 14a576c + T12d 격리 수정
+  npx vitest run test/unit test/integration   2062 passed, 0 FAIL
+  npm run test:unit                            1821 passed, exit 0
+  npm run gate:all                             17/17, exit 0
+  check-doc-drift                              164 passed
+```
+
+T12d 실패는 실제 내 결함이었다 — `findActiveSession`이 URL/target 불일치 시
+`active.at(-1)`로 폴백하므로 앞선 테스트가 남긴 세션을 입양한다. fake page마다
+고유 conversation URL을 주는 것으로 고쳤다.
+
+### mutation proof
+
+| mutation | RED |
+| --- | --- |
+| producer `unknown` → `absent` | Y3·Y4·Y5·Y14~Y17 (8건) |
+| work-picker unknown 게이트 삭제 | Y12 |
+| DR resume `!== 'absent'` → `=== 'visible'` | Y10c |
+
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
 닫는 것: **B04**. `021` 3절 fail-open 목록에서 마지막 남은 것이다.

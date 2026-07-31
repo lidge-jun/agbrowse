@@ -27,7 +27,7 @@ must be treated as historical  do not edit them after release.evidence
 | Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 🔧 Cycle 1–12 실행 완료, Cycle 12 verdict = CONCERNS. 후속은 `260627_gptpro_remediation`. |
 | GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 5 PABCD 사이클 실행 완료. R2 verdict의 CONCERNS 5 / FAIL 2 미해소. |
 | Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 기능 트랙(Phase 10/20/30/40) 구현 완료. 런칭 트랙 Phase 100/110/120이 잔존(`10_roadmap.md:97-140`). |
-| web-ai 폴링 데드라인 계약 (#88) | `_plan/260731_webai_poll_deadline/` | 🔧 fail-open 교정 B03/B06/B01/B02/B07 + command lock async + 유입 방지 게이트(`6742949`~`d86f394`). B04는 OPEN(공유 producer). 예산 계약 미착수 — G1 unmet(`withStoreLock` 87곳), G2/G4 미측정, G3 partial. |
+| web-ai 폴링 데드라인 계약 (#88) | `_plan/260731_webai_poll_deadline/` | 🔧 `021` fail-open 6건 전부 교정(B03/B06/B01/B02/B07/B04) + command lock async + 유입 방지 게이트(`6742949`~`b3f7612`). 예산 계약 미착수 — G1 unmet(`withStoreLock` 87곳), G2/G4 미측정, G3 partial. |
 | web-ai 아티팩트·finalizer 하드닝 (#88 자매) | `_plan/260731_webai_artifact_finalizer/` | 🔧 WP11 fail-open 교정 완료 — B24/B36이 fail-closed(`2cfb668`~`25f6985`). B25는 fail-visible까지, B23은 관측만. 예산 계약 WP1~WP7은 미착수. |
 | Strict migration | `_plan/strict-migration/` | ⏸ Deferred. 실행 소스는 여전히 `.mjs`, TS는 declaration만. |
 

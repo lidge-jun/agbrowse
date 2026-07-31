@@ -229,6 +229,12 @@
       "status": "done",
       "title": "WP14 스냅샷 읽기 실패와 빈 페이지 구분 (B01/B02/B07) — B04는 OPEN",
       "tasks": []
+    },
+    {
+      "id": "wp15",
+      "status": "done",
+      "title": "WP15 stop probe 관측 실패 분리 (B04). 021 fail-open 목록 완료",
+      "tasks": []
     }
   ],
   "criteria": [
