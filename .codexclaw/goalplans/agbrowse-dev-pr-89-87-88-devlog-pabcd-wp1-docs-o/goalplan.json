@@ -2,7 +2,7 @@
   "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
   "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
   "createdAt": "2026-07-31T07:28:37.608Z",
-  "updatedAt": "2026-07-31T12:39:16.378Z",
+  "updatedAt": "2026-07-31T13:07:05.438Z",
   "activeWorkPhaseId": null,
   "workPhases": [
     {
@@ -161,6 +161,34 @@
         {
           "id": "wp8-t2",
           "title": "D에서 구현 work-phase를 goalplan에 append하고 c4를 거기에 연결",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp9",
+      "title": "WP0 공동: 예산 계약 모델 — 후보 A 조건부 선택 (reversal gate G1~G4 미해결)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp9-t1",
+          "title": "P1 측정: 영원히 pending인 page.evaluate의 cancel/drain 가능성",
+          "status": "done"
+        },
+        {
+          "id": "wp9-t2",
+          "title": "P7 측정: worker/subprocess 기동 비용 (임계 200ms)",
+          "status": "done"
+        },
+        {
+          "id": "wp9-t3",
+          "title": "P2 측정: Atomics.wait 구간의 타이머 동작",
+          "status": "done"
+        },
+        {
+          "id": "wp9-t4",
+          "title": "011_model_decision.md 작성 — 결정과 근거, 탈락 사유",
           "status": "done"
         }
       ],
