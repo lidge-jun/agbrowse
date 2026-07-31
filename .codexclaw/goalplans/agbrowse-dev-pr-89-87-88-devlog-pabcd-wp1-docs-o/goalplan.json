@@ -211,6 +211,12 @@
       "status": "done",
       "title": "WP12 withSessionCommandLock의 blocking wait 제거 (G1 부분 — P2 command-lock subprobe)",
       "tasks": []
+    },
+    {
+      "id": "wp13",
+      "status": "done",
+      "title": "WP13 유입 방지 게이트 (G3 partial — enumerated ingress forms closed)",
+      "tasks": []
     }
   ],
   "criteria": [

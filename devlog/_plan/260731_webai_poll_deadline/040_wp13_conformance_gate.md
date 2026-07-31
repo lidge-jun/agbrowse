@@ -197,7 +197,7 @@ dirty 작업을 훼손한다.**
 순수 evaluator를 분리한다.
 
 ```js
-evaluateBlockingIoGate({ sources, fileLimits, totalLimits })
+evaluateBlockingIoGate({ sources, baseline })
   → { ok, detail }
 ```
 
@@ -247,6 +247,69 @@ W8e가 RED가 되어야 한다.
 | `test/unit/web-ai-blocking-io-gate.test.mjs` | W1~W9 |
 
 게이트 수가 16 → 17로 바뀌므로 그 숫자를 인용하는 문서도 함께 본다.
+
+## 실행 결과 (2026-07-31)
+
+커밋 넷: `3a48e34`(게이트+manifest+테스트), `7062f48`(참조 카운팅+walker),
+`04d98b1`(Atomics/CDP 참조), `12b0e50`(문구 정정).
+
+### baseline이 세 번 바뀌었다
+
+```
+173  손으로 만든 primitive 목록, 줄 수 기준        ← 틀림
+183  Sync 접미사 규칙, glob이 서브디렉터리 누락    ← 틀림
+184  전체 트리, 호출 카운팅                        ← 맞음
+286  참조 카운팅 (import 포함), 최종
+```
+
+**숫자를 손으로 옮기는 것을 그만두는 게 답이었다.** `--write-baseline`이
+생성하고 커밋한다.
+
+### 감사가 우회를 세 라운드에 걸쳐 찾았다
+
+| 라운드 | 우회 |
+| --- | --- |
+| 1 | alias import, computed member, re-export, wrapper 재사용 |
+| 2 | `const read = readFileSync`, `cdp.send.bind(cdp)`, `cdp['send'](…)` |
+| 3 | `readFileSync?.(p)`, `(readFileSync)(p)`, `(fs)['readFileSync'](p)`, `const read = fs.readFileSync` |
+| 4 | `Atomics['wait'](…)`, `Atomics.wait?.(…)`, `.send.call(…)`, `Reflect.apply(cdp.send, …)` |
+
+3라운드에서 **호출 문법을 세는 것을 포기하고 참조를 세는 것으로 바꿨다.**
+`readFileSync?.(p)`는 난독화가 아니라 평범한 JavaScript다 — 문법 변형을
+정규식으로 쫓아가는 것은 이길 수 없는 싸움이었다.
+
+4라운드는 같은 교훈의 반복이었다. `*Sync`만 참조로 바꾸고 `Atomics`와
+`.send`는 호출 형태로 남겨뒀더니 동일한 우회가 그대로 통했다.
+
+### 닫지 못한 것을 게이트가 스스로 말한다
+
+```
+readFile\u0053ync(p)              실제로 실행된다. 텍스트로는 안 보인다
+disk['readFile' + 'Sync'](p)      상수 접기 + 데이터흐름이 필요하다
+```
+
+파서로도 두 번째는 부족하다. 게이트 설명을 `G3 partial`로 낮추고 모듈 헤더에
+두 형태를 적었다. **PASS 한 줄이 실제보다 강한 보장으로 읽히면 안 된다.**
+
+### 오탐은 의도한 것이다
+
+참조를 세므로 주석의 `readFileSync`나 무관한 `normalizeSync` 함수 정의도
+RED가 된다. 호출만 세던 판본이 실제 유입을 놓쳤으므로, 이름을 바꾸거나
+manifest를 리뷰된 커밋으로 갱신하는 비용이 더 싸다.
+
+### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 180 passed (180); Tests 2027 passed (2027)
+npm run gate:all              All 17 gate(s) passed (exit 0)
+  gate:no-new-blocking-io — blocking IO 286/286, CDP 54/54
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
+mutation: evaluator를 `return {ok:true}`로 무력화하면 실패를 주장하는 테스트가
+전부 RED.
 
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
