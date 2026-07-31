@@ -61,11 +61,43 @@ P1d: iterations 20
      handlesBefore 7 → handlesAfter 7   handle 증가 0
 ```
 
-**PASS.** 사전 임계값을 충족하고, 감사가 요구한 "세션 identity·conversation URL
-보존" 조건까지 만족한다.
+**primitive feasibility PASS / full P1은 G4 대기.**
 
-미계측 항목: 미해제 CDP request 수와 락 잔존은 직접 세지 않았다. handle 증가 0과
-동일 CDP 세션 재사용으로 간접 확인했을 뿐이다. 구현 WP가 계측을 추가한다.
+`Page.reload`가 target을 유지한 채 pending evaluate를 정리하는 유효한
+primitive라는 것까지가 증명됐다. 그 이상은 아니다.
+
+감사가 두 함정을 찾았다.
+
+**함정 1 — reload navigation race.** `cdp.send('Page.reload')` 후
+`page.waitForLoadState('load')`는 기존 문서가 이미 load 상태라 즉시 반환할 수
+있다. 감사의 보강 probe 첫 실행이 그래서 실패했다:
+
+```
+page.evaluate: Execution context was destroyed, most likely because of a navigation
+```
+
+P1d가 통과한 건 `data:` 문서가 30ms 안에 reload를 끝내 race가 가려졌기
+때문이다. **load waiter를 reload 전에 arm해야 한다.**
+
+**함정 2 — URL 보존 ≠ 대화 보존.** target과 URL은 유지되지만 인메모리 상태와
+서버에 저장되지 않은 DOM은 사라진다. 감사 측정:
+
+```
+applicationStateAfterReload:
+  ephemeral   null     ← 사라짐
+  persistent  "yes"
+  tabSession  "yes"
+  unsavedDom  null     ← 사라짐
+```
+
+이 저장소의 실제 session identity는 `sessionId + targetId + durable
+conversationUrl`이다. 그런데 send는 prompt 제출 **전에** 세션을 만들고
+(`web-ai/chatgpt.mjs:343`), 제출 확인 뒤에야 최종 URL을 기록한다(`:458`).
+루트 URL은 durable로 저장되지 않으므로(`web-ai/session.mjs:185`)
+`conversationUrl: null`인 세션이 존재할 수 있다. **그 상태에서 reload하면 아직
+서버에 확정되지 않은 대화를 잃는다.**
+
+미계측 항목: 미해제 CDP request 수와 락 잔존은 직접 세지 않았다.
 
 ### P2 — `Atomics.wait` 구간의 타이머 (후보 A·B 필수)
 
@@ -117,7 +149,8 @@ P7이 통과했고 **P3도 실제로 된다**(감사 확인). 격리는 기술�
 identity를 보존한 채 pending evaluate를 정리한다. 그 전제가 사라졌다.
 
 부차적으로, A는 P3~P6(CDP 재연결·구조화 복제·kill 후 정리·부분 쓰기 복구)이
-해당 없어 검증 표면이 작다. 실현 가능한 두 안 중 작은 쪽을 고르는 판단이다.
+해당 없어 검증 표면이 작다. 격리도 유력한 fallback이지만(P3·P7 통과), 검증
+표면이 작은 쪽을 먼저 시도하는 판단이다.
 
 ### 철회한 근거
 
@@ -159,8 +192,25 @@ A는 조건부 선택이다. 다음 넷 중 **하나라도** 실패하면 B/C로
 | G1 | 동기 store를 async로 전환 | `withStoreLock`·`withSessionCommandLock`이 deadline-aware async가 되고 P2가 PASS로 뒤집힌다 |
 | G2 | 여섯 경로 P8 prototype | CLI 세션/무세션·MCP·resume·watcher·`queryWebAi` 전부에 예산이 전파되는 prototype이 동작한다. **한 경로라도 불가면 실패** |
 | G3 | P9 conformance | 새 동기 IO 또는 무제한 CDP 호출이 유입될 때 **실제로 실패하는** 검사가 있다. 문서상 규칙만으로는 불충분 |
-| G4 | 세션 유지 drain의 실전 검증 | 실제 `pollWebAi` 경로에서 20회 timeout 주입 후 session identity·conversation URL 보존, 미해제 CDP request·락 delta 0 |
-| --- | --- | --- |
+| G4 | 세션 유지 drain의 실전 검증 | 아래 여덟 조건 전부 |
+
+### G4 상세 (감사가 제시한 조건)
+
+`Page.reload` 경로를 계약으로 쓰려면 여덟이 필요하다.
+
+1. reload 전 durable `/c/<id>` 필수 — root/null conversation은 reload 금지
+2. `sessionId`·`targetId`·durable conversation ID 전후 비교
+3. load/navigation waiter를 **reload 전에** arm (함정 1)
+4. `Page.reload`와 다음 navigation 자체도 deadline으로 제한
+5. 현재 `loaderId`를 전달해 racing navigation이면 fail-closed
+6. 실제 ChatGPT에서 generation 진행 중 reload 후 같은 user turn의 응답이
+   계속되거나 복구되는지 확인 (함정 2)
+7. pending Playwright callback·CDP request/session·command/store lock delta 0
+8. reload 후 중복 send나 baseline shift가 없음
+
+**6번이 가장 불확실하다.** OpenAI 문서는 로그인된 대화가 계정에 저장되고
+refresh로 history를 불러올 수 있다고 하지만, **진행 중인 generation이 reload
+뒤에도 계속된다는 보장은 없다.** 실측이 필요하다.
 
 ### G1의 전환 범위 (감사 실측)
 
@@ -177,11 +227,12 @@ listSessions / findActiveSession  각 5
 callback과 read/write API가 동기 반환형이라 `updateSession`·`getSession`까지
 전파된다. **G1은 이 유닛에서 가장 큰 미지수다.**
 
-## 이 결정이 틀렸다는 것을 보여줄 증거
+## 이 결정의 지위
 
-- 설계 질문 1이 풀리지 않으면 — 즉 세션을 유지한 채 drain할 방법이 없고 탭
-  재생성도 수용 불가하면 — A는 실패한다. 그때 B/C로 돌아가 P3~P6을 측정한다.
-- 설계 질문 2에서 동기 호출자가 너무 많아 async 전환이 광범위 리팩터가 되면,
-  격리의 "개별 수정 불필요" 이점이 다시 커진다.
+**provisional execution direction이다.** 완료된 모델 결정이 아니다.
 
-두 경우 모두 **결정을 뒤집는 것이지 계약을 낮추는 것이 아니다.**
+사전 기준(`010_wp1_budget_model.md`)은 A의 P1·P2·P8·P9 통과와 완성된 ledger를
+요구한다. 현재 P1은 primitive feasibility만, P2는 FAIL, P8·P9는 미측정이다.
+
+뒤집는 조건은 위 G1~G4 표가 전부다. 하나라도 실패하면 B/C로 복귀하고 P4~P6을
+측정한다. **결정을 뒤집는 것이지 계약을 낮추는 것이 아니다.**

@@ -46,7 +46,7 @@
 | --- | --- | --- |
 | P1c/P1d | `Page.reload`(CDP)가 **탭을 유지한 채** pending `evaluate`를 drain. 20회 반복 시 session identity 보존, handle 증가 0 | 세션 유지 취소 수단이 존재한다. `page.close()` 경로는 재사용 불가라 기각 |
 | P2 | `Atomics.wait` 309ms 동안 50ms 타이머 미발화 | **WP2(동기 IO 처방)가 A의 전제 조건이다.** 락을 async로 못 바꾸면 A 전체가 무너진다 |
-| P7 | worker 10ms / subprocess 19ms (임계 200ms) | 기동 비용은 격리 탈락 사유가 아니었다 — 되돌아갈 여지가 남아 있다 |
+| P7 | 빈 워커 worker 10ms / subprocess 19ms. **`chatgpt.mjs` import 포함 시 55ms / 64ms**(임계 200ms) | 기동 비용은 격리 탈락 사유가 아니다 — 되돌아갈 여지가 남아 있다. 다만 여유가 초판 수치보다 훨씬 작다 |
 | P3 | 감사가 측정 — worker에서 targetId 재연결 성공(138ms) | 격리도 기술적으로 가능하다. descriptor만 넘기면 된다 |
 | P4~P6 | **미측정** | A 조건부 선택으로 보류. B/C 복귀 시 측정 |
 | P8·P9 | **미측정** | reversal gate G2·G3의 대상 |
