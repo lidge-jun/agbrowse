@@ -321,6 +321,54 @@ bash structure/verify-counts.sh      76 passed
 mutation 6건 RED: `:336` throw, locator `ok:false`, 1차-성공-빈 규칙,
 `:759` stable reset, 부분 읽기 폐기, null stable 가드.
 
+## 실행 결과 (2026-08-01)
+
+커밋 셋: `52ebed3`(소스+1차 테스트), `9635426`(부분 읽기 교정), `6ad7c44`(X10).
+
+### 감사가 잡은 것 — 같은 결함의 더 조용한 형태
+
+1차 구현은 **부분 읽기를 성공으로 확정**했다. 한 셀렉터가 턴 둘을 찾았는데
+하나만 읽히면 `{ok:true, texts:['...']}`를 반환했다.
+
+```
+{"ok":true,"texts":["historical answer"]}   ← 감사가 재현한 실제 출력
+```
+
+`assistantCount`가 2 대신 1이 되고, 나머지 한 턴이 새 후보로 재분류된다.
+**0을 기록하는 것과 같은 오염이고 발견만 더 어렵다.** 처방의 진실표에
+"매치된 node가 있는데 text read가 **전부** 실패"만 적어둔 것이 원인이었다 —
+일부 실패를 빠뜨렸다.
+
+교정: `anyNodeUnread`를 `texts.length` 검사보다 **앞에** 두고 `continue`한다.
+완전히 읽힌 대체 셀렉터는 그대로 답할 수 있다.
+
+### 테스트가 보호하지 못한 것
+
+| 테스트 | 문제 |
+| --- | --- |
+| X11 | reads가 회복되지 않아 stale candidate가 소비될 일이 없었다 — reset을 지워도 GREEN |
+| X10 | 최종 guard를 통해 간접 실행될 뿐 null을 안정으로 세는 mutation을 못 죽였다 |
+
+X11b는 "안정 축적 → blind → **같은 텍스트로 회복**" 순서를 만든다. stale
+candidate가 실제로 쓰일 수 있는 유일한 순서다. X10은 pre-send 대기를 직접
+구동해 두 read 임계를 넘어서도 계속 기다리는지 본다.
+
+둘 다 mutation으로 RED 확인했다.
+
+### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 180 passed (180); Tests 2046 passed (2046)
+npm run gate:all              All 17 gate(s) passed (exit 0)
+npm run typecheck             exit 0   (.mjs 미대상)
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
+전체 실행 한 번이 병렬 부하로 실패했다가 재실행에서 통과했고, 대상 파일
+단독 3회 반복도 전부 통과했다 — 회귀가 아니라 flake로 판정했다.
+
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
 닫는 것: **B01·B02·B07**의 실패/빈 구별. `021` 3절이 "빈 읽기와 구별 불가"로

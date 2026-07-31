@@ -223,6 +223,12 @@
       "status": "done",
       "title": "WP14 스냅샷 읽기 실패와 빈 페이지 구분 (B01/B02/B07). B04는 OPEN",
       "tasks": []
+    },
+    {
+      "id": "wp14",
+      "status": "done",
+      "title": "WP14 스냅샷 읽기 실패와 빈 페이지 구분 (B01/B02/B07) — B04는 OPEN",
+      "tasks": []
     }
   ],
   "criteria": [
