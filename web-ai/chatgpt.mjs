@@ -80,6 +80,21 @@ const MIN_LOOP_BUDGET_MS = 500;
 const PACING_INTERVAL_MS = 500;
 /** How often the hard-deadline timer re-checks the clock the loop reads. */
 const POLL_EXPIRY_CHECK_MS = 250;
+/**
+ * How long the reported clock may sit at ONE value before the hard deadline
+ * gives up on it, as a multiple of the budget.
+ *
+ * Only reachable when `Date.now` has stopped moving entirely.
+ */
+
+/**
+ * Real elapsed time, immune to a mocked or frozen `Date.now`.
+ *
+ * @returns {number} milliseconds from an arbitrary origin
+ */
+function monotonicNowMs() {
+    return Number(process.hrtime.bigint() / 1_000_000n);
+}
 /** Thrown by the commit gate so an expired run cannot return a normal envelope. */
 const POLL_EXPIRED = Symbol('poll-expired');
 const ASSISTANT_SELECTORS = CHATGPT_ASSISTANT_SELECTORS;
@@ -688,7 +703,14 @@ function mergeObservationList(warnings, observations) {
  * @param {any} input
  */
 export async function pollWebAi(deps, input = {}) {
-    const timeoutMs = Math.max(1, Number(input.timeout) > 0 ? Number(input.timeout) : 1) * 1000;
+    // Resolve the SAME budget the inner loop resolves. `poll`, `watch` and
+    // `resume` deliberately pass `timeout: undefined` so the stored session
+    // deadline is inherited (cli.mjs:730-738); falling back to 1s here capped
+    // every one of those calls at a second, and the wrapper's bound wins over
+    // whatever the loop computes.
+    const session = input.session ? getSession(input.session) : null;
+    const timeoutSec = resolveTimeoutBudgetSec(input, session, input.vendor || 'chatgpt');
+    const timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
     /** @type {any} */
     let expire = () => undefined;
     let timer = null;
@@ -704,9 +726,29 @@ export async function pollWebAi(deps, input = {}) {
         // real time; expiring on wall time alone would cut short a poll that,
         // by the clock the loop reads, still has budget. Re-arm until the
         // clock agrees the deadline has passed.
+        //
+        // Deferring to the reported clock ALONE is unbounded: a frozen or
+        // mocked `Date.now` never reaches the deadline, so the timer re-arms
+        // forever and the poll returns NOTHING — strictly worse than the
+        // overrun this wrapper exists to prevent.
+        //
+        // Two independent ceilings, because `Date.now` is not trustworthy here:
+        // tests step it, and a stalled or rewound system clock would otherwise
+        // leave the deadline unreachable.
+        //
+        //   - the reported clock reaching `hardDeadline`
+        //   - MONOTONIC time exceeding the same budget
+        //
+        // The monotonic one is what makes the promise real: whatever the clock
+        // claims, the caller waits at most one budget plus a check interval.
+        // Tests that step the clock faster than real time still finish on the
+        // first ceiling, so they are not cut short.
+        const monotonicStart = monotonicNowMs();
+        const monotonicCeilingMs = timeoutMs + POLL_EXPIRY_CHECK_MS;
         const arm = () => {
             const remaining = hardDeadline - Date.now();
-            if (remaining <= 0) { resolve(POLL_EXPIRED); return; }
+            const monotonicElapsedMs = monotonicNowMs() - monotonicStart;
+            if (remaining <= 0 || monotonicElapsedMs >= monotonicCeilingMs) { resolve(POLL_EXPIRED); return; }
             timer = setTimeout(arm, Math.min(remaining, POLL_EXPIRY_CHECK_MS));
         };
         arm();
@@ -716,8 +758,13 @@ export async function pollWebAi(deps, input = {}) {
     // indistinguishable from a clean one.
     /** @type {Set<string>} */
     const observations = new Set();
+    // Shared with the inner run so the loser learns it lost. Without this the
+    // commit gate's flag was never set by anyone and every side effect sailed
+    // through after the deadline.
+    /** @type {{ expired: boolean, hardDeadline: number }} */
+    const runToken = { expired: false, hardDeadline };
     try {
-        const run = runPollWebAi(deps, input, hardDeadline, observations).then(
+        const run = runPollWebAi(deps, input, hardDeadline, observations, runToken).then(
             // Normalise BOTH settlement paths before the race: a stalled promise
             // that settles just after the deadline can have its continuation
             // scheduled ahead of the timer, and would otherwise deliver a normal
@@ -731,6 +778,9 @@ export async function pollWebAi(deps, input = {}) {
         if (outcome !== POLL_EXPIRED) return outcome;
         return buildHardTimeoutResult(input, observations);
     } finally {
+        // Order matters: the loser may still be mid-tick, and this is what makes
+        // its next commit throw instead of writing.
+        runToken.expired = true;
         if (timer) clearTimeout(timer);
         expire(POLL_EXPIRED);
     }
@@ -763,8 +813,9 @@ function buildHardTimeoutResult(input, observations) {
  * @param {any} input
  * @param {number} hardDeadlineAt
  * @param {Set<string>} [sharedObservations]
+ * @param {{ expired: boolean, hardDeadline: number }} [sharedRun] commit token owned by the wrapper
  */
-async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_INFINITY, sharedObservations) {
+async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_INFINITY, sharedObservations, sharedRun) {
     const vendor = input.vendor || 'chatgpt';
     const timeout = Math.max(1, Number(input.timeout) > 0
         ? Number(input.timeout)
@@ -826,9 +877,16 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
     // Never more than a quarter of the budget: a small poll must not lose half
     // its loop to a reserve, and the post-loop path is cheap when it is reached
     // at all.
+    //
+    // The `budgetMs % PACING_INTERVAL_MS` term used to sit inside a
+    // `Math.max(PACING_INTERVAL_MS, ...)`, which is ALWAYS exactly
+    // PACING_INTERVAL_MS — the remainder is smaller than the interval by
+    // definition. That pinned the reserve to one tick and made
+    // RECOVERY_RESERVE_MS unreachable at every budget. The ratio and
+    // minimum-loop terms already keep small budgets safe, so the dead term is
+    // gone and the constant means what it says.
     const reserveMs = Math.min(
         RECOVERY_RESERVE_MS,
-        Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS),
         Math.max(0, Math.floor(budgetMs * MAX_RECOVERY_RESERVE_RATIO)),
         Math.max(0, budgetMs - MIN_LOOP_BUDGET_MS),
     );
@@ -839,9 +897,13 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
      * another session must not expire this one, and single-flight is explicitly
      * out of scope for this change.
      *
+     * Handed down by the wrapper when there is one, so the wrapper can flip
+     * `expired` on the run it just abandoned. The standalone object is the
+     * fallback for direct calls in tests.
+     *
      * @type {{ expired: boolean, hardDeadline: number }}
      */
-    const run = { expired: false, hardDeadline };
+    const run = sharedRun || { expired: false, hardDeadline };
     /**
      * Refuse to START a new side effect once the hard deadline has passed.
      *
@@ -862,6 +924,17 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         if (run.expired || Date.now() >= run.hardDeadline) throw POLL_EXPIRED;
         return fn();
     };
+    /**
+     * Async form of the gate, for side effects that await.
+     *
+     * Checked once BEFORE starting: a side effect that has already begun cannot
+     * be un-started, so the gate's job is to refuse the start, not to undo it.
+     *
+     * @template T
+     * @param {() => Promise<T>} fn
+     * @returns {Promise<T>}
+     */
+    const commitAsyncIfActive = async (fn) => commitIfActive(fn);
     /**
      * Wait out one tick without overrunning the loop budget.
      *
@@ -982,12 +1055,12 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             if (imageResult) {
                 const imageWarnings = mergeObservationList(imageResult.warnings, observations);
                 if (!input.skipFinalize) {
-                    await finalizeProviderTab(deps, {
+                    await commitAsyncIfActive(() => finalizeProviderTab(deps, {
                         vendor, session: /** @type {any} */ (session), page,
                         answerText: imageResult.answerText,
                         warnings: imageWarnings,
                         archiveFlag: input.archiveFlag,
-                    });
+                    }));
                 }
                 return withAnswerArtifact({
                     ok: true, vendor, status: 'complete', url: page.url(), sessionId: session.sessionId,
@@ -1117,7 +1190,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                         if (!warnings.includes(observation)) warnings.push(observation);
                     }
                     if (session && !input.skipFinalize) {
-                        await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
+                        await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -1151,7 +1224,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         if (!await paceTick(wake)) break;
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) updateSession(session.sessionId, { status: 'crashed' });
+                if (session) commitIfActive(() => updateSession(session.sessionId, { status: 'crashed' }));
                 return mergeObservationWarnings({
                     ok: false, vendor, status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -1197,6 +1270,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'recovery-deferred-streaming',
                     streamingState: 'streaming',
                     observations,
+                    commit: commitIfActive,
                 });
             }
             // This path does not collect images. When the caller asked for a
@@ -1240,12 +1314,13 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'recovery-deferred-unverified',
                     streamingState: 'unknown',
                     observations,
+                    commit: commitIfActive,
                 });
             }
             const answerText = recovered.text;
             const warnings = mergeObservationList(['response-recovered-after-timeout'], observations);
             if (!input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
             }
             return withAnswerArtifact({
                 ok: true,
@@ -1282,6 +1357,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'copy-markdown-deferred-streaming',
                     streamingState: 'streaming',
                     observations,
+                    commit: commitIfActive,
                 });
             }
             stableText = '';
@@ -1306,6 +1382,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'copy-markdown-deferred-unverified',
                     streamingState: 'unknown',
                     observations,
+                    commit: commitIfActive,
                 });
             }
             stableText = '';
@@ -1324,7 +1401,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             const answerText = cleanAssistantText(copiedText);
             const warnings = mergeObservationList([], observations);
             if (session && !input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
             }
             return withAnswerArtifact({
                 ok: true,
@@ -1340,9 +1417,9 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                 responseStableMs: Date.now() - stableSince,
             });
         }
-        const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        const timedOutSession = session ? commitIfActive(() => markSessionTimeout(session.sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-        }) : null;
+        })) : null;
         return mergeObservationWarnings({
             ok: false,
             vendor,
@@ -1360,9 +1437,9 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             error: 'timed out waiting for answer',
         }, observations);
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+    const timedOutSession = session ? commitIfActive(() => markSessionTimeout(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-    }) : null;
+    })) : null;
     return mergeObservationWarnings({
         ok: false,
         vendor,
@@ -1961,7 +2038,7 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
 /**
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
-function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations }) {
+function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, commit }) {
     const current = getSession(session.sessionId) || session;
     // The session write and the returned envelope must carry the SAME warnings.
     // Merging the ledger into the return value afterwards would leave the stored
@@ -1971,13 +2048,18 @@ function buildDeferredPollingResult({ vendor, page, session, baseline, answerTex
         : [warning];
     let storedWarnings = current.warnings || [];
     for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
-    updateSession(session.sessionId, {
+    // Gated like every other post-deadline write: a loser reaching this path
+    // after the wrapper returned would otherwise move the session back to
+    // `polling` under a caller who was already told the poll timed out.
+    const write = () => updateSession(session.sessionId, {
         status: 'polling',
         answer: null,
         completedAt: null,
         lastStreamingState: streamingState,
         warnings: storedWarnings,
     });
+    if (commit) commit(write);
+    else write();
     return {
         ok: true,
         vendor,

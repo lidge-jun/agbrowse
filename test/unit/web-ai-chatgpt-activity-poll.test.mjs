@@ -1362,4 +1362,129 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         expect(ra.status).toBe('timeout');
         expect(rb.status).toBe('timeout');
     });
+
+    /**
+     * Y1/Y2c/Y5/Y7 all pass `skipFinalize: true`, which skips the ONLY path that
+     * writes an answer to the session. They prove the return is bounded; they
+     * cannot prove the loser is fenced. These do.
+     */
+
+    it('Y8: a losing run cannot write the session after the deadline', async () => {
+        // The stall clears just after the bound, then the run walks straight
+        // into completion — the exact shape that used to finalize under a
+        // caller who had already been handed a timeout.
+        const session = stallSession('y8');
+        // Hold every read until AFTER the 2s bound, then answer cleanly. A
+        // single blocked read is not enough: the readers are individually
+        // bounded, so the loop would recover and complete before the deadline.
+        const clearAt = Date.now() + 2_600;
+        const untilClear = async () => {
+            const remaining = clearAt - Date.now();
+            if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+        };
+        const page = {
+            url: () => 'https://chatgpt.com/c/stall-y8',
+            waitForTimeout: async (ms) => {
+                await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 60)));
+            },
+            evaluate: async (fn, arg) => {
+                await untilClear();
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return 'idle';
+                if (arg?.finishedSelector) {
+                    return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ text: 'late answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    return [{ text: 'late answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }];
+                }
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+            innerText: async () => 'late answer',
+        };
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y8' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2 },
+        );
+        expect(result.status).toBe('timeout');
+
+        // Let the loser run to completion, then look at what it managed to do.
+        await new Promise(resolve => setTimeout(resolve, 1_500));
+
+        const after = getSession(session.sessionId);
+        // The ledger: nothing the loser touches may show a completed answer.
+        expect(after.answer ?? null).toBeNull();
+        expect(after.status).not.toBe('complete');
+        expect(after.completedAt ?? null).toBeNull();
+    });
+
+    it('Y9: the hard deadline honours a stored session budget, not a 1s default', async () => {
+        // `poll`, `watch` and `resume` pass `timeout: undefined` on purpose so
+        // the stored deadline is inherited (cli.mjs:730-738). Defaulting to 1s
+        // in the wrapper capped every one of those calls at a second.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y9' });
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y9',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y9',
+                conversationUrl: 'https://chatgpt.com/c/stall-y9',
+                deadlineAt: new Date(Date.now() + 3_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y9' },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        // The paired assertion matters as much as the lower bound: without it a
+        // regression to "never expire" would also pass.
+        expect(elapsed).toBeGreaterThan(1_500);
+        expect(elapsed).toBeLessThan(6_000);
+    }, 20_000);
+
+    it('Y10: a frozen clock still returns, instead of re-arming forever', async () => {
+        // `arm()` re-reads `Date.now` every tick. A frozen or mocked clock never
+        // reaches the deadline, so the timer re-armed indefinitely and the poll
+        // returned NOTHING — worse than the overrun this wrapper prevents.
+        const frozen = Date.now();
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y10' });
+        const session = stallSession('y10');
+        vi.spyOn(Date, 'now').mockImplementation(() => frozen);
+
+        const started = performance.now();
+        const outcome = await Promise.race([
+            pollWebAi(
+                { getPage: async () => page, getTargetId: async () => 'target-y10' },
+                { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+            ).then(r => r.status),
+            new Promise(resolve => setTimeout(() => resolve('STILL-HANGING'), 8_000)),
+        ]);
+        const elapsedMs = performance.now() - started;
+
+        expect(outcome).toBe('timeout');
+        // The bound has to hold on REAL time, not on the clock the poll reads —
+        // that is the whole point when the clock is frozen. A loose watchdog
+        // would pass while the caller waited several times the budget.
+        expect(elapsedMs).toBeLessThan(3_000);
+    }, 20_000);
 });
