@@ -109,15 +109,16 @@ C1~C5는 자매 유닛 `000_plan.md`와 동일하다. 이 유닛의 담당분:
 
 ### primitive별 pending 행렬
 
-`CDPSession.send` 하나만 보면 부족하다. 이 유닛이 다루는 blocking primitive는
-다섯 종류이고 **각각 주입해서 검증**한다.
+`CDPSession.send` 하나만 보면 부족하다. 이 유닛이 다루는 blocking primitive를
+**각각 주입해서 검증**한다.
 
 | primitive | 대표 위치 | 주입 시나리오 |
 | --- | --- | --- |
+| `Page.evaluate` | B10 `web-ai/failure-diagnostics.mjs:27-42` `readConversationSnapshot` | 앞선 읽기는 성공하고 **이 evaluate만** pending — 항상 pending인 double은 더 이른 경계에서 멈춰 이 경로를 못 본다 |
 | `fetch` | 이미지 다운로드 `web-ai/chatgpt-images.mjs:241-247`, `/json/list` `skills/browser/browser.mjs:1103-1105`, 생존 확인 `skills/browser/tab-manager.mjs:202-205` | 영원히 pending → 데드라인 안 반환 |
 | `newCDPSession` | `skills/browser/browser.mjs:1057` | 세션 취득이 pending |
 | `CDPSession.send` | `web-ai/chatgpt-images.mjs:226`, `web-ai/chatgpt-files.mjs:321`, `skills/browser/tab-manager.mjs:310` | 명령이 pending |
-| `detach` | `skills/browser/browser.mjs:1062`, `web-ai/chatgpt.mjs:788`, `:806`, `:1521` | 정리가 pending — 반환 후에도 프로세스를 붙잡는다 |
+| `detach` | `skills/browser/browser.mjs:1062`, `web-ai/chatgpt.mjs:788`, `:806`, `:1521` | 정리가 pending — 미해제 CDP request·session·active handle이 남거나 반복 시 누적되는가 |
 | locator/click | `web-ai/chatgpt-archive.mjs:90-105` | archive 클릭이 pending |
 | 동기 IO | `web-ai/session-store.mjs:136-164` 등 | event loop 차단 |
 
@@ -130,7 +131,7 @@ reject하는 경우(fail-closed 검증)와 pending인 경우(데드라인 검증
 | --- | --- |
 | 아티팩트 저장 중 중단 | 부분 파일 잔존 여부, 다음 명령 동작 |
 | lease 조작 중 중단 | 락 파일 잔존, 좀비 탭 |
-| detach 미완료 | 반환 후 CDP 세션 잔존 수 |
+| detach 미완료 | 미해제 CDP request·session·active handle 수, 반복 폴 시 누적 여부 |
 
 ## 범위
 
@@ -165,8 +166,8 @@ OUT: 답변 읽기와 완료 판정 경로 — 자매 유닛 소유. #87 관련 
 
 DONE 조건은 셋이다.
 
-1. **구조적 커버리지** — 동기 구간·주입 경계·CDP/HTTP 경계가 선택한 모델의
-   계약으로 덮인다. 개별 경계를 하나씩 감싸는 게 아니라, 그 종류의 접근이
+1. **구조적 커버리지** — 동기 구간·주입 경계·CDP/HTTP 경계·직접 `Page`/`Locator`
+   접근이 선택한 모델의 계약으로 덮인다. 개별 경계를 하나씩 감싸는 게 아니라, 그 종류의 접근이
    예산 밖에 있을 수 없는 구조여야 한다.
 2. **fail-open 교정** — C5의 B23·B24·B25·B36이 fail-closed로 검증된다.
 3. **ledger 편입** — 구현 중 발견된 새 경계가 `021` 표본에 없더라도 계약이
