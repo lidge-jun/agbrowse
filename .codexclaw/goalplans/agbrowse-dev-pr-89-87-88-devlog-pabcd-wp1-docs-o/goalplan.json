@@ -2,8 +2,8 @@
   "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
   "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
   "createdAt": "2026-07-31T07:28:37.608Z",
-  "updatedAt": "2026-07-31T10:59:35.958Z",
-  "activeWorkPhaseId": "wp6",
+  "updatedAt": "2026-07-31T11:52:04.904Z",
+  "activeWorkPhaseId": null,
   "workPhases": [
     {
       "id": "wp1",
@@ -151,17 +151,17 @@
     {
       "id": "wp8",
       "title": "후속 유닛 3 로드맵: devlog 정리 (docs-only 사이클)",
-      "status": "pending",
+      "status": "done",
       "tasks": [
         {
           "id": "wp8-t1",
           "title": "030을 그 유닛으로 옮기고 devlog 정리 로드맵을 확정",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp8-t2",
           "title": "D에서 구현 work-phase를 goalplan에 append하고 c4를 거기에 연결",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": []
@@ -193,8 +193,8 @@
       "id": "c4",
       "scenario": "devlog 정리 유닛: _plan 표가 실제 폴더와 양방향 1:1이고, 표에 기재된 모든 _fin 경로가 존재한다",
       "expectedEvidence": "ls devlog/_plan, ls devlog/_fin 출력과 00_index.md 표 대조 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "커밋 f0fa15a, 5e5dfd8, 7d39b95. _plan 11→5: 6개 이관 + reorg 유닛 자체 이관. 조건부 4개에 900_closeout.md 작성 — upload_reliability는 전체 스위트 179파일 1946건 0 failure, release_017은 fresh install + 두 bin smoke 재현(면제 대신 실행), search_skill은 5사이클 배포 대조, competitive_research는 질문 5개 disposition. 00_index 검증: _plan 표 ↔ 실제 폴더 양방향 diff 일치, 표 기재 _fin 경로 전부 존재. doc-drift 164, verify-counts 76, typecheck 0.",
+      "status": "met"
     },
     {
       "id": "c5",
