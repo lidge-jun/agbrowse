@@ -547,7 +547,9 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
      * on the last in-budget tick drops the window to 1s and the loop completes
      * before the copy route is ever reached.
      */
-    const weakThenQuiet = (offset) => (offset > 2_000
+    // The loop yields its final tick to the recovery reserve, so a 2s budget
+    // leaves the loop at 1500ms. Keying on 2000ms would never flip to quiet.
+    const weakThenQuiet = (offset) => (offset >= 1_500
         ? { strength: 'none', evidence: '' }
         : { strength: 'weak', evidence: 'panel-text' });
 
@@ -694,11 +696,11 @@ describe('observation warnings reach every envelope', () => {
      */
     it('T14a: recovery records an unknown the loop never saw', async () => {
         // Every read INSIDE the loop succeeds; only the post-deadline read fails.
-        // The virtual clock passes 2s exactly when the loop exits, so this binds
-        // the failure to the loop/recovery boundary rather than a tick count.
+        // The loop hands its last tick to the recovery reserve, so it exits at
+        // 1500ms of a 2s budget and the recovery read is the first at that mark.
         const { page } = makePage({
             activity: (offset) => {
-                if (offset > 2_000) throw new Error('stalled after the deadline');
+                if (offset >= 1_500) throw new Error('stalled after the deadline');
                 return { strength: 'none', evidence: '' };
             },
             text: 'answer',
@@ -732,7 +734,7 @@ describe('observation warnings reach every envelope', () => {
                 if (source.startsWith('function readChatGptStreamingState')) {
                     // Inside the budget: weak, so the 5s window holds the loop off.
                     // After it: the read fails, which is the copy route's own read.
-                    if (offset > 2_000) throw new Error('stalled after the deadline');
+                    if (offset >= 1_500) throw new Error('stalled after the deadline');
                     return { strength: 'weak', evidence: 'panel-text' };
                 }
                 if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
@@ -1223,5 +1225,141 @@ describe('poll loop when every reader fails (B01)', () => {
         const { result } = await poll(page, 12);
         expect(result.status).toBe('complete');
         expect(result.warnings || []).not.toContain('assistant-read-unverified');
+    });
+});
+
+/**
+ * The poll returns within `--timeout` even when a read never settles
+ * (issue #88, the reported symptom).
+ *
+ * Everything earlier in this series fixed reads that THROW. A `page.evaluate`
+ * that simply hangs was untouched, because the loop only checks its deadline
+ * between ticks. Measured before the fix: a 2s budget was still running at 8s.
+ *
+ * The bound is on the RETURN, not the stall — the losing evaluate stays
+ * pending. That limit is deliberate and recorded in the plan.
+ */
+describe('a stalled read cannot outlive --timeout (#88)', () => {
+    afterEach(() => {
+        // These polls end in `polling`, so `findActiveSession` would hand them
+        // to later tests that expect none. Retire them explicitly.
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
+    /** @param {{ stall?: boolean, rejectAfterMs?: number, url?: string }} plan */
+    function stallingPage(plan = {}) {
+        let waits = 0;
+        return {
+            waitCount: () => waits,
+            page: {
+                url: () => plan.url || 'https://chatgpt.com/c/stall',
+                waitForTimeout: async (ms) => {
+                    waits += 1;
+                    await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 60)));
+                },
+                evaluate: async () => {
+                    if (plan.rejectAfterMs !== undefined) {
+                        await new Promise(resolve => setTimeout(resolve, plan.rejectAfterMs));
+                        throw new Error('late page failure');
+                    }
+                    if (plan.stall) return new Promise(() => {});
+                    return [];
+                },
+                locator: () => ({
+                    first: () => ({ isVisible: async () => false }),
+                    all: async () => [],
+                    count: async () => 0,
+                }),
+                innerText: async () => '',
+            },
+        };
+    }
+
+    function stallSession(slug) {
+        // Unique per test: a shared baseline URL becomes the newest
+        // same-host baseline and other tests in this file pick it up.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: `https://chatgpt.com/c/stall-${slug}`,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: `target-${slug}`,
+                conversationUrl: `https://chatgpt.com/c/stall-${slug}`,
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('Y1: a never-settling evaluate returns timeout at the deadline', async () => {
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y1' });
+        const session = stallSession('y1');
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y1' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(result.warnings).toContain('poll-deadline-exceeded');
+        // Generous upper bound: the assertion is "bounded", not "instant".
+        expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    it('Y2c: a late rejection does not escape past the deadline', async () => {
+        // Normalising only fulfilled results would let the poll reject with the
+        // page error instead of the timeout envelope.
+        const { page } = stallingPage({ rejectAfterMs: 3_000, url: 'https://chatgpt.com/c/stall-y2c' });
+        const session = stallSession('y2c');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y2c' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+    });
+
+    it('Y5: the deadline path returns without writing the session store', async () => {
+        // Taking the synchronous store lock inside the timer callback would
+        // stall the event loop — the failure this whole change is about.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y5' });
+        const session = stallSession('y5');
+        const before = getSession(session.sessionId).status;
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y5' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(getSession(session.sessionId).status).toBe(before);
+    });
+
+    it('Y7: two concurrent polls on different sessions both finish', async () => {
+        // The run context is per-invocation. Module-level state would let one
+        // poll expire the other — an accidental single-flight this change
+        // explicitly does not introduce.
+        const a = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y7a' });
+        const b = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y7b' });
+        const sa = stallSession('y7a');
+        const sb = stallSession('y7b');
+
+        const [ra, rb] = await Promise.all([
+            pollWebAi({ getPage: async () => a.page, getTargetId: async () => 'target-y7a' },
+                { vendor: 'chatgpt', session: sa.sessionId, timeout: 2, skipFinalize: true }),
+            pollWebAi({ getPage: async () => b.page, getTargetId: async () => 'target-y7b' },
+                { vendor: 'chatgpt', session: sb.sessionId, timeout: 2, skipFinalize: true }),
+        ]);
+
+        expect(ra.status).toBe('timeout');
+        expect(rb.status).toBe('timeout');
     });
 });
