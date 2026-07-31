@@ -833,3 +833,99 @@ describe('target identity failure is not a passing check (B24)', () => {
         expect(result.status).not.toBe('complete');
     });
 });
+
+/**
+ * Remaining observation contracts (issue #88, boundaries B23 and B25).
+ *
+ * Neither is fully fail-closed — both still return an answer. What they must not
+ * do is stay silent, because the caller cannot otherwise tell that the poll read
+ * a borrowed baseline or skipped artifact capture.
+ */
+describe('degraded reads are reported, not hidden', () => {
+    it('U10: a baseline borrowed from the host is recorded', async () => {
+        // `session-store` turns a corrupt store into an empty one, so this same
+        // path is reached when the store fails to read — the poll then answers
+        // against whatever conversation on this host was newest.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer from some other conversation',
+            finished: true,
+        });
+        // A conversation no earlier test has recorded a baseline for, so the
+        // exact lookup must miss and the host-wide fallback must be used.
+        const unseenUrl = `https://chatgpt.com/c/unseen-${Date.now()}`;
+        page.url = () => unseenUrl;
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        // A baseline for a DIFFERENT conversation on the same host.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/someone-else',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings).toContain('baseline-inferred-from-host');
+    });
+
+    it('U10b: an exact baseline is not reported as inferred', async () => {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/activity',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings || []).not.toContain('baseline-inferred-from-host');
+    });
+
+    it('U4: skipped file capture is reported instead of passing silently', async () => {
+        // Opportunistic capture, so the answer still completes — but a plain
+        // success would hide that attachments were never collected.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer with attachments',
+            finished: true,
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+
+        const result = await pollWebAi(
+            {
+                getPage: async () => page,
+                getTargetId: async () => 'target-activity',
+                getCdpSession: async () => null,
+            },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 12 },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('file-artifact-cdp-unavailable');
+    });
+});

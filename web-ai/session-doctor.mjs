@@ -72,6 +72,7 @@ export function sanitizeSession(session) {
  */
 function summarizeSession({ session, target, lock }) {
     if (lock?.pid && lock?.stale === false) return 'locked by another command';
+    if (target?.liveness === 'unknown') return 'tab liveness could not be verified';
     if (!target?.valid) return 'target missing or needs recovery';
     return `${session.status} on live target`;
 }
@@ -83,6 +84,12 @@ function recommendSessionActions({ session, target, lock, navigate }) {
     const out = [];
     if (lock?.pid && lock?.stale === false) {
         out.push('A command lock is active; wait or inspect the PID before retrying.');
+    }
+    // An unverified tab is not a missing tab. Recommending `--navigate` here
+    // would replace a tab we simply could not read.
+    if (target?.liveness === 'unknown') {
+        out.push('The browser did not answer a tab-liveness check; retry once it responds before recovering the tab.');
+        return out;
     }
     if (!target?.valid && navigate) {
         out.push(`Run sessions reattach ${session.sessionId} --navigate to recover the tab.`);

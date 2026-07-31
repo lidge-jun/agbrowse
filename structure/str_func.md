@@ -21,17 +21,17 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
 | `bin/` | 2 | 6 | published bin wrapper |
-| `skills/browser/` | 55 | 16836 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
+| `skills/browser/` | 55 | 16829 | Chrome lifecycle, CDP connection, refs, tabs, diagnostics, adaptive fetch v2, search orchestrator, Runway task-runner preflight/poll |
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 912 | bundled agent workflow skill |
-| `web-ai/` | 119 | 31396 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 119 | 31453 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 10 | 1809 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 12 | 1805 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 157 | 23598 | deterministic module tests |
+| `test/unit/` | 157 | 23836 | deterministic module tests |
 | `test/integration/` | 24 | 5188 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
@@ -48,7 +48,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/search.mjs` | 421 | standalone search orchestrator: query rewrite → fetch → evidence score → output |
 | `skills/browser/runway.mjs` | 598 | Runway Apps/Custom selector contract, status/open/preflight command surface |
 | `skills/browser/runway-monitor.mjs` | 383 | Runway read-only queue/completion poller and progress signal extraction |
-| `skills/browser/tab-manager.mjs` | 490 | CDP target list, create, close, switch |
+| `skills/browser/tab-manager.mjs` | 474 | CDP target list, create, close, switch |
 | `skills/browser/tab-lifecycle.mjs` | 382 | idle cleanup, pinned target, duration parsing |
 | `skills/browser/skill-install.mjs` | 374 | bundled skill list/get/install |
 | `skills/browser/adaptive-fetch/index.mjs` | 888 | adaptive fetch v2 CLI + 6-phase escalation scheduler |
@@ -80,7 +80,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/browser/adaptive-fetch/transforms.mjs` | 86 | URL transforms, HTML-to-text, content-type checks |
 | `skills/browser/adaptive-fetch/third-party-readers.mjs` | 46 | Jina Reader integration |
 | `skills/browser/adaptive-fetch/browser-runtime.mjs` | 38 | browser page acquisition and cleanup |
-| `web-ai/cli.mjs` | 2127 | `web-ai` subcommand parser and command orchestration |
+| `web-ai/cli.mjs` | 2146 | `web-ai` subcommand parser and command orchestration |
 | `web-ai/session-target-guard.mjs` | 151 | shared CDP session candidate selection, ambiguity errors, and target-mismatch recovery envelopes |
 | `web-ai/chatgpt.mjs` | 1805 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
 | `web-ai/chatgpt-response-dom.mjs` | 480 | shared ChatGPT assistant DOM extraction plus the Node-side composer-scoped stop probe |

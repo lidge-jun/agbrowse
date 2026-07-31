@@ -1356,6 +1356,25 @@ async function runSessionStopInterrupt(deps, input, stopFn) {
 function sessionResolutionError(command, deps, input, resolved) {
     const vendor = input.vendor || resolved.session?.vendor || 'chatgpt';
     const sessionId = input.session || resolved.session?.sessionId || null;
+    // Unverified liveness is a transient read failure, not a wrong tab. Calling
+    // it a target mismatch tells the user to navigate — which replaces a tab
+    // that may be perfectly fine.
+    if (resolved.strategy === 'unverified') {
+        return new WebAiError({
+            errorCode: 'cdp.liveness-unverified',
+            stage: 'target-resolution',
+            vendor,
+            retryHint: 'retry',
+            message: resolved.warnings?.[0] || `session ${sessionId} tab liveness could not be verified`,
+            mutationAllowed: false,
+            evidence: {
+                sessionId,
+                targetId: resolved.session?.targetId || resolved.targetId || null,
+                port: Number(deps.getPort?.() || process.env.CDP_PORT || 9222),
+                liveness: 'unknown',
+            },
+        });
+    }
     const expectedTargetId = resolved.session?.targetId || resolved.targetId || null;
     const actualTargetId = resolved.url ? (resolved.targetId || null) : null;
     const port = Number(deps.getPort?.() || process.env.CDP_PORT || 9222);

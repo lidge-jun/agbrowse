@@ -522,6 +522,23 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
         const recoveryTargetUrl = storedUrl;
         if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
             const recovery = await recoverSessionTab(deps, current);
+            // `unverified` means the probe failed, not that recovery failed.
+            // Collapsing it into the generic throw loses the one detail that
+            // tells the caller to retry rather than replace the tab.
+            if (recovery.strategy === 'unverified') {
+                return {
+                    mismatch: true,
+                    page: null,
+                    targetId: current.targetId || null,
+                    session: current,
+                    recovered: false,
+                    strategy: 'unverified',
+                    liveness: 'unknown',
+                    warnings: [`session ${sessionId} tab liveness could not be verified`],
+                    url: null,
+                    conversationUrl: current.conversationUrl || null,
+                };
+            }
             if (!recovery.recovered) {
                 throw new Error(`Session ${sessionId} tab recovery failed`);
             }

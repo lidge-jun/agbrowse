@@ -146,6 +146,20 @@ export async function runSessionsCommand(args, values, deps, input) {
             return { ok: false, status: 'reattach-failed', sessionId: id, error: 'session has no conversationUrl/originalUrl', warnings: [] };
         }
         const resolved = await resolveSessionPage(deps, id, { allowNavigate: input.navigate === true });
+        // Liveness unverified is not a mismatch: the stored tab may be perfectly
+        // usable and merely unreadable right now. Opening a replacement here
+        // would rebind the session to a new tab and strand the live one.
+        if (/** @type {any} */ (resolved).strategy === 'unverified') {
+            return {
+                ok: false,
+                status: 'reattach-unverified',
+                sessionId: id,
+                error: 'tab liveness could not be verified; retry once the browser responds',
+                warnings: resolved.warnings || [],
+                recoverable: true,
+                retryHint: 'retry-reattach',
+            };
+        }
         if (resolved.mismatch) {
             // 35.1 new-tab recovery: when navigation is authorized, open the saved
             // ChatGPT conversation in a fresh tab (32.3-guarded) instead of failing.

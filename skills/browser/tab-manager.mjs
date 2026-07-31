@@ -394,9 +394,12 @@ export async function getTabInfo(port, targetId) {
  * `fetch` to the CDP port, so one transient failure would otherwise mark every
  * tab dead at once and callers would act destructively on all of them.
  *
- * A REFUSED connection is the exception: nothing is listening on the port, so
- * the browser itself is gone and with it every tab. Folding that into `unknown`
- * would leak leases forever after a normal browser exit.
+ * There is no exception for connection errors. A refused connection says the
+ * endpoint was not listening at that instant, which is not the same fact as
+ * "this target no longer exists" — and acting on it destructively is exactly
+ * the failure this probe exists to prevent. Only a SUCCESSFUL list that omits
+ * the target proves it is gone. Reclaiming leases after a real browser exit
+ * needs browser-lifecycle evidence, not a single failed fetch.
  *
  * @param {number} port - CDP port
  * @param {string} targetId - Tab target ID
@@ -406,29 +409,10 @@ export async function probeTabAlive(port, targetId) {
     let tabs;
     try {
         tabs = await listTabs(port);
-    } catch (err) {
-        return isEndpointAbsentError(err) ? 'gone' : 'unknown';
+    } catch {
+        return 'unknown';
     }
     return tabs.some(t => t.id === targetId) ? 'alive' : 'gone';
-}
-
-/**
- * Does this failure prove nothing is serving the CDP port?
- *
- * `ECONNREFUSED` / `ENOTFOUND` mean the endpoint is absent. A timeout, reset, or
- * malformed body means the endpoint may well be there and merely unresponsive —
- * those stay `unknown`.
- *
- * A rejected port number is the same class of fact: nothing can be listening on
- * a port that cannot be dialled.
- *
- * @param {any} err
- * @returns {boolean}
- */
-function isEndpointAbsentError(err) {
-    const code = err?.cause?.code || err?.code;
-    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') return true;
-    return String(err?.cause?.message || '').toLowerCase().includes('bad port');
 }
 
 /**

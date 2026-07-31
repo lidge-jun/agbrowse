@@ -6,6 +6,21 @@ import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
 import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitEnv, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 import { probeTabAlive } from '../../skills/browser/tab-manager.mjs';
 import { verifySessionTab } from '../../web-ai/tab-recovery.mjs';
+import { TabMonitor } from '../../skills/browser/tab-monitor.mjs';
+
+/**
+ * Several lease tests mean "the tab is gone" and used to express it by pointing
+ * at a port nothing listens on. That only worked while an unreachable endpoint
+ * was read as proof of absence — which is the very conflation issue #88 is about.
+ * Serve a readable, empty tab list instead: same intent, stated directly.
+ */
+function serveEmptyTabList() {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify([]), {
+        headers: { 'content-type': 'application/json' },
+    });
+    return () => { globalThis.fetch = previousFetch; };
+}
 
 describe('tab lifecycle cleanup selection', () => {
     it('parses duration strings used by tab-cleanup UX', () => {
@@ -232,6 +247,7 @@ describe('tab lifecycle cleanup selection', () => {
         const temp = createTempBrowserEnv('agbrowse-lease-dead-');
         const previousHome = process.env.BROWSER_AGENT_HOME;
         process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        const restoreFetch = serveEmptyTabList();
         try {
             const port = 65_531;
             await recordActiveLease({
@@ -258,6 +274,7 @@ describe('tab lifecycle cleanup selection', () => {
             expect(checkedOut).toBeNull();
             expect(await listLeases()).toEqual([]);
         } finally {
+            restoreFetch();
             if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
             else process.env.BROWSER_AGENT_HOME = previousHome;
             temp.cleanup();
@@ -369,6 +386,7 @@ describe('tab lifecycle cleanup selection', () => {
         const temp = createTempBrowserEnv('agbrowse-lease-profile-');
         const previousHome = process.env.BROWSER_AGENT_HOME;
         process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        const restoreFetch = serveEmptyTabList();
         try {
             writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
                 version: 1,
@@ -386,6 +404,7 @@ describe('tab lifecycle cleanup selection', () => {
             expect(result.closed).toBe(0);
             expect((await listLeases()).map(lease => lease.targetId)).toEqual(['other-profile']);
         } finally {
+            restoreFetch();
             if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
             else process.env.BROWSER_AGENT_HOME = previousHome;
             temp.cleanup();
@@ -396,6 +415,7 @@ describe('tab lifecycle cleanup selection', () => {
         const temp = createTempBrowserEnv('agbrowse-lease-close-count-');
         const previousHome = process.env.BROWSER_AGENT_HOME;
         process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        const restoreFetch = serveEmptyTabList();
         try {
             writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
                 version: 1,
@@ -416,7 +436,8 @@ describe('tab lifecycle cleanup selection', () => {
             expect(result.closed).toBe(0);
            expect(await listLeases()).toEqual([]);
        } finally {
-           if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+           restoreFetch();
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
            else process.env.BROWSER_AGENT_HOME = previousHome;
            temp.cleanup();
        }
@@ -500,6 +521,7 @@ describe('provider lease env limit parsing', () => {
         const temp = createTempBrowserEnv('agbrowse-pool-zero-global-');
         const previousHome = process.env.BROWSER_AGENT_HOME;
         process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        const restoreFetch = serveEmptyTabList();
         try {
             const port = 65_528;
             await recordActiveLease({
@@ -521,6 +543,7 @@ describe('provider lease env limit parsing', () => {
             const leases = await listLeases();
             expect(leases.filter(row => row.state === 'pooled')).toEqual([]);
         } finally {
+            restoreFetch();
             if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
             else process.env.BROWSER_AGENT_HOME = previousHome;
             temp.cleanup();
@@ -593,13 +616,15 @@ describe('tab liveness probing distinguishes gone from unreadable (B36)', () => 
         await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('alive');
     });
 
-    it('a refused connection is gone: nothing can be listening', async () => {
-        // Distinguishing this from a transient failure is what keeps leases from
-        // accumulating forever after an ordinary browser exit.
+    it('a refused connection is still unknown, not gone', async () => {
+        // Tempting to call this proof of death — nothing was listening. But it
+        // proves only that the endpoint was silent at that instant, and the
+        // consumers of `gone` delete leases and open replacement tabs. Reclaiming
+        // after a real browser exit needs lifecycle evidence, not one failed fetch.
         const refused = new Error('fetch failed');
         refused.cause = { code: 'ECONNREFUSED' };
         globalThis.fetch = async () => { throw refused; };
-        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('gone');
+        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('unknown');
     });
 
     it('U7: cleanup keeps leases whose tabs it could not observe', async () => {
@@ -669,5 +694,122 @@ describe('tab liveness probing distinguishes gone from unreadable (B36)', () => 
             { sessionId: 'session-x', targetId: 'target-x' },
         );
         expect(result).toMatchObject({ valid: false, needsRecovery: true, liveness: 'gone' });
+    });
+});
+
+/**
+ * The two destructive consumers of tab liveness, tested directly.
+ *
+ * Both act on "not alive" by discarding state a later probe cannot rebuild: one
+ * deletes the lease record, the other tells listeners the tab closed. Neither
+ * had a test, so reverting either guard left the suite green.
+ */
+describe('unreadable liveness does not destroy lease or health state (B36)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('U11: a failed close plus an unreadable probe keeps the lease', async () => {
+        // `closeTab` throwing means the tab may well still be open. Recording it
+        // as closed drops the lease while the tab lives on, ownerless.
+        const temp = createTempBrowserEnv('agbrowse-close-unknown-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        globalThis.fetch = async (input) => {
+            // Close attempt fails, and the follow-up liveness read is unreadable.
+            if (String(input).includes('/json/close/')) throw new Error('close refused');
+            throw new Error('socket hang up');
+        };
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [completedLease('close-failed', '9222')],
+            }));
+
+            await cleanupLeasedTabs(9222, { completedSessions: true, browserProfileKey: '9222' });
+
+            expect((await listLeases()).map(lease => lease.targetId)).toEqual(['close-failed']);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U11b: a failed close with the tab confirmed gone drops the lease', async () => {
+        // The paired case: the guard must not keep leases for tabs that are gone.
+        const temp = createTempBrowserEnv('agbrowse-close-gone-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        globalThis.fetch = async (input) => {
+            if (String(input).includes('/json/close/')) throw new Error('close refused');
+            return new Response(JSON.stringify([]), { headers: { 'content-type': 'application/json' } });
+        };
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [completedLease('already-gone', '9222')],
+            }));
+
+            await cleanupLeasedTabs(9222, { completedSessions: true, browserProfileKey: '9222' });
+
+            expect(await listLeases()).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U13: the monitor stays silent when it cannot read the tab list', async () => {
+        globalThis.fetch = async () => new Response(JSON.stringify([{ id: 'watched', type: 'page' }]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        const monitor = new TabMonitor(9222);
+        /** @type {string[]} */
+        const events = [];
+        monitor.on('tab:closed', () => events.push('closed'));
+        monitor.on('tab:recovered', () => events.push('recovered'));
+
+        monitor.startMonitoring('watched', 60_000);
+        await new Promise(resolve => setImmediate(resolve));
+
+        // Baseline: the first check has no previous entry, so its transition is
+        // not what this test is about.
+        events.length = 0;
+
+        // Now the tab list becomes unreadable. The tab itself did not change.
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        await monitor.checkOnce('watched');
+
+        expect(events).toEqual([]);
+        expect(monitor.healthStatus.get('watched')?.alive).toBe(true);
+        monitor.stopMonitoring('watched');
+    });
+
+    it('U13b: the monitor still reports a tab that is confirmed gone', async () => {
+        globalThis.fetch = async () => new Response(JSON.stringify([{ id: 'watched', type: 'page' }]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        const monitor = new TabMonitor(9222);
+        /** @type {string[]} */
+        const events = [];
+        monitor.on('tab:closed', () => events.push('closed'));
+
+        monitor.startMonitoring('watched', 60_000);
+        await new Promise(resolve => setImmediate(resolve));
+
+        events.length = 0;
+
+        globalThis.fetch = async () => new Response(JSON.stringify([]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        await monitor.checkOnce('watched');
+
+        expect(events).toEqual(['closed']);
+        monitor.stopMonitoring('watched');
     });
 });
