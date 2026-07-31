@@ -23,20 +23,38 @@ must be treated as historical  do not edit them after release.evidence
 
 | Topic | Folder | Status |
 | --- | --- | --- |
-| Oracle stability gap analysis | `_fin/260608_oracle_stability_gap/` | ✅ Done — 31–35 backlog implemented (v0.1.16-preview); 05/07/08·profile-copy·ZIP deferred by decision; live B4/B5 = QA. |
-| cli-jaw web-ai parity mirror | `_plan/260621_cli_jaw_webai_parity/` | External cli-jaw mirror plan; verify closeout in cli-jaw before moving from agbrowse `_plan`. |
-| Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 11/12 cycles DONE; Cycle 12 GPT-Pro verdict = CONCERNS; remediation in 260627. |
-| GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 Active — 5 PABCD cycles patching GPT-Pro's 4 blockers + structural wiring + hygiene. |
-| Strict migration | `_plan/strict-migration/` | Deferred migration planning and arbitration notes. |
+| cli-jaw web-ai parity mirror | `_plan/260621_cli_jaw_webai_parity/` | 📄 문서 전용 미러. closeout 권한이 cli-jaw 쪽에 있어 여기서 닫지 않는다. |
+| Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 🔧 Cycle 1–12 실행 완료, Cycle 12 verdict = CONCERNS. 후속은 `260627_gptpro_remediation`. |
+| GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 5 PABCD 사이클 실행 완료. R2 verdict의 CONCERNS 5 / FAIL 2 미해소. |
+| Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 Phase 10/20/30/40 구현 완료. 04·05·06·09는 PLANNED 잔존. |
+| devlog 정리 | `_plan/260731_devlog_reorg/` | 🔧 진행 중 — 이 표를 만든 유닛. |
+| Strict migration | `_plan/strict-migration/` | ⏸ Deferred. 실행 소스는 여전히 `.mjs`, TS는 declaration만. |
 
-Other grouped planning folders under `_plan/` remain until they receive a
-separate closeout audit.
+`_plan/`에 있는 폴더는 위가 전부다. 유닛을 닫으면 같은 커밋에서 `_fin/`으로
+옮기고 이 표에서 지운다. 일부 오래된 유닛은 2자리 접두사(`00_`, `10_`)를 쓰는
+레거시 번호 체계이며, 새 유닛은 3자리(`000_`, `010_`)를 쓴다.
 
 ## Recent `_fin/` closeouts
 
 | Topic | Folder | Closeout signal |
 | --- | --- | --- |
 | PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정(`76e4793`)과 #88 정체 경계 표본·예산 계약 확정. #88 방어 구현과 devlog 정리는 후속 유닛으로 분할 — `003_audit_synthesis.md` 참조. |
+| QA round 6 | `_fin/260726_qa_round6/` | 13개 work-phase closeout — `090_closeout.md`. |
+| Oracle chase 4 | `_fin/260726_oracle_chase4/` | 상류 델타 재검증 종료. |
+| agbrowse QA | `_fin/260726_agbrowse_qa/` | CLI QA 라운드 종료. |
+| Oracle chase 3 | `_fin/260725_oracle_chase3/` | 종료. |
+| Oracle chase 2 | `_fin/260724_oracle_chase2/` | 종료. |
+| PR #86 repomix dev rebuild | `_fin/260723_pr86_repomix_dev_rebuild/` | dev 재구축 후 closeout. |
+| Oracle chase | `_fin/260712_oracle_chase/` | 종료. |
+| Upload reliability | `_fin/260711_upload_reliability/` | `900_closeout.md` — 전체 스위트 179파일 1946건 0 failure로 기준 1 재검증. |
+| Release 0.1.17 | `_fin/260711_release_017/` | `900_closeout.md` — workflow success + GitHub/npm 게시 확인. fresh install만 미확인으로 기록. |
+| GPT-5.6 UI update | `_fin/260710_gpt56_update/` | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116`. |
+| Competitive research | `_fin/260628_competitive_research/` | `900_closeout.md` — research superseded by `260705_gapclose`, 미해결 질문 5개 disposition 기록. |
+| Search skill | `_fin/260627_search_skill/` | `900_closeout.md` — 5개 계획 사이클의 산출물이 모두 배포됨을 사후 대조. |
+| Streaming recovery false-complete | `_fin/260625_webai_streaming_recovery_false_complete/` | `30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE. |
+| Oracle stability gap analysis | `_fin/260608_oracle_stability_gap/` | 31–35 backlog implemented (v0.1.16-preview); 05/07/08·profile-copy·ZIP deferred by decision. |
+| Timeout adaptive scaling | `_fin/260619_timeout_adaptive_scaling/` | 종료. |
+| Watch notification gaps | `_fin/260619_watch_notification_gaps/` | 종료. |
 | Post-MVP competitive gap closeout | `_fin/260506_post_mvp_gap_closeout/` | Historical competitive-gap plan set closed; any unshipped capabilities must be re-opened as fresh focused plans. |
 | UX blocker fixes | `_fin/260507_ux-blockers-p0p1/` | README maps fixes to implemented commits `ccb7051`, `1a4743b`, and `f7b0e97`. |
 | Oracle parity feature batch | `_fin/260508_oracle_parity/` | Implemented by `fe359a9` and follow-up commits. |
@@ -100,7 +118,7 @@ devlog root instead of `_fin/mvp/`:
 
 | # | File | Status |
 | --- | --- | --- |
-| 21 | `21_gpt56_ui_update.md` | ✅ Done — GPT-5.6 UI 전면 개편 대응. 계약 재설계·Work send v1·timeout 3분리·141/1261 green. Plan: `_plan/260710_gpt56_update/`. |
+| 21 | `21_gpt56_ui_update.md` | ✅ Done — GPT-5.6 UI 전면 개편 대응. 계약 재설계·Work send v1·timeout 3분리·141/1261 green. Plan: `_fin/260710_gpt56_update/`. |
 
 ## Forbidden
 
