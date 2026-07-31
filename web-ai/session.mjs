@@ -55,7 +55,17 @@ import { isDurableConversationUrl } from './conversation-url.mjs';
 /** @type {Map<string, WebAiBaseline>} */
 const baselines = new Map();
 let loaded = false;
-const STORE_PATH = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-baselines.json');
+/**
+ * Resolved per call, not at import. A frozen constant captured whatever
+ * `BROWSER_AGENT_HOME` held at first import, so a test pointing the variable at
+ * a temp directory in its body still read and wrote baselines under the
+ * developer's real `~/.browser-agent` — static imports run before test bodies.
+ *
+ * @returns {string}
+ */
+function storePath() {
+    return join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-baselines.json');
+}
 
 /**
  * @param {WebAiEnvelope} envelope
@@ -156,9 +166,10 @@ export function clearBaseline(vendor, url) {
 function loadStore() {
     if (loaded) return;
     loaded = true;
-    if (!existsSync(STORE_PATH)) return;
+    const path = storePath();
+    if (!existsSync(path)) return;
     try {
-        const parsed = JSON.parse(readFileSync(STORE_PATH, 'utf8'));
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
         for (const baseline of parsed.baselines || []) {
             if (baseline.vendor && baseline.url) baselines.set(makeBaselineKey(baseline.vendor, baseline.url), baseline);
         }
@@ -168,8 +179,9 @@ function loadStore() {
 }
 
 function saveStore() {
-    mkdirSync(dirname(STORE_PATH), { recursive: true });
-    writeFileSync(STORE_PATH, `${JSON.stringify({ baselines: Array.from(baselines.values()) }, null, 2)}\n`);
+    const path = storePath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ baselines: Array.from(baselines.values()) }, null, 2)}\n`);
 }
 
 // ─── Phase 1 PR1: session API on top of session-store.mjs ─────────────────

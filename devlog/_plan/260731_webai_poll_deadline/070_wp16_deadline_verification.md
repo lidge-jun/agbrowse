@@ -359,9 +359,13 @@ Y8 하네스는 한 번 고쳤다. 처음에는 첫 read만 막았는데 결과�
 race에서 진다. late-completion이 아니라 **early-completion**이었다. 첫 read가
 실제로 호출될 때 기준점을 잡도록 바꿨다.
 
-**2. `innerText`가 게이트 밖이었다.** `evaluate`만 붙잡고 텍스트 폴백은
-열어뒀다. 루프가 그 경로로 답을 읽으면 기다리지 않고 끝난다. 같은 게이트에
-넣었다.
+**2. `innerText`는 원인이 아니었다.** 처음에 텍스트 폴백이 게이트 밖이라
+루프가 그 경로로 일찍 끝난다고 적고 같이 고쳤다. **틀렸다.** 감사가
+반증했다 — `runPollWebAi`는 `page.innerText`를 부르지 않는다. 유일한 직접
+호출은 전송 시점 baseline(`chatgpt.mjs:375`)이고, Y8의 locator는 `all()`이 빈
+배열이라 locator 쪽 `innerText`에도 닿지 않는다. 즉시 반환하는 `innerText`로
+되돌린 하네스도 `answer: null`을 그대로 냈다. 게이트에 넣은 것 자체는 무해하나
+flake의 원인이 아니었으므로 근거에서 뺀다. **1번만이 실제 원인이다.**
 
 고친 뒤 Y8은 단독 8/8, 파일 전체 3회 59/59로 통과한다.
 
@@ -397,6 +401,54 @@ vitest 두 프로세스가 동시에 돌던 때였다. 이 파일은 `BROWSER_AG
 임시 디렉터리로 돌리지만, 락 경합 자체는 `withStoreLock`의 200회 blocking
 retry가 그대로 노출된 것이다. c7이 unmet으로 남겨둔 **G1이 테스트 환경에서
 실제로 관측된 사례**다. 별도 유닛의 근거로 남긴다.
+
+## WP19: 감사 FAIL과 그 교정
+
+`6a5a2b2`를 sol high 리뷰어에 독립 감사시켰고 **FAIL**을 받았다. blocker 1건과
+should-fix 4건. 전부 소스에서 재확인했다.
+
+### blocker — finalizer의 진입 검사가 이후 단계를 막지 않는다
+
+`finalizeProviderTab`은 진입에서 한 번만 `stillActive`를 봤다. 그 아래의 각
+단계는 **자기 안에서 데드라인이 지날 수 있다.** 세션 쓰기는 store 락을 잡고
+(`session-store.mjs:136-164`, 200회×25ms retry), archive는 provider UI를
+클릭한다. 감사가 `stillActive`가 한 번만 true인 하네스로 재현했다.
+
+```json
+{"result":{"archiveSkippedReason":"poll-deadline-exceeded"},
+ "status":"complete","answer":"late answer","transcriptExists":true}
+```
+
+데드라인이 지났다고 **보고하면서 이미 완료된 답과 transcript를 써버린** 상태다.
+
+단계마다 재검사하도록 고쳤다(`expired()`). transcript 저장 전, archive **호출
+전**(기존 검사는 클릭이 끝난 뒤였다), pooling 전.
+
+테스트 3개를 `web-ai-tab-finalizer.test.mjs`에 추가했다. 경계마다 만료시키고
+그 이후 아무 일도 없었는지 본다. 세 번째는 짝 assertion이다 — 항상 거부하는
+게이트도 앞의 둘을 통과시키므로 정상 경로가 여전히 finalize되는지 확인한다.
+
+mutation RED: 재검사 두 개를 되돌리면 `expected [{kind:'transcript',…}] to
+deeply equal []`와 `expected "spy" to not be called at all, but actually been
+called 1 times`.
+
+### should-fix — 임시 home이 static import 이후에 설정된다
+
+`session-artifacts.mjs:8`과 `session.mjs:58`이 `BROWSER_AGENT_HOME`을 **import
+시점 상수**로 고정했다. 테스트 본문이 임시 디렉터리를 가리켜도 static import가
+먼저 실행되므로 baseline과 artifact는 **개발자의 실제 `~/.browser-agent`에**
+쓰이고 있었다. 둘 다 호출 시점 해석 함수로 바꿨다.
+
+### 남긴 것
+
+- copy 버튼 클릭(`copy-markdown.mjs:139-147`)과 CDP 세션 생성이 게이트 밖이다.
+  durable write는 막혀 있으나 provider UI 조작과 세션 생성 자체는 아니다.
+- 저장된 데드라인 상속 시 store 읽기 시간이 두 번 차감된다(`chatgpt.mjs:710`
+  vs `:723`). `poll`만 해당하고 `watch`/`resume`는 명시적 timeout을 넘긴다.
+- Y8은 문서가 주장한 "side-effect ledger"가 아니다. trace/image/file/
+  diagnostics fence를 지워도 green이다.
+
+세 항목 모두 이번 사이클에서 닫지 않는다. 별도 유닛의 근거로 남긴다.
 
 ## 남은 것
 

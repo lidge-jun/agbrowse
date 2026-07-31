@@ -5,7 +5,17 @@ import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
 
-const BROWSER_AGENT_HOME = process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
+/**
+ * Resolved per call, not at import. A frozen constant took whatever
+ * `BROWSER_AGENT_HOME` held when the module was first imported, so a test that
+ * points the variable at a temp directory in its body still wrote artifacts
+ * under the developer's real `~/.browser-agent` — static imports run first.
+ *
+ * @returns {string}
+ */
+function browserAgentHome() {
+    return process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent');
+}
 
 /**
  * @typedef {Object} ArtifactDescriptor
@@ -47,7 +57,7 @@ function sanitizeSegment(segment) {
  */
 export function resolveArtifactsDir(sessionId) {
     const safe = sanitizeSegment(sessionId);
-    return join(BROWSER_AGENT_HOME, 'sessions', safe, 'artifacts');
+    return join(browserAgentHome(), 'sessions', safe, 'artifacts');
 }
 
 /**

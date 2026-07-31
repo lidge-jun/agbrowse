@@ -63,10 +63,14 @@ export async function finalizeProviderTab(deps, {
     if (!session?.sessionId || !session.targetId || !FINALIZABLE_STATUSES.has(status)) {
         return { finalized: false, reason: 'not-finalizable' };
     }
-    // Checked HERE, immediately before the write, not only at the call site.
-    // `page.url()` and the caller's own awaits sit between the two, so an entry
-    // check alone lets a run that lost its deadline record a completed answer.
-    if (stillActive?.() === false) {
+    // Checked before EVERY side-effect phase, not once at entry. Each phase can
+    // block long enough for the deadline to pass inside it: the session write
+    // takes the store lock, which retries up to 200 times at 25ms
+    // (`session-store.mjs:136-164`), and the archive drives the provider UI. An
+    // entry check alone let a losing run write the answer, persist a transcript
+    // and click Archive after its caller was already handed `timeout`.
+    const expired = () => stillActive?.() === false;
+    if (expired()) {
         return { finalized: false, reason: 'poll-deadline-exceeded' };
     }
     const conversationUrl = page?.url?.() || session.conversationUrl || session.originalUrl || undefined;
@@ -80,7 +84,9 @@ export async function finalizeProviderTab(deps, {
     });
     /** @type {{ required: boolean, ok: boolean, descriptor?: unknown, stage?: string, error?: string }} */
     let artifactStatus = { required: false, ok: true };
-    if (answerText) {
+    // The store lock sits between the write above and here. Re-checked so a
+    // transcript file is not created for a run that lost while it waited.
+    if (answerText && !expired()) {
         const saved = trySaveTranscript(session.sessionId, artifactText || answerText);
         artifactStatus = saved.ok
             ? { required: true, ok: true, descriptor: saved.descriptor }
@@ -102,19 +108,25 @@ export async function finalizeProviderTab(deps, {
 
     if (shouldArchive && page && conversationUrl) {
         try {
+            // Checked BEFORE the archive, not only after it. `archiveConversation`
+            // clicks through the provider UI, so an after-only check meant the
+            // clicks had already happened on a conversation nobody was waiting on.
+            if (expired()) {
+                return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
+            }
             const archiveResult = await archiveConversation(page, { conversationUrl });
             // Re-check AFTER the await. A caller bounded by a deadline can have
             // returned while the archive was in flight; writing then would move
             // a session nobody is waiting on. Checking only at entry is not
             // enough for work that spans an await.
-            if (archiveResult.ok && stillActive?.() !== false) {
+            if (archiveResult.ok && !expired()) {
                 updateSession(session.sessionId, { archived: true });
                 return { finalized: true, pool: null, archived: true };
             }
         } catch { /* archive is best-effort, fall through to pool */ }
     }
 
-    if (stillActive?.() === false) {
+    if (expired()) {
         return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
     }
 
