@@ -214,14 +214,14 @@
       "id": "c7",
       "scenario": "#88 DOM deadline 유닛: 021이 유닛 A에 배정한 경계(read/activity/finished/ordering/recovery/copy)가 예산 계약 아래 데드라인을 인지하고, fail-open B03·B06이 fail-closed로 교정된다",
       "expectedEvidence": "경계 ID별 테스트 출력 + timeout 사유 문자열. 배정 경계 전부가 대상이며 일부만으로는 met 아님 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-      "capturedEvidence": "",
+      "capturedEvidence": "미충족 — 로드맵만 완료됐다. 이 criterion은 해당 유닛의 구현 work-phase에 연결되며, 그 work-phase는 아직 시작되지 않았다. 로드맵: devlog/_plan/260731_webai_poll_deadline/ (000_plan.md + 010_wp1_budget_model.md, 리뷰어 PASS). 다음 단계는 두 유닛 공동 WP0 — probe P1~P9를 실행해 in-process/worker/subprocess 중 하나를 선택하는 것.",
       "status": "open"
     },
     {
       "id": "c8",
       "scenario": "artifact/finalizer 유닛: 021이 유닛 B에 배정한 경계(이미지/파일 다운로드, 탭 lease, CDP, diagnostics, sync-IO/lock)가 예산 계약 아래 상한을 갖고, fail-open B23·B24·B25·B36이 fail-closed로 교정된다",
       "expectedEvidence": "경계 ID별 테스트 출력 또는 bounded 근거. 배정 경계 전부가 대상 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-      "capturedEvidence": "",
+      "capturedEvidence": "미충족 — 로드맵만 완료됐다. 이 criterion은 해당 유닛의 구현 work-phase에 연결되며, 그 work-phase는 아직 시작되지 않았다. 로드맵: devlog/_plan/260731_webai_artifact_finalizer/000_plan.md (리뷰어 PASS). 다음 단계는 두 유닛 공동 WP0 — probe P1~P9를 실행해 in-process/worker/subprocess 중 하나를 선택하는 것.",
       "status": "open"
     }
   ],
