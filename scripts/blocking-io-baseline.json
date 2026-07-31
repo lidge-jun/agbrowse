@@ -108,7 +108,7 @@
         "web-ai/chatgpt.mjs": {
             "sync": 0,
             "cdp": 1,
-            "nonLiteralSend": 0
+            "nonLiteralSend": 1
         },
         "web-ai/churn-log.mjs": {
             "sync": 10,
@@ -128,7 +128,7 @@
         "web-ai/context-pack/repomix-runner.mjs": {
             "sync": 0,
             "cdp": 0,
-            "nonLiteralSend": 1
+            "nonLiteralSend": 3
         },
         "web-ai/context-pack/transformer.mjs": {
             "sync": 0,
@@ -143,7 +143,7 @@
         "web-ai/gemini-live.mjs": {
             "sync": 2,
             "cdp": 0,
-            "nonLiteralSend": 0
+            "nonLiteralSend": 1
         },
         "web-ai/session-artifacts.mjs": {
             "sync": 11,
@@ -151,7 +151,7 @@
             "nonLiteralSend": 0
         },
         "web-ai/session-store.mjs": {
-            "sync": 32,
+            "sync": 33,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -172,7 +172,7 @@
         }
     },
     "totals": {
-        "sync": 285,
+        "sync": 286,
         "cdp": 54
     }
 }

@@ -14,9 +14,20 @@
  *
  * What this does NOT catch, stated plainly:
  *   - new code calling an EXISTING blocking wrapper (primitive totals unchanged)
- *   - syntax forms nobody has thought of yet; two were found during review
- * So this closes enumerated ingress forms, not "all ingress".
+ *   - identifiers hidden from a text scan: `readFile\u0053ync(p)` and
+ *     `disk['readFile' + 'Sync'](p)` both run and both read as ordinary text.
+ *     Closing those needs a parser, not another pattern.
+ *   - syntax forms nobody has thought of yet; review found three rounds of them
+ *
+ * So this closes ENUMERATED ingress forms. It raises the cost of adding
+ * blocking IO accidentally, which is the realistic threat here — it is not a
+ * defence against someone deliberately hiding one.
  */
+
+// Counts are of REFERENCES, not calls. A comment mentioning `readFileSync` or a
+// new function named `normalizeSync` will therefore trip the ratchet. That is a
+// deliberate false positive: the alternative missed real ingress, and the fix
+// (rename, or update the manifest in a reviewed commit) is cheap.
 
 /**
  * Any REFERENCE to a `Sync`-suffixed identifier, not just a call.
@@ -28,12 +39,19 @@
  * cannot be dodged by changing call syntax.
  */
 const SYNC_CALL = /\b[A-Za-z_$][A-Za-z0-9_$]*Sync\b/g;
-/** Event-loop blockers that do not end in `Sync`. */
-const OTHER_BLOCKING = /\bAtomics\.wait\s*\(/g;
+/**
+ * Event-loop blockers that do not end in `Sync`. Matched as a REFERENCE for the
+ * same reason as above: `Atomics.wait?.(…)` and `Atomics['wait'](…)` both dodge
+ * a call-shaped pattern.
+ */
+const OTHER_BLOCKING = /\bAtomics\s*(?:\.\s*wait\b|\[\s*['"`]wait['"`]\s*\])/g;
 /** A CDP command: `.send('Domain.method'` with a literal. */
 const CDP_LITERAL_SEND = /\.send\(\s*['"`][A-Z][A-Za-z]*\.[A-Za-z]/g;
-/** Any `.send(` at all, so non-literal ones can be told apart. */
-const ANY_SEND = /\.send\s*\(/g;
+/**
+ * Any `send` MEMBER reference, so non-literal uses can be told apart. Counting
+ * `.send(` alone missed `.send.call(…)` and `Reflect.apply(cdp.send, …)`.
+ */
+const ANY_SEND = /\.\s*send\b/g;
 
 /** `import { readFileSync as read }` / `export { … as … } from 'node:…'`. */
 const NODE_BINDING = /\b(?:import|export)\s*\{([^}]*)\}\s*from\s*['"]node:[^'"]+['"]/g;
@@ -181,8 +199,13 @@ export function evaluateBlockingIoGate({ sources, baseline }) {
 const SCANNED_DIRS = ['web-ai', 'skills/browser'];
 /** `"type": "module"` means a `.js` file here is runtime code too. */
 const SCANNED_EXTENSIONS = ['.mjs', '.js', '.cjs'];
-/** Browser-injected bundles: shipped as-is, never executed in the Node runtime. */
-const VENDOR_PATHS = ['skills/browser/adaptive-fetch/vendor/'];
+/**
+ * Browser-injected bundles: shipped as-is, never executed in the Node runtime.
+ *
+ * Listed as exact files, not a directory prefix. Excluding `vendor/` wholesale
+ * would make it the easiest place to hide a runtime module.
+ */
+const EXCLUDED_FILES = new Set(['skills/browser/adaptive-fetch/vendor/defuddle.iife.min.js']);
 
 /**
  * Read every runtime source as `relativePath → text`.
@@ -206,14 +229,14 @@ export async function readRuntimeSources(repoRoot) {
             const rel = `${dir}/${entry.name}`;
             // A symlink is neither followed nor ignored: following one needs
             // realpath containment and cycle handling, and ignoring it would
-            // hide a whole subtree. There are none today, so refuse instead.
+            // hide a whole subtree. There are none today, so refuse outright
+            // rather than relying on a synthetic source to trip another rule.
             if (entry.isSymbolicLink()) {
-                sources.set(rel, '/* gate: symlink */ fs[unscannable](0);');
-                continue;
+                throw new Error(`blocking-io gate: symlink in runtime tree is not scannable: ${rel}`);
             }
             if (entry.isDirectory()) walk(rel);
             else if (SCANNED_EXTENSIONS.some(ext => entry.name.endsWith(ext))
-                && !VENDOR_PATHS.some(prefix => rel.startsWith(prefix))) {
+                && !EXCLUDED_FILES.has(rel)) {
                 sources.set(rel, fs.readFileSync(path.join(repoRoot, rel), 'utf8'));
             }
         }

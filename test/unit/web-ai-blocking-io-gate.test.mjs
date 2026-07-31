@@ -197,4 +197,53 @@ describe('blocking IO ratchet gate (#88 G3)', () => {
         // Whatever exists today must still satisfy the manifest.
         await expect(runBlockingIoGate(repoRoot)).resolves.toMatchObject({ ok: true });
     });
+
+    it('W12: Atomics and CDP send resist the same call-shape tricks', () => {
+        // `*Sync` moved to reference counting but these two were still matched
+        // by call shape, so the identical dodges worked on them.
+        const variants = [
+            "Atomics['wait'](view, 0, 0, 25);",
+            'Atomics.wait?.(view, 0, 0, 25);',
+            "cdp.send.call(cdp, 'Runtime.evaluate', {});",
+            "Reflect.apply(cdp.send, cdp, ['Runtime.evaluate', {}]);",
+        ];
+        for (const body of variants) {
+            const result = evaluate({ 'web-ai/a.mjs': body }, { files: {}, totals: { sync: 0, cdp: 0 } });
+            expect(result.ok, `should have been caught: ${body}`).toBe(false);
+        }
+    });
+});
+
+/**
+ * The walker is exercised against a real temporary tree. The assertions above
+ * can only observe what happens to exist in this repo, so they cannot show that
+ * a `.js` file is picked up or that a symlink is refused — there are none.
+ */
+describe('blocking IO gate source walker', () => {
+    it('W11b: reads .js/.cjs, excludes only the vendor bundle, refuses symlinks', async () => {
+        const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const root = mkdtempSync(path.join(tmpdir(), 'agbrowse-gate-walk-'));
+        try {
+            mkdirSync(path.join(root, 'web-ai/nested'), { recursive: true });
+            mkdirSync(path.join(root, 'skills/browser/adaptive-fetch/vendor'), { recursive: true });
+            writeFileSync(path.join(root, 'web-ai/a.mjs'), 'export const a = 1;');
+            writeFileSync(path.join(root, 'web-ai/nested/b.js'), 'export const b = 2;');
+            writeFileSync(path.join(root, 'web-ai/c.cjs'), 'module.exports = 3;');
+            writeFileSync(path.join(root, 'skills/browser/adaptive-fetch/vendor/defuddle.iife.min.js'), 'readFileSync(x);');
+            // A runtime module parked in vendor/ must NOT inherit the bundle's exemption.
+            writeFileSync(path.join(root, 'skills/browser/adaptive-fetch/vendor/runtime.mjs'), 'readFileSync(x);');
+
+            const scanned = [...(await readRuntimeSources(root)).keys()];
+            expect(scanned).toContain('web-ai/nested/b.js');
+            expect(scanned).toContain('web-ai/c.cjs');
+            expect(scanned).toContain('skills/browser/adaptive-fetch/vendor/runtime.mjs');
+            expect(scanned).not.toContain('skills/browser/adaptive-fetch/vendor/defuddle.iife.min.js');
+
+            symlinkSync(path.join(root, 'web-ai/nested'), path.join(root, 'web-ai/linked'));
+            await expect(readRuntimeSources(root)).rejects.toThrow(/symlink/);
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
 });
