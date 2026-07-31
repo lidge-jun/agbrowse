@@ -5,7 +5,8 @@ import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } fro
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
 import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitEnv, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
 import { probeTabAlive } from '../../skills/browser/tab-manager.mjs';
-import { recoverSessionTab, verifySessionTab } from '../../web-ai/tab-recovery.mjs';
+import { recoverSessionTab, resolveSessionPage, verifySessionTab, withSessionPage } from '../../web-ai/tab-recovery.mjs';
+import { createSession, getSession } from '../../web-ai/session.mjs';
 import { TabMonitor } from '../../skills/browser/tab-monitor.mjs';
 
 /**
@@ -905,5 +906,89 @@ describe('unreadable liveness does not discard pooled leases or rebind sessions 
             },
         );
         expect(result).toMatchObject({ recovered: false, strategy: 'unverified', liveness: 'unknown' });
+    });
+});
+
+/**
+ * The public contract for an unverifiable tab, and the callers that consume it.
+ *
+ * `verifySessionTab` returning `liveness: 'unknown'` is only half the fix — every
+ * guard above it could be deleted with the suite still green. These pin the
+ * observable envelope instead of the internal verdict.
+ */
+describe('unverified liveness reaches callers as its own outcome (B36)', () => {
+    const originalFetch = globalThis.fetch;
+
+    function makeSessionRecord(targetId = 'target-live') {
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId,
+                conversationUrl: 'https://chatgpt.com/c/live',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('U14: resolveSessionPage reports unverified rather than a mismatch', async () => {
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        const session = makeSessionRecord();
+
+        const resolved = await resolveSessionPage(
+            { getPort: () => 9222 },
+            session.sessionId,
+            { allowNavigate: true },
+        );
+
+        // `mismatch: true` alone would send every caller down the "wrong tab"
+        // path; the discriminator is what keeps them out of it.
+        expect(resolved).toMatchObject({
+            strategy: 'unverified',
+            liveness: 'unknown',
+            recovered: false,
+            page: null,
+        });
+    });
+
+    it('U15: withSessionPage raises a retryable typed error, not a generic mismatch', async () => {
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        const session = makeSessionRecord();
+
+        await expect(withSessionPage(
+            { getPort: () => 9222 },
+            session.sessionId,
+            async () => 'never runs',
+        )).rejects.toMatchObject({
+            errorCode: 'cdp.unreachable',
+            retryHint: 'retry',
+            evidence: expect.objectContaining({ liveness: 'unknown' }),
+        });
+    });
+
+    it('U12b: a confirmed-gone tab still takes the recovery path', async () => {
+        // Over-applying the guard would strand every genuinely closed tab.
+        globalThis.fetch = async () => new Response(JSON.stringify([]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        const session = makeSessionRecord('target-closed');
+
+        // Liveness was established as gone, so recovery may open a replacement.
+        // The unverified short-circuit returns cleanly BEFORE tab creation, so
+        // failing inside `createTab` is itself the evidence we got past it.
+        const outcome = await recoverSessionTab(
+            { getPort: () => 9222 },
+            /** @type {any} */ (getSession(session.sessionId)),
+        ).then(result => result.strategy, err => `threw:${err?.message || 'unknown'}`);
+
+        expect(outcome).not.toBe('unverified');
+        // It got as far as dialling CDP to make the replacement tab, which is
+        // strictly past the short-circuit.
+        expect(String(outcome)).toMatch(/connectOverCDP|CDP session/);
     });
 });
