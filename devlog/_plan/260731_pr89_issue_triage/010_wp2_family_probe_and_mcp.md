@@ -157,7 +157,7 @@ effort 검증이 건너뛰어진다.
 | model + effort | 기존과 동일 | — |
 | family만 | 서브메뉴 있으면 `ok` | family 축만 확인하면 충분 |
 | family + effort, model 없음 | 최대 `warn` | effort는 현재 tier 기준인데 probe가 tier를 확정하지 못한다. Pro처럼 effort 컨트롤이 없는 tier도 있다(`web-ai/chatgpt-model.mjs:492-496`) |
-| effort만, model 없음 | 최대 `warn` | 같은 이유 |
+| effort만, model·family 없음 | `fail` | 위 guard가 그대로 걸러낸다. 기존 동작이며 #87 범위 밖이다 — CLI가 `rejectFutureScope`에서 이미 처리한다 |
 | model + family (+effort) | 세 축 모두 확인 | — |
 | 미지원 family alias | `fail` | 메뉴 열기 전 |
 

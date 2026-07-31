@@ -1,14 +1,13 @@
 # 040 — WP5: 게이트 클로즈아웃과 인계
 
-선행: WP2, WP3, **WP3.x 전부**(#88 방어 구현), WP4.
+선행: WP2, WP3, WP4.
 
-WP3.x가 하나라도 남아 있으면 이 work-phase는 시작하지 않는다. #88이 미구현인
-상태로 유닛을 `_fin`으로 옮기는 것은 목표 하향이다(LOOP-CONTINUE-01).
+WP3가 두 후속 유닛의 로드맵을 확정하고 모든 경계를 배정한 뒤에 시작한다.
+배정되지 않은 도달 가능 경계가 남아 있으면 시작하지 않는다.
 
 ## 게이트
 
-아래는 WP2 기준 목록이다. WP3.x가 확정되면 각 사이클의 영향권을 여기에 합친다.
-각 WP3.x는 자체 게이트를 갖고, 이 절은 그 합집합을 마지막으로 한 번 더 돌린다.
+이 유닛에서 코드를 바꾸는 것은 WP2뿐이다. WP3는 문서만 만든다.
 
 순서대로 실행하고 각 출력을 이 문서에 기록한다.
 
@@ -38,9 +37,7 @@ npm run gate:all
 분기다. `rg -l "web_ai_submit_prompt" test/`와
 `rg -l "chatGptModelCapabilityProbe" test/`로 영향권을 골랐다.
 
-WP3는 문서만 만들므로 게이트 대상이 아니다. WP3.x는 각각 `web-ai/chatgpt.mjs`
-폴링 경로와 그 위임 모듈을 바꾸므로, 확정 시점에 해당 스위트를 이 목록에
-추가한다.
+WP3는 문서만 만들므로 게이트 대상이 아니다. 후속 두 유닛은 각자의 게이트를 갖는다.
 
 `typecheck:checkjs` / `typecheck:checkjs-dom`은 `dev`에 선행 오류가 있으므로
 파일별 오류 수를 변경 전후로 비교한다. 새 오류를 도입하지 않았음이 기준이지
@@ -71,7 +68,7 @@ MODIFY `devlog/00_index.md` — WP4가 만든 `_plan` 표에서 이 유닛 행�
 ```diff
  | Topic | Path | Closeout signal |
  | --- | --- | --- |
-+| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | `040_wp5_closeout.md`에 게이트 출력과 인계 기록. #87 probe/MCP 갭과 #88 DOM read deadline 방어를 dev에 반영. |
++| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정 + devlog 정리 + #88 경계 인벤토리. #88 방어는 후속 두 유닛으로 분할(`003_audit_synthesis.md`). |
  | QA round 6 | `_fin/260726_qa_round6/` | ... |
 ```
 
@@ -82,8 +79,7 @@ work-phase마다 하나씩, 로컬만.
 ```
 WP1  docs(devlog): PR #89 / 이슈 #87·#88 처리 로드맵 유닛
 WP2  fix(web-ai): make the model probe and MCP honor the requested chat family
-WP3   docs(devlog): map every stall boundary in the ChatGPT poll path
-WP3.x fix(web-ai): <경계별 방어> — WP3의 7절 분할안대로 사이클마다 하나씩
+WP3  docs(devlog): map every stall boundary and route it to a successor unit
 WP4  docs(devlog): sync the index with the real _plan/_fin layout
 WP5  docs(devlog): close out the PR #89 / issue triage unit
 ```
@@ -98,16 +94,27 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 이 유닛이 끝나도 원격에는 다음이 남는다. 모두 사용자 결정이 필요하다.
 
 1. **PR #89 처분.** base가 `main`이라 머지해도 `dev`에 반영되지 않는다. dev에는
-   #87 배선이 이미 있고, #88 방어는 이 유닛이 dev 구조에 맞춰 새로 구현했다.
+   #87 배선이 이미 있고, #88 방어는 후속 두 유닛에서 구현한다.
    선택지: (a) 기여를 인정하며 "dev에서 다르게 반영됨"으로 닫기, (b) `main`에
    머지한 뒤 dev와의 정합을 별도로 처리, (c) 기여자에게 dev 대상 재작성을 요청.
-2. **이슈 #87 / #88 클로즈.** 둘 다 dev에 수정이 들어갔지만 릴리스 전이다.
-   클로즈 시점을 릴리스에 맞출지 지금 닫을지는 사용자 판단이다. WP3 인벤토리가
-   범위 밖으로 판정한 경계가 있다면 그 목록을 이슈에 남길지도 함께 결정한다.
+2. **이슈 #87 클로즈.** dev에 수정이 들어갔지만 릴리스 전이다. 클로즈 시점은
+   사용자 판단이다.
+   **이슈 #88은 열어 둔다** — 후속 두 유닛이 남아 있다. 인벤토리 결과를 이슈에
+   코멘트로 남길지도 사용자가 정한다(원격 쓰기라 이 유닛에서 하지 않는다).
 3. **dev↔main 정합.** `main`에 있고 `dev`에 없는 6커밋(v0.1.18/v0.1.19 릴리스,
    #82 fix, postinstall star prompt)은 이 유닛의 범위 밖이다.
 
 ## 남긴 후속
+
+**후속 유닛 두 개가 이 goal 아래 남는다** — WP3의 7절이 그 로드맵을 쓴다.
+
+| 유닛 | 범위 |
+| --- | --- |
+| `#88 DOM deadline 계약` | assistant DOM read · activity · finished · ordering · recovery |
+| `artifact/finalizer hardening` | 이미지·파일 다운로드, 탭 lease, CDP 경계 |
+
+이 유닛을 `_fin`으로 옮기는 것은 "#88 완료"가 아니라 "이 유닛 범위 완료"를
+뜻한다. 두 후속 유닛이 끝나기 전에는 #88이 닫히지 않는다.
 
 `readActivityState`의 **catch 경로**가 `{ strength: 'none' }`을 돌려준다
 (`web-ai/chatgpt.mjs:1049`). 폴링 루프는 `'none'`을 quiet으로 읽어 완료 분기로
@@ -117,7 +124,7 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 WP3 인벤토리의 3절(sentinel 소비자)이 이 항목을 판정하고, 같은 유닛에서 다룰지
 분리할지 그때 결정한다 — 지금 "처리됨"으로도 "제외"로도 적지 않는다.
 
-`web-ai/chatgpt-response-observer.mjs:81`의 `observeAssistantResponse`는 이미
+`web-ai/chatgpt-response-observer.mjs:78`의 `observeAssistantResponse`는 이미
 `timeoutMs` 예산을 받는다(`web-ai/chatgpt.mjs:626`).
 
 ## 실패한 것 / 확인하지 못한 것 (LOOP-PESSIMIST-01)

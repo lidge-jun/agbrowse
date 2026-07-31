@@ -80,3 +80,63 @@ WP2(#87)는 영향을 받지 않는다. 리뷰어의 probe 지적(R3-B6)은 계�
 이 방향이 틀렸다는 것을 보여줄 증거: WP3 인벤토리가 `pollWebAi` 밖에서도
 무방비 경로를 다수 찾아낸다면, 문제는 `pollWebAi`가 아니라 web-ai 전반의 페이지
 접근 규약이고, 그때는 유닛 자체를 다시 잡아야 한다.
+
+---
+
+## 2차 감사 3라운드 (새 리뷰어) — 누적 6라운드
+
+WP3 축소 후 새 리뷰어(REVIEW-DECORRELATE-01)에게 3라운드를 더 받았고 전부
+FAIL이었다. 라운드마다 계획은 나아졌지만 같은 자리에서 걸렸다.
+
+| 라운드 | 핵심 지적 |
+| --- | --- |
+| R1 | WP5가 #88 미구현 상태로 유닛을 닫는다(목표 하향), 전이적 위임(copy resolver→self-heal, finalize→archive) 누락, upload_reliability 선택적 인용 |
+| R2 | `await`만 추적하면 Promise origin(`observeAssistantResponse`) 누락, 조건부 이관인데 명령은 무조건 이동 |
+| R3 | 4종 규칙이 재귀 단계에 미적용, "순수 IO" 말단 분류가 무제한 CDP를 숨김, 범위 밖 예외로 여전히 하향 가능 |
+
+### 위 예측이 적중했다
+
+바로 위 문단에 적어둔 반증 조건 — "`pollWebAi` 밖에서도 무방비 경로를 다수
+찾아낸다면 유닛을 다시 잡아야 한다" — 이 그대로 실현됐다.
+
+확인된 무방비 경로:
+
+| 경로 | 근거 |
+| --- | --- |
+| `collectImages` → `Network.getCookies` | `chatgpt-images.mjs:226` — CDP `send`, 타임아웃 없음 |
+| 이미지 다운로드 `fetch` + `arrayBuffer()` | `chatgpt-images.mjs:241`, `:257` — AbortSignal 없음 |
+| `readAssistantDownloadableFiles` | `chatgpt-files.mjs:321`, `:347` — CDP `Runtime.evaluate` |
+| `finalizeProviderTab` → `poolTab` → lease overflow → `closeTab` | `tab-pool.mjs:51`(await 없는 반환), `tab-lease-store.mjs:391`, `:630`, `skills/browser/tab-manager.mjs:305` |
+
+결정적 사실: **Playwright `CDPSession.send`에는 timeout 옵션이 없다**
+(`node_modules/playwright-core/types/types.d.ts:15882`). `locator.all()`도
+마찬가지다(`lib/client/locator.js:280`). 즉 "폴링 명령이 데드라인 안에
+반환한다"를 보장하려면 web-ai의 **탭 수명주기와 아티팩트 다운로드까지** 손대야
+한다.
+
+### 결론: 유닛을 분할한다
+
+이슈 #88은 "assistant DOM 읽기가 `--timeout`을 넘긴다"였다. 정체 경계를 정직하게
+세면 이미지 다운로드·탭 lease·raw CDP까지 번지고, 그것은 한 유닛에 들어가지
+않는다. 계획 문구를 또 보수하는 것은 같은 실패의 7라운드가 될 뿐이다.
+
+**같은 goal 아래 연쇄 유닛으로 재구성한다(LOOP-UNIT-CHAIN-01).** 목표 축소가
+아니다 — 총량은 같고 경계만 다시 긋는다.
+
+| 유닛 | 범위 |
+| --- | --- |
+| 이 유닛 (`260731_pr89_issue_triage`) | #87 잔여 갭 2건 + devlog 정리 + #88 경계 인벤토리 |
+| 후속 1 (`#88 DOM deadline 계약`) | assistant DOM read·activity·finished·ordering·recovery — 이슈 #88의 원래 범위 |
+| 후속 2 (`artifact/finalizer hardening`) | 이미지·파일 다운로드, 탭 lease, CDP 경계 |
+
+인벤토리(`021`)는 이 유닛에서 완성해 두 후속 유닛의 공통 입력이 된다. 조사가
+낭비되지 않고, 후속 유닛은 확정된 목록에서 출발한다.
+
+두 후속 유닛은 이 goal이 살아 있는 한 남는다. WP5가 이 유닛을 닫는 것은
+"#88 완료"를 뜻하지 않고 "이 유닛의 범위 완료"를 뜻하며, 그 사실을 closeout에
+명시한다 — 리뷰어 R1의 지적을 이 방식으로 해소한다.
+
+### 두 번째로 죽은 가설
+
+- "인벤토리를 완전하게 만들면 #88을 한 유닛에서 구현할 수 있다" — 6라운드에서
+  사망. 완전한 인벤토리가 오히려 유닛이 너무 크다는 증거였다.

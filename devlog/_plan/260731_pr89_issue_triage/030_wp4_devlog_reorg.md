@@ -10,10 +10,10 @@
 | --- | --- | --- |
 | `260625_webai_streaming_recovery_false_complete` | `_fin`으로 이관 | `30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE |
 | `260710_gpt56_update` | `_fin`으로 이관 | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116` |
-| `260711_release_017` | `_fin`으로 이관 | `010_release_evidence.md:19-32` 16/16 게이트 통과. 같은 문서가 post-publish 증거를 요구하므로(`:72-74`) 이관 시 실제 게시된 `v0.1.17` 릴리스를 확인해 근거로 적는다. |
-| `260711_upload_reliability` | **조건부** — 아래 참조 | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(`030_verification.md:37-46`) |
-| `260627_search_skill` | `_fin`으로 이관 + 종료 감사 추가 | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있어(`00_plan.md:32-75`) closeout이 없다 — 이관과 함께 `900_closeout.md`를 새로 쓴다. |
-| `260628_competitive_research` | `_fin`으로 이관 | 리서치 산출물이고, 후속이 `260705_gapclose`임이 그 유닛에 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)는 gapclose가 승계했다. |
+| `260711_release_017` | **조건부** | `010_release_evidence.md:19-32` 16/16 게이트 통과. 단 같은 문서가 post-publish 증거를 요구한다(`:72-74`) |
+| `260711_upload_reliability` | **조건부** | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(`030_verification.md:37-46`) |
+| `260627_search_skill` | **조건부** | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있고(`00_plan.md:32-75`) closeout이 없다 |
+| `260628_competitive_research` | **조건부** | 리서치 산출물이고 후속이 `260705_gapclose`임이 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 단 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)의 disposition이 필요하다 |
 | `260621_cli_jaw_webai_parity` | `_plan` 유지 | 외부 cli-jaw 미러 — closeout 권한이 이 저장소에 없음 |
 | `260625_webai_parity_impl` | `_plan` 유지 | Cycle 12 verdict CONCERNS, 후속이 `260627_gptpro_remediation` |
 | `260627_gptpro_remediation` | `_plan` 유지 | R2 CONCERNS 5 / FAIL 2 미해소 |
@@ -46,7 +46,7 @@
 | Ajv vs Zod | 해결 — 자체 validator 채택, Zod는 비목표 | `skills/browser/extract.mjs:38`이 `web-ai/extract-schema.mjs`의 자체 validator를 쓴다. `260705_gapclose/20_phase10_extract_impl.md:30`이 "Zod/TS 타입 추론"을 non-goal로 명시 |
 | LLM DOM 전달 토큰 예산 | 해결 — HTML 12,000자로 제한 | `skills/browser/extract.mjs:496` `html.replace(...).slice(0, 12_000)` |
 | 캐시 전략 | 비목표 | `260705_gapclose/20_phase10_extract_impl.md:30`이 server cache를 non-goal로 명시 |
-| web-ai 세션 기본값 | 해결 — Grok | `skills/browser/extract.mjs:60` `vendor: { type: 'string', default: 'grok' }` |
+| web-ai 세션 기본값 | 해결 — Grok | `skills/browser/extract.mjs:61` `vendor: { type: 'string', default: 'grok' }` |
 | 다국어 instruction 범위 | **deferred/비목표** — 해결 아님 | 현재 CLI에 instruction 옵션 자체가 없다(`skills/browser/extract.mjs:53-64`). "지원 범위 결정"이 아니라 "기능 미도입" 상태다 |
 
 마지막 행을 "해결"로 적지 않는다 — 질문이 사라진 게 아니라 전제가 아직 없다.
@@ -88,9 +88,13 @@ git mv devlog/_plan/<통과한 유닛> devlog/_fin/
 
 `_fin/mvp/` 아래는 건드리지 않는다.
 
+**4단계 — `00_index.md` 갱신.** 3단계가 끝난 뒤에 한 번만 수행한다. 표는 실제
+디렉터리 상태에서 생성하며, 2단계 시점의 예상이 아니라 3단계 결과를 반영한다.
+`ls devlog/_plan`과 `ls devlog/_fin`을 먼저 찍고 그 출력에서 표를 만든다.
+
 `devlog/_plan/.DS_Store`는 삭제하고, `.gitignore`에 이미 있는지 확인한다.
 
-## NEW `devlog/_fin/260627_search_skill/900_closeout.md`
+## NEW `devlog/_plan/260627_search_skill/900_closeout.md`
 
 이 유닛만 closeout 문서가 없다. 이관 전에 쓴다. 아래는 골격이고, 각 항목의
 근거는 구현 시 실제 소스/테스트를 확인해 채운다 — 추측한 증거를 적지 않는다.
@@ -124,6 +128,35 @@ git mv devlog/_plan/<통과한 유닛> devlog/_fin/
 
 `030`의 OUT 범위는 "기존 유닛 내부 문서의 **수정**"이다. 이 문서는 새로 추가하는
 closeout이므로 그 범위와 충돌하지 않는다.
+
+## 나머지 세 closeout의 최소 형식
+
+`260711_upload_reliability`, `260711_release_017`, `260628_competitive_research`도
+각각 `_plan/<unit>/900_closeout.md`를 쓴다. 공통 형식은 넷이다.
+
+```markdown
+# 900 — <유닛> 종료 감사 (YYYY-MM-DD)
+
+## 성공 기준 대조
+(유닛이 스스로 정한 기준을 인용하고, 각 항목의 충족 여부를 근거와 함께 판정)
+
+## 증거
+(명령 출력, 소스 반영, 외부 상태 — 확인한 것만. 추정은 "추정"으로 표기)
+
+## 미이행
+(없으면 "없음". 있으면 후속 경로를 명시)
+
+## 판정
+(종료 또는 `_plan` 유지. 조사 전에 쓰지 않는다)
+```
+
+유닛별로 특히 채워야 할 것:
+
+| 유닛 | 성공 기준 대조에서 반드시 다룰 것 | 증거로 필요한 것 |
+| --- | --- | --- |
+| `260711_upload_reliability` | 기준 1의 "전체 `npm test` 0 failures"(`010_plan.md:59-60`) | 재실행 결과, 또는 환경 실패를 허용하도록 기준을 수정한 판정 |
+| `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`) | 실제 게시된 `v0.1.17` 릴리스 확인 |
+| `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`) | 위 disposition 표를 근거 재확인 후 기재 |
 
 ## `00_index.md` 개편
 

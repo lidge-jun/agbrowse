@@ -38,9 +38,18 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
    - `.then`/`.catch`/`Promise.all`/`Promise.race`로 소비되는 표현식.
 
    데드라인 안(루프)과 데드라인 후(recovery·diagnostics·copy·finalize) 양쪽 모두.
-2. 각 callee에 대해: 그 함수 본문의 모든 `await`를 다시 열거한다.
+2. 각 callee에 대해 **1의 4종 규칙을 그대로 다시 적용한다** — `await`만 보면
+   안 된다. `poolTab`이 `releaseCompletedLease()`를 await 없이 반환하고
+   (`web-ai/tab-pool.mjs:51`) 그것이 lease overflow → `closeTab` → 무제한 CDP
+   `send`로 이어지는 경로(`tab-lease-store.mjs:391`, `:630`,
+   `skills/browser/tab-manager.mjs:305`)가 정확히 이 규칙으로만 잡힌다.
+   반환된 Promise, async iterator, event/listener 콜백도 포함한다.
 3. 다음 중 하나에 도달할 때까지 재귀한다.
-   - **말단 분류**: Page API / Locator API / CDP / 순수 계산·IO(페이지 접근 없음)
+   - **말단 분류**: Page API / Locator API / CDP / **순수 계산만**.
+     네트워크 fetch, 파일시스템 락, 탭 수명주기 IO는 말단이 아니다 — bounded임을
+     증명했을 때만 말단 처리한다. `collectImages`의 60초 루프는 이미지 *탐지*만
+     제한하고, 그 뒤 `Network.getCookies`(`chatgpt-images.mjs:226`)와
+     `fetch`/`arrayBuffer()`(`:241`, `:257`)는 무제한이다
    - **이미 방문한 함수**(사이클)
 4. 방문한 함수 집합과 그 소유 파일을 모두 기록한다. `web-ai/` 밖으로 나가면
    (`skills/browser/**` 등) 거기서도 같은 규칙을 적용한다.
@@ -74,8 +83,8 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 | `chatgpt.mjs:734-737` | 외부 모듈 | copy target resolve + capture — **루프 내부**(데드라인 후만 있는 게 아니다) | `allowCopyMarkdownFallback` |
 | `self-heal.mjs:222` | Locator | `resolveOptionalChatGptCopyTarget`(`:1305`) → `target-resolver.mjs` → `self-heal` | `allowCopyMarkdownFallback` |
 | `chatgpt-archive.mjs:84-105` | Locator/click | `finalizeProviderTab`(`:695`, `:809`, `:896`, `:967`) → `tab-finalizer.mjs:95` → `archiveConversation` | `archiveFlag` |
-| `chatgpt-images.mjs` | CDP | `collectImages` ← 루프 `:759`, `collectGeneratedImageAnswer:1498` | 이미지 응답 |
-| `chatgpt-files.mjs` | CDP | `saveAssistantDownloadableFiles` ← 루프 `:797` | 다운로드 가능 파일 |
+| `chatgpt-images.mjs:140`, `:226`, `:241`, `:257` | CDP + fetch | `collectImages` ← 루프 `:759`, `collectGeneratedImageAnswer:1498` | 이미지 응답 — 탐지 루프만 bounded(`:305-308`), 이후 CDP/fetch는 무제한 |
+| `chatgpt-files.mjs:321`, `:347` | CDP | `saveAssistantDownloadableFiles` ← 루프 `:797` | 다운로드 — HTTP fetch는 bounded(`:364-382`)지만 선행 CDP는 무제한 |
 
 **1단계 callee는 15개다.** `pollWebAi` 본문(`:582`–`:1020`)에서
 `await <함수>(` 패턴을 뽑으면 다음이 나온다 — 이것이 폐쇄의 출발 집합이다.
@@ -92,6 +101,16 @@ saveAssistantDownloadableFiles
 `deps.getTargetId`, `page.url()`, `page.waitForTimeout` 같은 직접 페이지 호출은
 별도로 센다. 이미지·파일 경로는 Page/Locator가 아니라 **CDP 세션**을 쓰므로
 정체 특성이 다르다 — 2절에서 별도 축으로 판정한다.
+
+이 둘은 **부분적으로만** bounded하다. `chatgpt-images.mjs:308`의 데드라인은 이미지
+*탐지 루프*만 덮고, 그 뒤 `Network.getCookies`(`:226`)와 `fetch`/`arrayBuffer()`
+(`:241`, `:257`)에는 상한이 없다. `chatgpt-files.mjs`도 HTTP fetch는
+`AbortController`로 묶었지만(`:364-382`) 선행 CDP `Runtime.evaluate`(`:321`,
+`:347`)는 무제한이다. 결정적으로 Playwright `CDPSession.send`에는 timeout 옵션이
+없다(`node_modules/playwright-core/types/types.d.ts:15882`).
+
+2절은 세 결론을 구분한다: "무한 정체 가능", "bounded지만 외부 데드라인 비인지",
+"완전 bounded". 첫째와 둘째는 후속 유닛 배정 대상이다.
 | `chatgpt-response-observer.mjs:81` | Page.evaluate | `observeAssistantResponse` ← `:626` | 항상 — **이미 `timeoutMs` 예산 있음** |
 
 `countAssistantMessages` 경로(`chatgpt.mjs:331`, `:1151`, `:1413`)는 `pollWebAi`
@@ -125,17 +144,18 @@ CDP는 Playwright 타임아웃 규약이 적용되지 않으므로 별도 축으
 
 특히 위험한 것으로 이미 확인된 것:
 
-- `doesAssistantFollowUser`(`chatgpt.mjs:576`)는 비-`false`를 "순서 정상"으로
+- `doesAssistantFollowUser`(`chatgpt.mjs:575`)는 비-`false`를 "순서 정상"으로
   읽는다 → 정체가 통과로 위장된다.
 - `readActivityState` catch(`chatgpt.mjs:1049`)는 `'none'`을 돌려주고, 루프는
   `'none'`을 quiet으로 읽어 완료 분기로 간다(`:679-680`, `:709-728`).
 - `countAssistantMessages`가 0을 돌려주면 baseline이 0이 되어 과거 답변 전체가
   새 답변 후보가 된다.
 
-### 4절 — 반환 경로 목록
+### 4절 — 종료 경로 목록
 
-정체를 겪은 명령이 그 사실을 알려야 하므로, `pollWebAi`의 모든 반환 지점을
-열거한다. 감사에서 확인된 것: `:702`(image 성공), `:848`(탭 크래시),
+반환값만이 아니라 `return` · `throw` · Promise rejection · 세션 상태 변경을 모두
+다룬다. rethrow 경로(`web-ai/chatgpt.mjs:845`)로 빠지는 정체도 사용자에게 보여야
+한다. `pollWebAi`의 모든 종료 지점을 열거한다. 감사에서 확인된 것: `:702`(image 성공), `:848`(탭 크래시),
 `:876`·`:898`(recovery), `:924`(copy deferred), `:986-1001`(copy 타임아웃),
 `:1004-1020`(최종 타임아웃), 그리고 성공 완료 경로(`:729-730` 초기화).
 
@@ -156,20 +176,35 @@ CDP는 Playwright 타임아웃 규약이 적용되지 않으므로 별도 축으
 
 시계와 타이머를 함께 주입할지, vitest fake timer를 쓸지 판정하고 근거를 남긴다.
 
-### 7절 — 구현 work-phase 분할안
+### 7절 — 후속 유닛 두 개의 로드맵
 
-1~6절 결과로 구현을 몇 개 work-phase로 나눌지, 각 경계가 어디에 속하는지
-제시한다. 분할은 의존 순서를 따른다(PHASE-SPLIT-01) — 난이도나 분량 기준으로
-나누지 않는다. 각 work-phase는 독립적으로 검증 가능해야 한다.
+1~6절의 모든 경계 ID를 두 후속 유닛 중 하나에 배정하고, 각 유닛의 로드맵을
+쓴다. 분할 근거는 `003_audit_synthesis.md` — #88의 정체 표면이 한 유닛 크기가
+아니라는 것이 6라운드 감사로 확인됐다.
 
-예상 축(인벤토리 결과에 따라 바뀔 수 있다): 예산 프리미티브와 sentinel 계약 →
-데드라인 안 읽기 경로 → 데드라인 후 경로(recovery·diagnostics·copy·finalize) →
-`countAssistantMessages` 계약과 baseline 보호.
+| 후속 유닛 | 범위 | 담당 경계 |
+| --- | --- | --- |
+| `YYMMDD_webai_poll_deadline` | assistant DOM read · activity · finished · ordering · recovery — 이슈 #88의 원래 문언 범위 | (1절에서 배정) |
+| `YYMMDD_webai_artifact_finalizer` | 이미지·파일 다운로드, 탭 lease, CDP 경계 | (1절에서 배정) |
 
-**문서 번호 규칙도 7절에서 확정한다.** WP3.x 문서는 `022`, `023`…으로 배치하되
-`030`(WP4)과 충돌하지 않아야 한다. 분할이 8개를 넘으면 `020_0_`, `020_1_` 형태의
-서브인덱스로 전환한다(devlog 규약의 overflow 규칙). 어느 쪽을 쓸지 7절에서
-정하고, `000_plan.md`의 work-phase 지도도 그때 갱신한다.
+각 유닛에 대해 다음을 쓴다.
+
+- 목표와 범위 경계(IN/OUT)
+- work-phase 분할 — **의존 순서**를 따른다(PHASE-SPLIT-01). 난이도나 분량으로
+  나누지 않는다. 각 work-phase는 독립 검증 가능해야 한다.
+- 각 work-phase의 수용 기준과 활성화 시나리오(C-ACTIVATION-GROUNDING-01)
+- 담당 경계 ID 목록 — 1절의 모든 ID가 어느 work-phase엔가 나타나야 한다
+
+예상 축(인벤토리 결과에 따라 바뀔 수 있다). deadline 유닛: 예산 프리미티브와
+sentinel 계약 → 데드라인 안 읽기 경로 → 데드라인 후 경로(recovery·diagnostics·
+copy) → `countAssistantMessages` 계약과 baseline 보호. artifact 유닛: CDP 예산
+규약 → 이미지·파일 다운로드 → 탭 lease와 finalizer.
+
+**후속 유닛의 decade 문서는 그 유닛에서 쓴다(DIFFLEVEL-ROADMAP-01).** 이 유닛의
+7절은 유닛 경계와 work-phase 지도까지만 확정한다. 각 유닛의 첫 P가 자신의
+decade 문서를 diff-level로 작성한다 — 그것이 그 유닛의 docs-first 사이클이다.
+
+두 유닛 폴더는 이 유닛을 닫을 때 만들지 않는다. 후속 유닛이 시작될 때 만든다.
 
 ## 완료 조건
 
@@ -194,13 +229,13 @@ CDP는 Playwright 타임아웃 규약이 적용되지 않으므로 별도 축으
   열거한다. "최소 하나"로는 부족하다 — 소비자가 여럿인 경계를 하나만 적어도
   통과해버린다. 역방향(3·4절에 있는데 1절에 없음)도 오류다.
 - **7절 대상 배정**: 1절의 모든 경계 ID가 7절 분할안의 어느 work-phase엔가
-  배정돼야 한다. 배정하지 않을 수 있는 경우는 둘뿐이다: (a) 이미 예산이 있어
-  bounded하다는 근거를 댈 수 있거나(예: `observeAssistantResponse`의 `timeoutMs`),
-  (b) 명시적으로 이 유닛의 범위 밖이라고 판정하고 그 이유를 적은 경우.
-  **무방비 경계를 근거 없이 뒤로 미루는 것은 허용하지 않는다** — 침묵도, 막연한
-  연기도 누락과 구별되지 않는다.
-- 7절의 분할안이 goalplan에 append 가능한 형태다(각 work-phase의 제목, 범위,
-  수용 기준, 담당 경계 ID 목록).
+  배정돼야 한다. 배정하지 않을 수 있는 경우는 셋뿐이다: (a) 이미 예산이 있어
+  bounded하다는 근거(예: `observeAssistantResponse`의 `timeoutMs`), (b) 그 상태에서
+  도달 불가함을 증명, (c) #88과 무관함을 증명. **도달 가능한 무방비 경계는 반드시
+  두 후속 유닛 중 하나에 배정한다** — "이번엔 안 한다"는 이유를 붙여도 안 된다.
+  근거 있는 연기도 목표 하향이다.
+- 7절이 두 후속 유닛의 로드맵을 갖는다(각 유닛의 제목, 범위, 담당 경계 ID,
+  수용 기준, work-phase 분할).
 
 ## 이 명세가 실패하는 방식 (LOOP-PESSIMIST-01)
 
