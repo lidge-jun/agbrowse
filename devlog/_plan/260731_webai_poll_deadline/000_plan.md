@@ -61,8 +61,10 @@
 
 선택을 미리 정하지 않되, 다음은 확인된 사실이다.
 
-- `observeAssistantResponse`는 **이미 `AbortSignal`을 받는다**
-  (`web-ai/chatgpt-response-observer.mjs:78-84`). in-process 취소의 선례가 있다.
+- `observeAssistantResponse`가 `AbortSignal`을 받는다
+  (`web-ai/chatgpt-response-observer.mjs:78-84`). **취소 선례가 아니다** —
+  소비자 race일 뿐 `evalP`는 살아남고, 현재 poll 호출(`chatgpt.mjs:627-630`)은
+  signal을 넘기지도 않는다. in-process 모델 한계의 실물 예시다.
 - 진입점이 하나로 모인다. `runBoundCommand`(`web-ai/cli.mjs:1254`)가 세션 폴에서
   `withSessionCommandLock` → `withCommandSessionPage` → `withWebAiActiveCommand`
   3중 래퍼를 거쳐 `deps`를 조립한다(`:1259-1277`). 예산을 끼울 자리가 명확하다.
@@ -91,7 +93,7 @@ B01~B09, B11, B12, B13, B26, B27, B29 — 15개.
 | --- | --- | --- |
 | WP1 | 예산 계약 모델 선택 + canonical owner 확정 + 프리미티브 설계 | — |
 | WP2 | fake timer 하네스 — 시계와 타이머를 함께 주입 | WP1 |
-| WP3 | **진입점 배선** — 네 호출자 전부에 예산 전파 + command lock 처방 | WP1 |
+| WP3 | **진입점 배선** — 여섯 경로 전부에 예산 전파 + pre-poll 구간 넷 처방 | WP1, WP2 |
 | WP4 | 데드라인 안 읽기 경로 (B01, B02, B07) + `countAssistantMessages` 계약 | WP2, WP3 |
 | WP5 | 완료 판정 경로 (B03, B04, B05, B06) — fail-open 교정 | WP4 |
 | WP6 | 데드라인 후 경로 (B09, B11, B12, B13, B29) | WP5, **자매 sync-IO** |
@@ -102,13 +104,33 @@ B01~B09, B11, B12, B13, B26, B27, B29 — 15개.
 분할은 의존 순서다(PHASE-SPLIT-01).
 
 **WP3가 새로 추가됐다.** `sessionDeps` 세 getter를 감싸는 것만으로는 부족하다는
-것이 감사에서 확인됐다 — 페이지 해석이 조립보다 먼저 일어나고, 반환된 `page`가
-getter를 우회하며, `runBoundCommand`를 거치지 않는 호출자가 셋 더 있다
-(`mcp-server.mjs:105`, `cli-sessions.mjs:122`, `watcher.mjs:633`,
-`chatgpt.mjs:1127`). 진입점 배선이 독립 work-phase여야 하는 이유다.
+것이 감사에서 확인됐다. 진입점 배선이 독립 work-phase여야 하는 이유다.
 
-`withSessionCommandLock`의 `Atomics.wait`(`session-store.mjs:250-256`)도 WP3
-소유다. 예산이 락 획득 **전에** 시작해야 하므로 다른 배선보다 앞선다.
+### 생산 호출 경로 다섯
+
+| # | 진입 | 경로 |
+| --- | --- | --- |
+| 1 | CLI 세션 폴 | `runBoundCommand`(`cli.mjs:1254`) → `withSessionCommandLock` → `withCommandSessionPage` → `withWebAiActiveCommand` → `pollFn` |
+| 2 | CLI 무세션 폴 | `runBoundCommand` → `withWebAiActiveCommand`(`cli.mjs:1279`) |
+| 3 | MCP | `web-ai/mcp-server.mjs:105` |
+| 4 | sessions resume | `web-ai/cli-sessions.mjs:122` |
+| 5 | watcher | `web-ai/watcher.mjs:633` |
+| 6 | `queryWebAi` 내부 | `web-ai/chatgpt.mjs:1127` (send 후 이어지는 poll) |
+
+### 예산보다 먼저 실행되는 구간 (pre-poll)
+
+`pollWebAi` 진입 전에 이미 블로킹 가능한 지점이 넷이다. **최초 데드라인 생성
+지점을 이들보다 앞에 두지 않으면 `--timeout`이 시작도 전에 멈춘다.**
+
+| 구간 | 위치 | 성격 |
+| --- | --- | --- |
+| implicit session 해석 | `cli.mjs:1255` `resolveImplicitCommandSession` → `session-target-guard.mjs:46-49` → `listSessions` | 동기 session-store 읽기 |
+| command lock 획득 | `session-store.mjs:273-316`, `sleepBlockingMs` `:250-256` | `Atomics.wait` — 타이머까지 정지 |
+| 페이지 해석 | `cli.mjs:1314` → `tab-recovery.mjs:437-558` | `verifySessionTab`·`getPageByTargetId`·`page.goto`·세션 update |
+| active-command 등록 | `cli.mjs:1459-1472` → `active-command-store.mjs:53-112`, `:132-172` | `openSync`/`readFileSync`/`writeFileSync` |
+
+WP3는 이 넷과 위 여섯 경로를 **구조도로 고정하고 최초 데드라인 생성 지점을
+확정**한다. 그것이 이 work-phase의 산출물이다.
 
 ### 자매 유닛 선행 (021 7절)
 
@@ -138,10 +160,10 @@ C1~C5를 그대로 두면 "어디서 어떻게 증명하는가"가 빠진다. WP
 
 | # | 하네스 | 관측 대상 | 비고 |
 | --- | --- | --- | --- |
-| C1 | fake timer + page double | 반환 여부, 경과 시간 | CLI 세션/무세션 두 경로 모두 |
-| C2 | fake timer + 늦게 resolve하는 double | 세션 store·artifact·lease 상태 불변 | 늦은 resolve 후 스냅샷 비교 |
-| C3 | 반복 timeout | outstanding handle 수, pending 작업 수 | 단순 반환값이 아니라 누적 관측 |
-| C4 | **실시간 프로세스 하네스** | wall-clock 상한 | fake timer로는 불가 — `Atomics.wait`는 타이머를 막고, 격리 모델이면 자식 종료를 실제로 재야 한다 |
+| C1 | fake timer + page double | 반환 여부, 경과 시간 | **여섯 경로 전부** — CLI 세션/무세션, MCP, resume, watcher, `queryWebAi` |
+| C2 | fake timer + 늦게 resolve하는 double | 세션 store·artifact·lease 상태 불변 | 늦은 resolve 후 스냅샷 비교. active-command 등록도 정리되는지 확인 |
+| C3 | 반복 timeout | outstanding handle 수, pending 작업 수, **command lock 잔존 여부** | 단순 반환값이 아니라 누적 관측. 락이 남으면 다음 명령이 막힌다 |
+| C4 | **실시간 프로세스 하네스** | wall-clock 상한 | fake timer로는 불가 — `Atomics.wait`는 타이머를 막고, 격리 모델이면 자식 종료를 실제로 재야 한다. **pre-poll 구간 넷도 대상** |
 | C5 | 경계별 단위 테스트 | sentinel이 정상값으로 오독되지 않음 | B03·B06은 이 유닛, 나머지는 자매 |
 
 **C4가 별도 하네스를 요구한다.** 나머지와 성격이 달라 WP2가 둘을 다 만들어야
@@ -169,15 +191,25 @@ test/integration/web-ai-golden-scenario.test.mjs:85
 ## 범위
 
 IN: `web-ai/chatgpt.mjs` 폴링 경로, `web-ai/chatgpt-response-dom.mjs`,
-`web-ai/chatgpt-response-observer.mjs`, `web-ai/cli.mjs` 진입점, 예산 프리미티브
-신규 모듈, 관련 테스트.
+`web-ai/chatgpt-response-observer.mjs`, 예산 프리미티브 신규 모듈, 관련 테스트.
+
+진입점 배선(WP3) 대상: `web-ai/cli.mjs`, `web-ai/session-store.mjs`,
+`web-ai/session-target-guard.mjs`, `web-ai/tab-recovery.mjs`,
+`web-ai/active-command-store.mjs`, `web-ai/mcp-server.mjs`,
+`web-ai/cli-sessions.mjs`, `web-ai/watcher.mjs`.
 
 OUT: 이미지·파일 다운로드, 탭 lease, CDP 취득 경로 — 자매 유닛
 (`artifact/finalizer hardening`) 소유. devlog 정리. #87 관련 코드.
 
 ## 종료 판정
 
-담당 경계 15개가 예산 계약 아래 데드라인을 인지하고, C5의 B03·B06이 fail-closed로
-검증되면 이 유닛은 DONE이다. C1~C4는 자매 유닛 완료 후 공동 게이트로 확인한다.
+DONE 조건은 셋이다.
+
+1. 담당 경계 15개가 예산 계약 아래 데드라인을 인지한다.
+2. C5의 B03·B06이 fail-closed로 검증된다.
+3. **WP3의 여섯 호출 경로와 pre-poll 구간 넷이 전부 예산 안에 들어온다.**
+   한 경로라도 빠지면 그 경로로 #88이 재현된다.
+
+C1~C4는 자매 유닛 완료 후 공동 게이트로 확인한다.
 
 **부분 완료를 DONE으로 적지 않는다.** 일부 경계만 덮으면 #88은 여전히 재현된다.

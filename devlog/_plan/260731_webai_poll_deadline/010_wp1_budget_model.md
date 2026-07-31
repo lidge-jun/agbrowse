@@ -69,7 +69,7 @@ in-process면 이 지점마다 "데드라인 지났으면 skip" 게이트가 필
 자식 프로세스 종료로 자동 해결되지만, 종료 시점에 이미 쓴 것은 남는다 —
 **부분 쓰기**를 어떻게 다룰지가 쟁점이다.
 
-### 기준 3 — 기존 취소 선례
+### 기준 3 — 기존 취소 선례가 실제로 있는가
 
 `observeAssistantResponse`(`web-ai/chatgpt-response-observer.mjs:78-84`)가 이미
 `AbortSignal`을 받는다.
@@ -84,10 +84,14 @@ export async function observeAssistantResponse(page, { baselineAssistantCount = 
         return await Promise.race([evalP, abortP]);
 ```
 
-이 패턴이 in-process 모델의 선례다. **다만 한계도 여기 있다** — `evalP`는
-취소되지 않고 살아남는다. 이것이 정확히 single-flight가 풀어야 할 문제다.
+**이건 취소가 아니다.** `evalP`는 race에서 져도 취소되지 않고 살아남는다.
+Playwright는 시작된 `evaluate`를 취소하는 API를 제공하지 않는다.
 
-WP1은 이 패턴을 확장할 수 있는지, 아니면 근본적으로 부족한지 판정한다.
+따라서 in-process 모델의 진짜 질문은 이것이다: **영원히 pending인 `evaluate`를
+cancel 또는 drain할 방법이 있는가?** 없다면 single-flight는 누적만 막을 뿐이고
+C3는 통과해도 C1은 프로세스가 종료되지 않아 실패할 수 있다.
+
+WP1은 이 질문에 pass/fail로 답한다.
 
 ### 기준 4 — 진입점 구조와 그 한계
 
@@ -114,10 +118,11 @@ runBoundCommand(command='poll', input.session 있음)
    실제 `page` 객체에 직접 `evaluate`/locator를 호출하고, `getSession`·
    `updateSession`도 직접 import한다(`web-ai/chatgpt.mjs:585-617`, `:658-677`).
    getter를 감싸도 그 뒤 호출은 원본 객체를 쓴다.
-3. **`runBoundCommand`를 거치지 않는 호출자가 셋 더 있다.**
+3. **`runBoundCommand`를 거치지 않는 호출자가 넷 더 있다.**
    `web-ai/mcp-server.mjs:105`, `web-ai/cli-sessions.mjs:122`,
-   `web-ai/watcher.mjs:633`, 그리고 `web-ai/chatgpt.mjs:1127`(deep research).
-   CLI 진입점만 고치면 이들은 계약 밖이다.
+   `web-ai/watcher.mjs:633`, 그리고 `web-ai/chatgpt.mjs:1127`
+   (`queryWebAi` 내부에서 send 후 이어지는 poll). CLI 진입점만 고치면 이들은
+   계약 밖이다.
 
 따라서 WP1은 **예산의 canonical owner를 먼저 정해야 한다.** 후보:
 `pollWebAi` 자신이 예산을 만들고 모든 호출자가 데드라인을 전달하는 형태,
@@ -149,7 +154,8 @@ WP1은 이 둘을 먼저 측정한다.
 ### 1. `011_model_decision.md` — 결정 기록
 
 - 고른 모델과 근거
-- 위 네 기준 각각에 대한 판정
+- 위 다섯 기준 각각에 대한 판정
+- P1~P9 probe 결과 (명령·출력·판정)
 - 버린 모델의 어떤 점이 결정적이었는지
 - 이 결정이 틀렸다는 것을 보여줄 증거(LOOP-PESSIMIST-01)
 
@@ -186,13 +192,34 @@ API를 고정하지 않는다.
 
 ## 검증
 
-WP1은 설계 단계라 통합 테스트가 없다. 프리미티브 모듈에 대해서만:
+### Probe evidence ledger (`011`의 필수 내용)
+
+모델 선택을 주장이 아니라 측정으로 만든다. 각 행에 **실행한 명령과 결과**를
+기록한다. 사전 임계값을 여기 적고, 측정 후에 임계값을 움직이지 않는다.
+
+| # | probe | 측정 | 사전 임계값 / 탈락 조건 |
+| --- | --- | --- | --- |
+| P1 | 영원히 pending인 `page.evaluate`를 cancel 또는 drain | 프로세스가 종료되는가 | **불가면 in-process 탈락** — single-flight로는 C1을 못 만족한다 |
+| P2 | `Atomics.wait` 구간에 타이머가 도는가 | `setTimeout` 콜백 실행 여부 | 안 돌면 lock을 async로 바꾸거나 in-process 탈락 |
+| P3 | 자식에서 CDP 재연결 | Playwright `Page`를 targetId로 재획득 가능한가 | 불가면 격리 탈락 |
+| P4 | `pollWebAi` 반환 객체 구조화 복제 | `structuredClone(result)` 성공 여부 | 실패하면 IPC 스키마 변환 필요 — 비용을 P7에 반영 |
+| P5 | 자식 kill 후 정리 | 탭·CDP 세션·락 파일 잔존 여부 | 좀비가 남으면 격리 탈락 |
+| P6 | 부분 쓰기 복구 | store 쓰기 중 kill → 다음 명령이 동작하는가 | 깨지면 격리 탈락 |
+| P7 | 자식 기동 비용 | 폴 1회당 추가 지연 | **200ms 초과면 격리 탈락** — 폴은 반복 호출이다 |
+| P8 | 직접 호출자 호환 | MCP·resume·watcher·`queryWebAi` 넷이 고른 모델로 동작 | 하나라도 불가면 두 경로가 갈린다 |
+| P9 | 향후 sync 경계 유입 차단 | conformance 방식(lint 규칙·테스트·리뷰 체크) | 방식이 없으면 계약이 시간에 침식된다 |
+
+**P1과 P7이 결정적일 가능성이 높다.** 둘을 먼저 측정한다. P1이 불가하고 P7이
+임계값을 넘으면 두 모델 모두 탈락이며, 그때는 아래 "실패하는 방식"으로 간다.
+
+### 프리미티브 단위 테스트
 
 - 예산 만료 후 `fenced()`가 실행을 막는다
 - `singleFlight()`가 같은 키의 중복 작업을 누적시키지 않는다
 - 예산 객체가 타이머를 누수하지 않는다(`unref` 또는 명시적 정리)
 
-`npm run typecheck`와 새 모듈의 단위 테스트가 게이트다.
+`npm run typecheck`와 위 단위 테스트가 게이트다. **P1~P9 ledger가 채워지지
+않으면 WP1은 완료가 아니다.**
 
 ## 범위
 
