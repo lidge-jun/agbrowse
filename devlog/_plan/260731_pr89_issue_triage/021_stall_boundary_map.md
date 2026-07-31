@@ -20,7 +20,8 @@ fetch(`:395-400`)가 있다.
 
 **두 번 같은 방식으로 실패했다면 방식이 틀렸다.**
 
-진단: `pollWebAi`의 정체 표면은 "경계 N개"로 셀 수 있는 크기가 아니다. 호출
+진단: 현재 스냅샷의 호출 그래프는 주입 바인딩과 native 말단을 고정하면 이론상
+유한하게 닫을 수 있다. 문제는 그 결과가 **비싸고 변경 즉시 낡는다**는 것이다. 호출
 그래프가 `web-ai/` 밖 `skills/browser/`의 탭 관리·CDP 연결·HTTP 폴링까지 뻗고,
 그 아래에 또 동기 파일 IO와 raw WebSocket이 있다. 열거를 한 단계 넓힐 때마다 새
 층이 나온다.
@@ -31,20 +32,44 @@ fetch(`:395-400`)가 있다.
 
 ### 방향 전환: 열거에서 계약으로
 
-경계를 다 세는 대신 **경계를 만들 수 없게** 하는 편이 실현 가능하다.
+경계를 다 세는 대신 **경계가 무엇이든 상한을 갖게** 하는 편이 지속 가능하다.
 
 | 접근 | 성질 |
 | --- | --- |
 | 경계 열거 후 개별 방어 | 스냅샷. 새 호출이 생기면 구멍이 생긴다 |
 | 진입점에서 전체 예산 강제 | 계약. 하위가 무엇을 하든 상한이 있다 |
 
-구체적으로는 `pollWebAi` 전체를 하나의 예산 안에서 실행하고, 그 예산이 끝나면
-반환을 보장하는 형태다. 하위 정체는 남지만 **명령은 반환한다** — 이슈 #88이
-보고한 증상("프로세스는 살아 있고 하트비트만 멎음")이 정확히 그 반환 실패다.
+### 예산 계약이 보장해야 하는 것
 
-동기 IO(B18~B20, B31~B34)는 이 계약으로도 못 막는다. `Promise.race`가 동기
-구간을 자를 수 없기 때문이다. 그건 별도 처방이 필요하고, 2절이 그 판정을 담고
-있다.
+"상위에서 race 한 번"으로는 부족하다. `Promise.race`는 패배한 실행을 **취소하지
+않으므로**, 호출자에게 timeout을 돌려준 뒤에도 원래 실행이 살아서 부수효과를
+일으킨다.
+
+| 늦은 부수효과 | 위치 |
+| --- | --- |
+| session crash/update | `web-ai/chatgpt.mjs:848-850` |
+| finalizer·archive·pool | `:698-705`, `:812-826`, `:899-912`, `:970-984` |
+| session timeout 변경 | `:986-1008` |
+| finalizer 내부 session/artifact 쓰기 | `web-ai/tab-finalizer.mjs:66-106` |
+
+게다가 동기 IO가 event loop를 막으면 타이머 자체가 실행되지 않는다. 그러면 race도
+못 한다.
+
+따라서 계약은 셋을 모두 명시해야 한다.
+
+1. **Sync isolation.** 동기 IO(B18~B20, B22, B23, B31~B35)를 제거하거나 격리한다.
+   이게 안 되면 예산이 동작하지 않는다 — 나머지 둘의 전제다.
+2. **Late-side-effect fencing.** 데드라인 이후에는 session·artifact·tab 상태를
+   바꾸지 않는다. 패배한 실행이 뒤늦게 완료돼도 무시된다.
+3. **Single-flight.** 패배한 작업이 누적돼 프로세스를 붙잡지 않는다.
+
+대안은 **격리 모델**이다 — worker나 subprocess에서 실행하고 부모가 watchdog으로
+종료한다. 동기 IO를 개별로 고치지 않아도 wall-time 상한이 성립한다는 장점이 있고,
+후속 유닛의 0번 work-phase가 두 안을 비교해 고른다.
+
+어느 쪽이든 수용 기준은 같다: **데드라인 이후 부수효과 없음**, **패배한 작업이
+프로세스를 붙잡지 않음**. 이 둘이 증명되기 전에는 "반환 보장"을 주장할 수 없고,
+유닛 A와 B가 **함께** 끝나야 end-to-end 보장이 성립한다.
 
 ### 이 문서의 남은 역할
 
@@ -59,7 +84,25 @@ fetch(`:395-400`)가 있다.
 후속 유닛의 첫 work-phase는 경계를 더 세는 것이 아니라 **예산 계약을 설계하는
 것**이다.
 
-## 1절 — 경계 전수 (확인된 표본)
+### 계약 검증 시나리오 (양 유닛 공통 수용 기준)
+
+fake timer 전환만으로는 새 계약을 검증하지 못한다. 다음이 테스트로 고정돼야 한다.
+
+| # | 시나리오 | 증명하는 것 |
+| --- | --- | --- |
+| C1 | `deps.getPage` 또는 `page.evaluate`가 영원히 pending | 데드라인 안에 결과가 반환된다 |
+| C2 | 패배한 Promise가 나중에 resolve | session·finalizer·artifact 부수효과가 없다(fencing) |
+| C3 | 반복 timeout | pending 작업이 누적되지 않는다(single-flight) |
+| C4 | 동기 IO가 event loop를 막음 | worker/subprocess watchdog으로 실제 wall-time 상한이 성립한다 |
+| C5 | B23·B24·B25·B36 각각 | timeout/error sentinel을 정상 상태로 오독하지 않는다(fail-closed) |
+
+C5는 fail-open 교정이라 **A·B 공통**이다. 각 유닛이 자기 경계분을 담당하되
+계약은 하나다.
+
+C1~C4는 두 유닛이 모두 끝나야 성립하므로, **최종 통합 게이트**로 둔다 — 어느 한
+유닛만으로는 met이 아니다.
+
+## 1절 — 확인된 경계 표본
 
 ### 조사 명령
 
@@ -109,15 +152,15 @@ rg -n "page\.evaluate|locator\(|cdpSession\.send" web-ai/chatgpt-response-dom.mj
 | B18 | `session-store.mjs:136`(정의) / `:142`,`:144`,`:161` | sync-IO/lock | `markSessionTimeout`(`:986`,`:1006`) → `session.mjs:251` → `patchSession`(`session-store.mjs:337`) → `withStoreLock` | post | 세션 폴 |
 | B19 | `session-store.mjs:136` 동일 | sync-IO/lock | `updateSession`(`session.mjs:230`) → `patchSession` → `withStoreLock` | in·post | 세션 폴 |
 | B20 | `chatgpt.mjs:1386`(정의) | sync-IO | `persistResolverTraceForSession` ← `:741`, `:965` | in·post | `allowCopyMarkdownFallback` |
-| B21 | `chatgpt.mjs:1221`(정의) / `:1223` `deps.getPage`, `:1227-1229` `addInitScript`+`evaluate` | Page + 하위 다층 | `requireChatGptPage` ← `:594`. 일반 deps에서 `browser.mjs:2148` → `getReadyPage:1235` → persisted-state 동기 읽기(`:480-485`), per-page CDP(`:1056-1063`), `/json/list` fetch(`:1103-1105`) | **pre** | 항상 |
+| B21 | `chatgpt.mjs:1221`(정의) / `:1222` `deps.getPage`; `skills/browser/browser.mjs:1227-1229` `addInitScript`+`evaluate` | Page + 하위 다층 | `requireChatGptPage` ← `:594`. 일반 deps에서 `browser.mjs:2148` → `getReadyPage:1235` → persisted-state 동기 읽기(`:480-485`), per-page CDP(`:1056-1063`), `/json/list` fetch(`:1103-1105`) | **pre** | 항상 |
 | B22 | `session.mjs:156`(정의) / `:161` | sync-IO | baseline store `readFileSync` ← `getBaseline`/`getLatestBaseline`(`chatgpt.mjs:604-605`) | **pre** | 세션 baseline 부재 시에만(`:603`에서 short-circuit) |
 | B23 | `session.mjs:295`(정의) / `session-store.mjs:116`,`:352` | sync-IO/lock | `getSession`(`chatgpt.mjs:597`)·`findActiveSession`(`:598-601`) → store read | **pre** | 항상 |
 | B24 | `skills/browser/browser.mjs:1056`(정의) / `:1057`,`:1059`,`:1062` | CDP | `deps.getTargetId`(`chatgpt.mjs:600`, `:634`) → `newCDPSession` + `Target.getTargetInfo` + `detach` | pre·in | 일반 browser deps |
-| B25 | `chatgpt.mjs:751`,`:797`,`:1492` 취득 / `:788`,`:806`,`:1521` detach | CDP + 하위 | `deps.getCdpSession` → `skills/browser/browser.mjs:1121-1124`, raw fallback은 `tab-manager.mjs:141-195`(무제한 fetch + WebSocket open + raw send) | in | 이미지·파일 응답 |
+| B25 | `chatgpt.mjs:751`,`:797`,`:1492` 취득 / `:788`,`:806`,`:1521` detach | CDP + 하위 | `deps.getCdpSession` → `skills/browser/browser.mjs:1121-1124`, 일반 owner는 `skills/browser/browser.mjs:1121-1124` | in | 이미지·파일 응답 |
 | B26 | `chatgpt.mjs:1528`(정의) / `:1529`,`:1530` | sync-IO/lock | `buildDeferredPollingResult` → `getSession`+`updateSession` → `patchSession` → `withStoreLock` | in·post | deferred 반환 4곳(`:879`,`:889`,`:927`,`:947`) |
 | B27 | `chatgpt.mjs:688` | sync-IO | `process.stderr.write` 하트비트 | in | streaming 또는 latest 존재 |
-| B28 | `failure-diagnostics.mjs:57`(정의) / `:60`,`:66`,`:70` | CDP + sync-IO | `captureFailureDiagnostics` 하위 — CDP 취득, `Page.captureScreenshot`, `detach`, artifact 쓰기(`session-artifacts.mjs:265-305`) | post | `diagnostics` 옵션 |
-| B29 | `self-heal.mjs:242`(정의 `validateResolvedTarget`) / `:298`,`:303`,`:307`,`:311`,`:338` | Locator | B12 하위 — 2차 `count`/`isVisible`/`isEnabled`/`isEditable`/`locator.evaluate` | in·post | `allowCopyMarkdownFallback` |
+| B28 | `failure-diagnostics.mjs:57`(정의) / CDP 취득 `:64`, send `:67`, detach `:70`, artifact `:77` | CDP + sync-IO | `captureFailureDiagnostics` 하위 — CDP 취득, `Page.captureScreenshot`, `detach`, artifact 쓰기(`session-artifacts.mjs:265-305`) | post | `diagnostics` 옵션 |
+| B29 | `self-heal.mjs:242`(정의 `validateResolvedTarget`) / `:299`,`:304`,`:307`,`:311`,`:338` | Locator | B12 하위 — 2차 `count`(`:299`)/`isVisible`(`:304`)/`isEnabled`/`isEditable`/`locator.evaluate` | in·post | `allowCopyMarkdownFallback` |
 | B30 | `chatgpt-images.mjs:139`(정의) / `:140` | CDP | 이미지 탐지 `Runtime.evaluate` — B14보다 앞선다 | in | 이미지 응답 |
 | B31 | `chatgpt-images.mjs:257`-`:273`, `session-artifacts.mjs:157`,`:314` | sync-IO/lock | 이미지 저장 `mkdirSync`/`writeFileSync` + artifact 기록 | in | 이미지 응답 |
 | B32 | `chatgpt-files.mjs:433`-`:444`, `session-artifacts.mjs:219`,`:314` | sync-IO/lock | 파일 저장 + artifact 기록 | in | 다운로드 가능 파일 |
@@ -126,7 +169,7 @@ rg -n "page\.evaluate|locator\(|cdpSession\.send" web-ai/chatgpt-response-dom.mj
 | B35 | `skills/browser/tab-manager.mjs:35`-`:52`, `:71`-`:75` | sync-IO | `forgetTabActivity` ← `closeTab` 성공 후(`:311`,`:316`) | in·post | 탭 close |
 | B36 | `skills/browser/tab-manager.mjs:202`-`:205`, `:395`-`:400` | HTTP(무제한) | `isTabAlive` ← `tab-lease-store.mjs:630-634` close 실패 후 | in·post | close 실패 |
 
-### 폐쇄 증명
+### 폐쇄 시도에서 확인된 처분
 
 `pollWebAi` 본문의 call expression 전체를 분류했다. 방문 함수와 그 처분:
 
@@ -189,7 +232,8 @@ signal이 없으면 evaluate Promise를 그대로 await한다(`:78-84`). 렌더�
 없다. 이 경계는 "데드라인 인지"가 아니라 **다른 처방**이 필요하다 — 락 획득에
 시간 상한을 두거나, 비동기 API로 옮기거나, 호출 자체를 조건부로 만들거나.
 
-판정 요약: 무한 정체 가능 B01~B07, B09~B20, B22 / bounded B08.
+판정 요약: **bounded인 경계는 없다.** 확인된 B01~B36 전부가 무한 정체 가능하다.
+B08은 소비만 bounded이고 하위 evaluate는 취소되지 않는다.
 
 ## 3절 — sentinel 소비자
 
@@ -214,7 +258,7 @@ signal이 없으면 evaluate Promise를 그대로 await한다(`:78-84`). 렌더�
 | B21 | `:594` | throw | pre-budget이라 `--timeout` 밖 |
 | B08 | `:838-844` `Promise.race` | 패배한 evaluate가 취소 없이 잔존 | 누적 시 리소스 압박 — 루프 자체는 막지 않는다 |
 | B24 | `:600`, `:634` | `.catch(() => null)` → `null` | **targetId가 null이면 mismatch 검사를 건너뛴다**(`:634-635`) — 다른 대화의 답을 읽을 수 있다 |
-| B25 | `:751`, `:797` | `?.()` → `undefined` | **파일/이미지 수집을 조용히 건너뛰고 성공 finalization을 계속한다**(`:797-812`) |
+| B25 | `:797`(파일만) | `?.()` → `undefined` | **파일 수집을 조용히 건너뛰고 성공 finalization을 계속한다**(`:797-812`). 이미지 쪽(`:751-759`)은 throw라 fail-closed |
 | B23 | `:597-601` | 빈 세션 → legacy baseline | 세션 조회가 비면 오래된 baseline으로 진행할 수 있다 |
 | B26 | `:879`,`:889`,`:927`,`:947` | 없음(동기) | 반환 자체가 막힌다 |
 | B27~B34 | 각 호출부 | 없음(동기) 또는 예외 삼킴 | 반환 지연 |
@@ -248,9 +292,10 @@ B25는 소비자가 갈린다: 이미지 CDP 부재는 throw로 fail-closed지�
 | `:851-858` | 탭 크래시 반환 | 모든 in-budget 경계 | 가능 |
 | `:879`, `:889-895` | recovery deferred 반환 | B09, B26 | 가능 |
 | `:901` | recovery 성공 반환 | B09, B05, B16, B33 | 가능 |
-| `:927`, `:947-953` | copy deferred 반환 | B11, B12, B29, B26 | 가능 |
+| `:927` | copy deferred(streaming) 반환 | B03, B04, B26 | 가능 |
+| `:947-953` | copy deferred(unverified) 반환 | B05, B26 | 가능 |
 | `:989-1004` | copy 타임아웃 반환 | B11, B12, B29, B18 | 가능(기존 warning 있음) |
-| `:1006-1022` | 최종 타임아웃 반환 | 모든 경계 | 가능(`warnings: []`) |
+| `:1006-1022` | 최종 타임아웃 반환 | finalizer 계열(B16·B17·B33·B34) 제외한 모든 경계 — finalizer는 성공 반환 또는 rejection으로 끝난다 | 가능(`warnings: []`) |
 | `:860` | rethrow(`throw pollErr`) | 모든 in-budget 경계 | **불가** — 예외 경로 |
 | `:899`, `:970` | `finalizeProviderTab` rejection | B16, B17, B33, B34 | **불가** — 예외 전파 |
 | `:986`, `:1006` | `markSessionTimeout` 세션 변경 | B18 | 부수효과 |
@@ -355,14 +400,16 @@ work-phase 분할(의존 순서):
 
 work-phase 분할(의존 순서):
 
-1. **pre-budget 예산 수립**(B21, B22, B23, B24) — 데드라인이 `:617`에서야
-   생기므로 그 앞 경계를 먼저 다뤄야 뒤의 예산이 의미를 갖는다
-2. **동기 IO 처방**(B18, B19, B20, B31~B34) — race가 불가하므로 다른 설계가
-   필요하다. 유닛 A의 5번 work-phase가 이 결과를 받으므로 앞에 온다
+1. **pre-budget 예산 수립**(B21, B24) — 데드라인이 `:617`에서야 생기므로 그 앞
+   경계를 먼저 다뤄야 뒤의 예산이 의미를 갖는다. B22/B23의 동기 IO 부분은 2번이
+   담당한다
+2. **동기 IO 처방**(B18, B19, B20, B22, B23, B31~B35 + B21의 persisted-state
+   읽기) — race가 불가하므로 다른 설계가 필요하다. §0의 sync isolation이 여기서
+   결정되고, 유닛 A의 4번 이후가 이 결과를 받으므로 앞에 온다
 3. CDP 예산 규약(B24, B25, B28, B30) — `CDPSession.send`에 timeout이 없다
 4. 아티팩트 수집(B14, B15, B30, B31, B32)
 5. diagnostics(B10, B28)
-6. 탭 lease와 finalizer(B16, B17, B33, B34)
+6. 탭 lease와 finalizer(B16, B17, B33, B34, B35, B36) — B36의 fail-open 교정 포함
 
 수용 기준: 담당 경계 전부가 데드라인을 인지하거나 bounded임이 증명된다.
 
@@ -405,9 +452,9 @@ B의 3~6번은 병행 가능하다.
 
 | 호출부 | 용도 | 정체 시 |
 | --- | --- | --- |
-| `chatgpt.mjs:331` | send 직전 baseline | baseline이 0으로 굳으면 과거 답변 전체가 새 답변 후보가 된다 |
-| `chatgpt.mjs:1155` | deep research baseline | 동일 |
-| `chatgpt.mjs:1415` | `waitForStableAssistantCount` | 연속 정체를 "안정"으로 오독 |
+| `chatgpt.mjs:334` | send 직전 baseline | baseline이 0으로 굳으면 과거 답변 전체가 새 답변 후보가 된다 |
+| `chatgpt.mjs:1154` | deep research baseline | 동일 |
+| `chatgpt.mjs:1416` | `waitForStableAssistantCount` | 연속 정체를 "안정"으로 오독 |
 
 이 셋은 `--timeout` 예산 밖이라 별도 처방이 필요하다. **유닛 A의 2번 work-phase**
 가 B02와 함께 다룬다 — 같은 리더를 고치면서 호출부 계약도 같이 바꿔야 하기
