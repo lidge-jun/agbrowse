@@ -66,8 +66,10 @@
 - 진입점이 하나로 모인다. `runBoundCommand`(`web-ai/cli.mjs:1254`)가 세션 폴에서
   `withSessionCommandLock` → `withCommandSessionPage` → `withWebAiActiveCommand`
   3중 래퍼를 거쳐 `deps`를 조립한다(`:1259-1277`). 예산을 끼울 자리가 명확하다.
-- 반대로 `withSessionCommandLock`(`web-ai/session-store.mjs:273`) 자체가 동기 락
-  경로(B18/B19)를 쓴다. 예산 래퍼가 그 안쪽인지 바깥쪽인지가 설계 쟁점이다.
+- 반대로 `withSessionCommandLock`(`web-ai/session-store.mjs:273`) 자체가
+  `Atomics.wait` 기반 동기 블로킹이다(`:250-256`). **B18/B19(`withStoreLock`)와는
+  다른 경계**이며 021 표본에 없다 — 진입점 락이라 WP3가 소유한다. 그 동안에는
+  타이머가 안 돌므로 바깥에서 race를 걸어도 소용없다.
 
 ## 담당 경계 (021 7절 유닛 A)
 
@@ -87,20 +89,34 @@ B01~B09, B11, B12, B13, B26, B27, B29 — 15개.
 
 | WP | 내용 | 선행 |
 | --- | --- | --- |
-| WP1 | 예산 계약 모델 선택 (in-process vs 격리) + 프리미티브 설계 | — |
+| WP1 | 예산 계약 모델 선택 + canonical owner 확정 + 프리미티브 설계 | — |
 | WP2 | fake timer 하네스 — 시계와 타이머를 함께 주입 | WP1 |
-| WP3 | 데드라인 안 읽기 경로 (B01, B02, B07) + `countAssistantMessages` 계약 | WP2 |
-| WP4 | 완료 판정 경로 (B03, B04, B05, B06) — fail-open 교정 | WP3 |
-| WP5 | 데드라인 후 경로 (B09, B11, B12, B13, B29) | WP4 |
-| WP6 | B26 세션 락, B27 하트비트 | 자매 유닛의 sync-IO 처방 |
-| WP7 | B08의 취소되지 않는 evaluate | WP1 |
-| WP8 | warning 전파 + 활성화 관측 | 전부 |
+| WP3 | **진입점 배선** — 네 호출자 전부에 예산 전파 + command lock 처방 | WP1 |
+| WP4 | 데드라인 안 읽기 경로 (B01, B02, B07) + `countAssistantMessages` 계약 | WP2, WP3 |
+| WP5 | 완료 판정 경로 (B03, B04, B05, B06) — fail-open 교정 | WP4 |
+| WP6 | 데드라인 후 경로 (B09, B11, B12, B13, B29) | WP5, **자매 sync-IO** |
+| WP7 | B26 세션 락, B27 하트비트 | **자매 sync-IO** |
+| WP8 | B08의 취소되지 않는 evaluate | WP1, WP2 |
+| WP9 | warning 전파 + 활성화 관측 | 전부, **자매 finalizer/lease** |
 
-분할은 의존 순서다(PHASE-SPLIT-01). WP1이 모델을 정해야 나머지가 설계되고,
-WP2의 하네스 없이는 WP3 이후를 검증할 수 없다.
+분할은 의존 순서다(PHASE-SPLIT-01).
 
-**WP6은 자매 유닛에 의존한다.** `artifact/finalizer` 유닛의 sync-IO 처방이 먼저
-나와야 세션 락을 다룰 수 있다.
+**WP3가 새로 추가됐다.** `sessionDeps` 세 getter를 감싸는 것만으로는 부족하다는
+것이 감사에서 확인됐다 — 페이지 해석이 조립보다 먼저 일어나고, 반환된 `page`가
+getter를 우회하며, `runBoundCommand`를 거치지 않는 호출자가 셋 더 있다
+(`mcp-server.mjs:105`, `cli-sessions.mjs:122`, `watcher.mjs:633`,
+`chatgpt.mjs:1127`). 진입점 배선이 독립 work-phase여야 하는 이유다.
+
+`withSessionCommandLock`의 `Atomics.wait`(`session-store.mjs:250-256`)도 WP3
+소유다. 예산이 락 획득 **전에** 시작해야 하므로 다른 배선보다 앞선다.
+
+### 자매 유닛 선행 (021 7절)
+
+| 이 유닛 | 필요한 자매 phase | 이유 |
+| --- | --- | --- |
+| WP6 | sync-IO 처방 | B20(`persistResolverTraceForSession`)이 copy 경로에 있다 |
+| WP7 | sync-IO 처방 | B26이 세션 store 락을 쓴다 |
+| WP9 | finalizer·lease phase | B33/B34가 성공·recovery·copy 경로 전부에 걸린다 |
 
 ## 검증 시나리오 (021 6절, A·B 공통)
 
@@ -112,8 +128,25 @@ WP2의 하네스 없이는 WP3 이후를 검증할 수 없다.
 | C4 | 동기 IO가 event loop 차단 | wall-time 상한 성립 (모델별 증명 방식이 다르다) |
 | C5 | fail-open 여섯 각각 | sentinel을 정상 상태로 오독하지 않음 |
 
-C5 중 B03·B06이 이 유닛 담당(WP4)이다. C1~C4는 **자매 유닛과 공동 게이트** —
+C5 중 B03·B06이 이 유닛 담당(WP5)이다. C1~C4는 **자매 유닛과 공동 게이트** —
 어느 한쪽만으로는 met이 아니다.
+
+### 시나리오별 하네스와 관측 대상
+
+C1~C5를 그대로 두면 "어디서 어떻게 증명하는가"가 빠진다. WP2가 하네스를 정할 때
+아래를 채운다.
+
+| # | 하네스 | 관측 대상 | 비고 |
+| --- | --- | --- | --- |
+| C1 | fake timer + page double | 반환 여부, 경과 시간 | CLI 세션/무세션 두 경로 모두 |
+| C2 | fake timer + 늦게 resolve하는 double | 세션 store·artifact·lease 상태 불변 | 늦은 resolve 후 스냅샷 비교 |
+| C3 | 반복 timeout | outstanding handle 수, pending 작업 수 | 단순 반환값이 아니라 누적 관측 |
+| C4 | **실시간 프로세스 하네스** | wall-clock 상한 | fake timer로는 불가 — `Atomics.wait`는 타이머를 막고, 격리 모델이면 자식 종료를 실제로 재야 한다 |
+| C5 | 경계별 단위 테스트 | sentinel이 정상값으로 오독되지 않음 | B03·B06은 이 유닛, 나머지는 자매 |
+
+**C4가 별도 하네스를 요구한다.** 나머지와 성격이 달라 WP2가 둘을 다 만들어야
+한다. 추가로 command lock 경합·해제도 C1/C3에서 관측 대상에 포함한다 —
+timeout 후 락이 남으면 다음 명령이 막힌다.
 
 ## 테스트 하네스 제약 (021 6절)
 

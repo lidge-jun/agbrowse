@@ -25,15 +25,34 @@ in-process를 고르려면 담당 범위의 동기 IO를 전부 async로 옮기�
 | B26 | `web-ai/chatgpt.mjs:1528-1530` | `buildDeferredPollingResult` → `getSession`+`updateSession` |
 | B27 | `web-ai/chatgpt.mjs:688` | `process.stderr.write` |
 | B20 | `web-ai/chatgpt.mjs:1386` | `persistResolverTraceForSession` |
-| B22/B23 | `web-ai/session.mjs:156-172`, `session-store.mjs:116` | baseline/session store 읽기 |
+| B22/B23 | `web-ai/session.mjs:156-161`, `session-store.mjs:116-117` | baseline/session store 읽기 |
+| B21 | `skills/browser/browser.mjs:480-485` | `deps.getPage` 하위 persisted-state 동기 읽기 |
+| B31/B32 | `web-ai/chatgpt-images.mjs:257-273`, `web-ai/chatgpt-files.mjs:433-444` | 아티팩트 저장 (자매 유닛 소유, 모델은 공통) |
+| B33/B34 | `web-ai/tab-finalizer.mjs:64-86`, `web-ai/tab-lease-store.mjs:179-208` | finalizer·lease (자매 유닛 소유, 모델은 공통) |
+| B35 | `skills/browser/tab-manager.mjs:35-52` | `forgetTabActivity` (자매 유닛 소유, 모델은 공통) |
+| 진입점 락 | `web-ai/session-store.mjs:250-256`, `:273-316` | `withSessionCommandLock` — `Atomics.wait` |
+
+자매 유닛 소유 경계도 표에 넣는 이유: **모델은 두 유닛이 공유**하므로, in-process를
+고르려면 저 전부가 async로 옮겨져야 한다. 이 유닛 담당분만 보고 판정하면 안 된다.
 
 추가로 진입점 자체가 동기 락을 쓴다. `withSessionCommandLock`
 (`web-ai/session-store.mjs:273-290`)은 `openSync`를 `LOCK_RETRY_LIMIT` 루프로
 돌리고 실패 시 `sleepBlockingMs`로 **블로킹 대기**한다.
 
-**핵심 질문:** 예산 래퍼를 이 락의 안쪽에 둘지 바깥쪽에 둘지. 안쪽이면 락 획득
-자체가 예산 밖이라 `--timeout`이 시작도 전에 멈출 수 있고, 바깥쪽이면 락을
-잡은 채 타임아웃되어 락 해제 경로가 필요하다. WP1이 이걸 답해야 한다.
+**이건 대등한 선택지가 아니다.** 락 획득은 `openSync` 재시도 루프이고 실패 시
+`sleepBlockingMs`(`web-ai/session-store.mjs:250-256`)를 부르는데, 그 구현이
+`Atomics.wait`다(`:255`). **동기 블로킹이라 그 동안 타이머 자체가 안 돈다** —
+바깥에서 `Promise.race`를 걸어도 소용없다. `LOCK_RETRY_LIMIT`까지 가면 5초 이상
+막힐 수 있다.
+
+게다가 락 해제는 callback Promise가 끝난 뒤 `finally`에서만 일어난다(`:273-316`).
+timeout을 반환해도 원 작업이 살아 있으면 락도 계속 잡혀 있다.
+
+결론: **예산은 락 획득 전에 시작해야 하고, 획득 자체를 deadline-aware async로
+바꾸거나 부모 격리로 선점해야 한다.** WP1이 둘 중 하나를 고른다.
+
+이 command lock 수정은 별도 work-phase가 필요하다 — `000_plan.md`의 WP 목록에
+없었다. WP6의 B26은 `buildDeferredPollingResult`가 쓰는 **다른** store lock이다.
 
 ### 기준 2 — fencing을 어디에 거는가
 
@@ -70,9 +89,9 @@ export async function observeAssistantResponse(page, { baselineAssistantCount = 
 
 WP1은 이 패턴을 확장할 수 있는지, 아니면 근본적으로 부족한지 판정한다.
 
-### 기준 4 — 진입점 구조
+### 기준 4 — 진입점 구조와 그 한계
 
-세션 폴의 진입점은 하나로 모인다(`web-ai/cli.mjs:1259-1277`).
+세션 폴의 CLI 사슬은 이렇다(`web-ai/cli.mjs:1259-1277`).
 
 ```
 runBoundCommand(command='poll', input.session 있음)
@@ -83,10 +102,47 @@ runBoundCommand(command='poll', input.session 있음)
 ```
 
 `sessionDeps`가 `:1263-1268`에서 조립된다 — `getPage`, `getTargetId`,
-`getCdpSession` 셋. **예산을 끼울 자리가 명확하다.** 이 셋을 예산 인지 버전으로
-감싸면 하위가 무엇을 하든 그 예산을 받는다.
+`getCdpSession` 셋.
 
-세션 없는 폴은 `:1279`로 바로 간다. 두 경로 모두 다뤄야 한다.
+**그 셋을 감싸는 것만으로는 부족하다.** 감사가 확인한 세 가지 누수:
+
+1. **페이지 해석이 조립보다 먼저다.** `withCommandSessionPage`(`:1314`)가
+   `verifySessionTab`·`getPageByTargetId`·`page.goto`·세션 update까지 수행한
+   **뒤에** `sessionDeps`가 만들어진다(`web-ai/tab-recovery.mjs:437-558`). 그
+   구간의 정체는 예산 밖이다.
+2. **반환된 `page`가 getter를 우회한다.** `pollWebAi`는 `getPage()`로 받은
+   실제 `page` 객체에 직접 `evaluate`/locator를 호출하고, `getSession`·
+   `updateSession`도 직접 import한다(`web-ai/chatgpt.mjs:585-617`, `:658-677`).
+   getter를 감싸도 그 뒤 호출은 원본 객체를 쓴다.
+3. **`runBoundCommand`를 거치지 않는 호출자가 셋 더 있다.**
+   `web-ai/mcp-server.mjs:105`, `web-ai/cli-sessions.mjs:122`,
+   `web-ai/watcher.mjs:633`, 그리고 `web-ai/chatgpt.mjs:1127`(deep research).
+   CLI 진입점만 고치면 이들은 계약 밖이다.
+
+따라서 WP1은 **예산의 canonical owner를 먼저 정해야 한다.** 후보:
+`pollWebAi` 자신이 예산을 만들고 모든 호출자가 데드라인을 전달하는 형태,
+또는 `deps` 계약에 예산을 필수 필드로 넣는 형태. 어느 쪽이든 네 진입점
+전부가 대상이다.
+
+세션 없는 폴은 `:1279`로 바로 간다.
+
+### 기준 5 — 격리 모델의 결정적 조건
+
+"직렬화가 안 될 수 있다"로 넘기면 판정이 안 된다. 다음을 **probe로 확인**한다.
+
+| 항목 | 확인 방법 | 탈락 조건 |
+| --- | --- | --- |
+| process 경계 | `pollWebAi`가 받는 것 중 무엇이 자식에서 재구성 가능한가 | `sessionDeps`의 closure와 Playwright `Page`는 그대로 직렬화 불가(`web-ai/cli.mjs:1263-1268`) — 자식이 CDP로 재연결할 수 있는지가 관건 |
+| IPC 결과 계약 | `pollWebAi` 반환 객체가 구조화 복제 가능한가 | `baseline`·`traceSummary` 등에 함수/순환 참조가 있으면 스키마 변환 필요 |
+| kill/reap | 자식을 죽였을 때 CDP 세션과 탭이 정리되는가 | 좀비 탭이 남으면 lease 오염 |
+| 부분 쓰기 | 자식이 세션 store를 쓰던 중 죽으면 | 락 파일이 남거나 store가 깨지면 탈락 |
+| 직접 호출자 호환 | MCP·watcher·resume·deep research가 자식 모델로 동작하는가 | 넷 중 하나라도 못 쓰면 두 경로가 갈린다 |
+| 취소 불가 작업 drain | in-process를 고른 경우 | `Atomics.wait` 중인 동기 구간은 취소가 원리적으로 불가 — 이 경우 in-process 탈락 |
+| 성능 | 자식 기동 비용 | 폴은 반복 호출이라 매번 프로세스를 띄우면 비용이 문제 |
+
+**마지막 두 행이 결정적일 가능성이 높다.** `Atomics.wait`가 남아 있는 한
+in-process는 C4를 만족할 수 없고, 자식 기동 비용이 크면 격리가 실용적이지 않다.
+WP1은 이 둘을 먼저 측정한다.
 
 ## 산출물
 
