@@ -11,6 +11,43 @@ export const CHATGPT_STOP_SELECTORS = [
     'form button[aria-label*="Stop" i]:not([aria-label*="dictat" i]):not([aria-label*="voice" i]):not([aria-label*="read" i])',
 ];
 
+export const CHATGPT_TURN_SELECTORS = [
+    'article[data-testid^="conversation-turn"]',
+    'div[data-testid^="conversation-turn"]',
+    'section[data-testid^="conversation-turn"]',
+];
+
+/**
+ * Browser-context helper. Reports whether the latest assistant turn follows the
+ * latest user turn.
+ *
+ * Returns a VERDICT, not a boolean. "Cannot verify" and "verified ordered" are
+ * different facts, and collapsing them is what let a stalled DOM read pass the
+ * ordering gate as if it had been checked.
+ *
+ * This helper never reports `'unknown'` — a browser callback cannot describe its
+ * own failure to run. Only the Node-side wrapper's catch produces that value.
+ *
+ * @typedef {'ordered'|'stale'|'unverifiable'} ChatGptTurnOrderingInPage
+ * @param {string[]} selectors
+ * @returns {ChatGptTurnOrderingInPage}
+ */
+export function readAssistantTurnOrderingInPage(selectors) {
+    const turns = Array.from(document.querySelectorAll(selectors.join(', ')));
+    const roleOf = (/** @type {Element} */ turn) => turn.getAttribute('data-message-author-role')
+        || turn.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
+    const lastAssistantTurn = turns.findLast((turn) => roleOf(turn) === 'assistant');
+    const lastUserTurn = turns.findLast((turn) => roleOf(turn) === 'user');
+    // No user turn: ordering cannot be checked, but this is a legitimate state
+    // (system-initiated conversations), not a failed observation.
+    if (!lastUserTurn) return 'unverifiable';
+    // No assistant turn yet — the outer poll handles that through `latest`.
+    if (!lastAssistantTurn) return 'stale';
+    return lastUserTurn.compareDocumentPosition(lastAssistantTurn) & Node.DOCUMENT_POSITION_FOLLOWING
+        ? 'ordered'
+        : 'stale';
+}
+
 /**
  * Node-side probe: is a composer-scoped stop button visible within `scope`?
  *
@@ -133,7 +170,7 @@ export function resolveTopLevelAssistantTurns(selectors) {
  * that merely still reads "Thinking" are not the same evidence, and treating them
  * alike lets a stale sidecar hang the poll loop forever.
  *
- * @typedef {'strong'|'weak'|'none'} ChatGptActivityStrength
+ * @typedef {'strong'|'weak'|'none'|'unknown'} ChatGptActivityStrength
  * @typedef {{ strength: ChatGptActivityStrength, evidence: string }} ChatGptActivityState
  * @param {{ assistantSelectors: string[], stopSelectors: string[], resolverSource?: string }} options
  * @returns {ChatGptActivityState}
@@ -252,12 +289,18 @@ export function readChatGptStreamingState({ assistantSelectors, stopSelectors, r
 
 /**
  * Back-compatible boolean view of an activity verdict.
+ *
+ * `'unknown'` reads as INACTIVE here. That is safe only because both consumers
+ * of this boolean view — timeout recovery and the copy fallback — gate their
+ * success on independent terminal evidence (`isResponseFinished`). It is not
+ * safe because the deadline has passed.
+ *
  * @param {ChatGptActivityState|boolean|null|undefined} state
  * @returns {boolean}
  */
 export function isActiveState(state) {
     if (typeof state === 'boolean') return state;
-    return Boolean(state && state.strength !== 'none');
+    return Boolean(state && state.strength !== 'none' && state.strength !== 'unknown');
 }
 
 /**

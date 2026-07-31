@@ -187,6 +187,9 @@ function createFakeChatGptPage(opts = {}) {
                 return page.assistantTurns.map((turn, turnIndex) => ({ ...turn, turnIndex }));
             }
             if (_fn?.name === 'readChatGptStreamingState') return false;
+            // Model the ordering gate explicitly; a fall-through `null` would be
+            // normalized to `unknown` and (correctly) veto completion.
+            if (_fn?.name === 'readAssistantTurnOrderingInPage') return 'ordered';
             if (String(_fn).includes('finishedSelector') && arg?.sample) {
                 const turnIndex = page.assistantTurns.findLastIndex(turn =>
                     (!arg.sample.messageId || turn.messageId === arg.sample.messageId)

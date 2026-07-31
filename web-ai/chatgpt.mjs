@@ -56,9 +56,11 @@ import { buildTargetMismatchResult } from './session-target-guard.mjs';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    CHATGPT_TURN_SELECTORS,
     anyStopButtonVisible,
     isActiveState,
     readAssistantSnapshotSources,
+    readAssistantTurnOrderingInPage,
     readChatGptStreamingState,
     readTopLevelAssistantSnapshots,
     readTopLevelAssistantTextsFromLocators,
@@ -552,30 +554,72 @@ export async function verifySentAttachments(page, uploadFiles, evidence, verifyA
 }
 
 /**
- * Check whether the latest assistant conversation turn follows the latest user turn.
- * Evaluation failures are treated as ordered so transient DOM issues do not block polling.
+ * Node-side wrapper: read the assistant/user turn ordering verdict.
+ *
+ * Evaluation failure reports `'unknown'` — NOT `'ordered'`. Treating a failed
+ * read as "verified ordered" disabled this gate exactly when it was needed: a
+ * stalled DOM could no longer be checked, so stale text passed as fresh.
+ *
  * @param {any} page
- * @returns {Promise<boolean>}
+ * @returns {Promise<'ordered'|'stale'|'unverifiable'|'unknown'>}
  */
-async function doesAssistantFollowUser(page) {
-    // Returns true (ordered) or false (stale). Non-boolean results from mock/fake
-    // pages (e.g. null) are treated as true to avoid blocking in test environments.
-    const result = await page.evaluate(() => {
-        const turns = Array.from(document.querySelectorAll(
-            'article[data-testid^="conversation-turn"], div[data-testid^="conversation-turn"], section[data-testid^="conversation-turn"]',
-        ));
-        const roleOf = (/** @type {Element} */ turn) => turn.getAttribute('data-message-author-role')
-            || turn.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
-        const lastAssistantTurn = turns.findLast((turn) => roleOf(turn) === 'assistant');
-        const lastUserTurn = turns.findLast((turn) => roleOf(turn) === 'user');
-        // No user turn found → can't verify ordering; assume OK (avoids blocking
-        // in test fixtures and edge cases like system-initiated conversations).
-        // No assistant turn → not ready yet, but the outer poll handles that via `latest`.
-        if (!lastUserTurn) return true;
-        if (!lastAssistantTurn) return false;
-        return Boolean(lastUserTurn.compareDocumentPosition(lastAssistantTurn) & Node.DOCUMENT_POSITION_FOLLOWING);
-    }).catch(() => null);
-    return result !== false;
+async function readAssistantTurnOrdering(page) {
+    let verdict;
+    try {
+        verdict = await page.evaluate(readAssistantTurnOrderingInPage, CHATGPT_TURN_SELECTORS);
+    } catch {
+        return 'unknown';
+    }
+    // A page double that cannot honour the callback returns null/undefined or
+    // something else entirely. That is an unobserved gate, not a passed one.
+    return verdict === 'ordered' || verdict === 'stale' || verdict === 'unverifiable'
+        ? verdict
+        : 'unknown';
+}
+
+/**
+ * Record a failed activity observation.
+ *
+ * Fail-closed sentinels are worthless if they vanish silently: the caller must
+ * be able to see that the poll could not read the page.
+ *
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptActivityState} activity
+ * @param {Set<string>} observations
+ */
+function recordActivityObservation(activity, observations) {
+    if (activity?.strength === 'unknown') observations.add('activity-read-unverified');
+}
+
+/**
+ * Merge the poll's observation ledger into a result envelope.
+ *
+ * Applied at every result-envelope CONSTRUCTION, not at every `return`: warnings
+ * also escape through `withAnswerArtifact` (which copies them at call time),
+ * `buildDeferredPollingResult` (which persists them to the session), and
+ * `finalizeProviderTab` (which runs before the return). Merging late would leave
+ * those three disagreeing with what the caller sees.
+ *
+ * @template {{ warnings?: string[] }} T
+ * @param {T} result
+ * @param {Set<string>} observations
+ * @returns {T}
+ */
+function mergeObservationWarnings(result, observations) {
+    if (!observations.size) return result;
+    return { ...result, warnings: mergeObservationList(result?.warnings, observations) };
+}
+
+/**
+ * @param {string[]|undefined} warnings
+ * @param {Set<string>} observations
+ * @returns {string[]}
+ */
+function mergeObservationList(warnings, observations) {
+    const merged = Array.isArray(warnings) ? [...warnings] : [];
+    for (const observation of observations) {
+        if (!merged.includes(observation)) merged.push(observation);
+    }
+    return merged;
 }
 
 /**
@@ -616,6 +660,10 @@ export async function pollWebAi(deps, input = {}) {
 
     const deadline = Date.now() + timeout * 1000;
     const startedAt = Date.now();
+    // Observation ledger: records reads the poll could NOT make. Every result
+    // envelope merges it, so a fail-closed sentinel never disappears silently.
+    /** @type {Set<string>} */
+    const observations = new Set();
     let stableText = '';
     let stableSnapshot = null;
     let stableSince = 0;
@@ -633,26 +681,26 @@ export async function pollWebAi(deps, input = {}) {
         if (session?.targetId) {
             const currentTargetId = await deps.getTargetId?.().catch(() => null);
             if (currentTargetId && currentTargetId !== session.targetId) {
-                return buildTargetMismatchResult({
+                return mergeObservationWarnings(buildTargetMismatchResult({
                     vendor,
                     session,
                     actualTargetId: currentTargetId,
                     port: deps.getPort?.() || 9222,
                     url: page.url(),
                     baseline,
-                });
+                }), observations);
             }
         } else {
             const currentUrl = page.url();
             const baselineConvoId = extractConversationId(baseline.url);
             const currentConvoId = extractConversationId(currentUrl);
             if (baselineConvoId !== currentConvoId || (!baselineConvoId && !currentConvoId && baseline.url !== currentUrl)) {
-                return {
+                return mergeObservationWarnings({
                     ok: false, vendor, status: 'conversation-mismatch',
                     url: currentUrl, answerText: '', baseline, usedFallbacks: [],
                     warnings: [`conversation changed: ${baselineConvoId || 'none'} → ${currentConvoId || 'none'}`],
                     error: 'conversation changed during poll',
-                };
+                }, observations);
             }
         }
         const split = await readAssistantSnapshotsSplit(page);
@@ -675,12 +723,15 @@ export async function pollWebAi(deps, input = {}) {
         const latestSnapshot = newSnapshots.at(-1) || null;
         const latest = latestSnapshot?.text || '';
         const activity = await readActivityState(page);
+        recordActivityObservation(activity, observations);
         // `streaming` now means STRONG evidence only. Weak activity — a mounted
         // sidecar still reading "Thinking", or a growing "Thought for 2s: …"
         // trace — no longer freezes the stability window; it only demands a
         // longer quiet period before we accept completion.
         const streaming = activity.strength === 'strong';
-        const weakActive = activity.strength === 'weak';
+        // An unobserved verdict buys the same longer quiet window as weak
+        // activity: we cannot claim the page went quiet if we could not read it.
+        const weakActive = activity.strength === 'weak' || activity.strength === 'unknown';
         const now = Date.now();
         if ((streaming || latest) && now - lastHeartbeat >= 30_000) {
             const elapsed = Math.round((now - startedAt) / 1000);
@@ -694,18 +745,19 @@ export async function pollWebAi(deps, input = {}) {
             && isImageOnlyGeneratedImageChromeText(latest)) {
             const imageResult = await collectGeneratedImageAnswer(deps, input, session, baseline);
             if (imageResult) {
+                const imageWarnings = mergeObservationList(imageResult.warnings, observations);
                 if (!input.skipFinalize) {
                     await finalizeProviderTab(deps, {
                         vendor, session: /** @type {any} */ (session), page,
                         answerText: imageResult.answerText,
-                        warnings: imageResult.warnings,
+                        warnings: imageWarnings,
                         archiveFlag: input.archiveFlag,
                     });
                 }
                 return withAnswerArtifact({
                     ok: true, vendor, status: 'complete', url: page.url(), sessionId: session.sessionId,
                     answerText: imageResult.answerText, baseline, usedFallbacks: ['generated-image'],
-                    warnings: imageResult.warnings, responseStableMs: 0,
+                    warnings: imageWarnings, responseStableMs: 0,
                 });
             }
         }
@@ -718,11 +770,17 @@ export async function pollWebAi(deps, input = {}) {
         // A wrapperless candidate was ADMITTED only because it DOM-follows the latest
         // user node, so it already carries the exact evidence this gate checks — and
         // the gate structurally cannot see it, since it only knows turn wrappers.
+        let orderingOk = true;
         if (latest && !streaming && latestSnapshot?.source !== 'wrapperless') {
-            const ordered = await doesAssistantFollowUser(page).catch(() => true);
-            if (!ordered) continue; // not ready yet — user's turn is still the latest
+            const ordering = await readAssistantTurnOrdering(page);
+            // `unknown` disqualifies the candidate exactly like `stale`. It does NOT
+            // `continue`: that would skip the pacing wait below, spinning the loop
+            // and — on the virtual clock, which only advances inside
+            // `waitForTimeout` — never reaching the deadline at all.
+            orderingOk = ordering === 'ordered' || ordering === 'unverifiable';
+            if (ordering === 'unknown') observations.add('assistant-ordering-unverified');
         }
-        if (latest && !streaming) {
+        if (latest && !streaming && orderingOk) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
                 // A weak signal demands a longer quiet window before we treat it as
@@ -809,6 +867,14 @@ export async function pollWebAi(deps, input = {}) {
                         } catch (err) {
                             warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
                         }
+                    }
+                    // Merge BEFORE the finalizer runs: it persists this array to the
+                    // session, so merging afterwards would leave the stored warnings
+                    // disagreeing with the returned ones.
+                    for (const observation of observations) {
+                        if (!warnings.includes(observation)) warnings.push(observation);
+                    }
+                    if (session && !input.skipFinalize) {
                         await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
                     }
                     return withAnswerArtifact({
@@ -848,14 +914,14 @@ export async function pollWebAi(deps, input = {}) {
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
                 if (session) updateSession(session.sessionId, { status: 'crashed' });
-                return {
+                return mergeObservationWarnings({
                     ok: false, vendor, status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
                     answerText: '', baseline, usedFallbacks: [],
                     warnings: ['tab-crashed-during-poll'],
                     error: String((/** @type {any} */ (pollErr))?.message || pollErr),
                     recoverable: true,
-                };
+                }, observations);
             }
             throw pollErr;
         }
@@ -865,10 +931,20 @@ export async function pollWebAi(deps, input = {}) {
     // assistant turn once — recovers a final answer the loop missed (e.g. a late
     // DOM settle). Session polls only (recovery persists to the session).
     if (session) {
+        // Capture the STRUCTURED verdict of the read recovery performs. Boolean
+        // `isStreaming` throws that away, and the ledger needs to know whether the
+        // page could be read at all. `recoverAssistantResponse` invokes this
+        // exactly once when a candidate exists.
+        /** @type {import('./chatgpt-response-dom.mjs').ChatGptActivityState|null} */
+        let recoveryActivity = null;
         const recovered = await recoverAssistantResponse(page, {
             baselineAssistantCount: baseline.assistantCount,
             isFinalAnswer,
-            readStreaming: () => isStreaming(page),
+            readStreaming: async () => {
+                recoveryActivity = await readActivityState(page);
+                recordActivityObservation(recoveryActivity, observations);
+                return isActiveState(recoveryActivity);
+            },
             readFinished: async sample => {
                 const completion = await isResponseFinished(page, sample, baseline.assistantCount);
                 return completion.finished === true;
@@ -882,9 +958,24 @@ export async function pollWebAi(deps, input = {}) {
                     usedFallbacks: ['recovery'],
                     warning: 'recovery-deferred-streaming',
                     streamingState: 'streaming',
+                    observations,
                 });
             }
-            const canComplete = recovered.finished === true;
+            // This path does not collect images. When the caller asked for a
+            // concrete file, returning TEXT as `complete` reports success for an
+            // artifact that was never produced — the public contract
+            // (devlog/_fin/260508_oracle_parity/11_generated_images_public_contract.md)
+            // requires a failure, not a warning-decorated success. Text content is
+            // irrelevant here: substantive markdown satisfies the image request no
+            // better than the `Edit` chrome does.
+            const imageOutputUnsatisfied = input.outputImage !== undefined;
+            // Recovery must honour the ordering gate too. Without this the loop
+            // refuses a stale answer for the whole budget and then recovery hands
+            // back that same text as `complete` — the veto would be decorative.
+            const recoveredOrdering = await readAssistantTurnOrdering(page);
+            if (recoveredOrdering === 'unknown') observations.add('assistant-ordering-unverified');
+            const orderingOk = recoveredOrdering === 'ordered' || recoveredOrdering === 'unverifiable';
+            const canComplete = recovered.finished === true && orderingOk && !imageOutputUnsatisfied;
             if (!canComplete) {
                 return buildDeferredPollingResult({
                     vendor, page, session, baseline,
@@ -892,11 +983,13 @@ export async function pollWebAi(deps, input = {}) {
                     usedFallbacks: ['recovery'],
                     warning: 'recovery-deferred-unverified',
                     streamingState: 'unknown',
+                    observations,
                 });
             }
             const answerText = recovered.text;
+            const warnings = mergeObservationList(['response-recovered-after-timeout'], observations);
             if (!input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
+                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -907,7 +1000,7 @@ export async function pollWebAi(deps, input = {}) {
                 answerText,
                 baseline,
                 usedFallbacks: ['recovery'],
-                warnings: ['response-recovered-after-timeout'],
+                warnings,
                 responseStableMs: Math.max(1, Number(recovered.responseStableMs || 0)),
             });
         }
@@ -920,7 +1013,9 @@ export async function pollWebAi(deps, input = {}) {
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
-        const streaming = await isStreaming(page);
+        const copyActivity = await readActivityState(page);
+        recordActivityObservation(copyActivity, observations);
+        const streaming = isActiveState(copyActivity);
         const responseStableMs = stableSince ? Date.now() - stableSince : 0;
         if (streaming) {
             if (session) {
@@ -930,6 +1025,7 @@ export async function pollWebAi(deps, input = {}) {
                     usedFallbacks: ['copy-markdown'],
                     warning: 'copy-markdown-deferred-streaming',
                     streamingState: 'streaming',
+                    observations,
                 });
             }
             stableText = '';
@@ -942,7 +1038,10 @@ export async function pollWebAi(deps, input = {}) {
         const completion = stableSnapshot
             ? await isResponseFinished(page, stableSnapshot, baseline.assistantCount)
             : { finished: false };
-        if (completion.finished !== true) {
+        // Same invariant as recovery: this path collects no images, so an
+        // explicit `--output-image` request cannot be satisfied here regardless of
+        // how substantive the copied text is.
+        if (completion.finished !== true || input.outputImage !== undefined) {
             if (session) {
                 return buildDeferredPollingResult({
                     vendor, page, session, baseline,
@@ -950,6 +1049,7 @@ export async function pollWebAi(deps, input = {}) {
                     usedFallbacks: ['copy-markdown'],
                     warning: 'copy-markdown-deferred-unverified',
                     streamingState: 'unknown',
+                    observations,
                 });
             }
             stableText = '';
@@ -966,8 +1066,9 @@ export async function pollWebAi(deps, input = {}) {
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
+            const warnings = mergeObservationList([], observations);
             if (session && !input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
+                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -978,7 +1079,7 @@ export async function pollWebAi(deps, input = {}) {
                 answerText,
                 baseline,
                 usedFallbacks: ['copy-markdown'],
-                warnings: [],
+                warnings,
                 ...(traceSummary ? { traceSummary } : {}),
                 responseStableMs: Date.now() - stableSince,
             });
@@ -986,7 +1087,7 @@ export async function pollWebAi(deps, input = {}) {
         const timedOutSession = session ? markSessionTimeout(session.sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
         }) : null;
-        return {
+        return mergeObservationWarnings({
             ok: false,
             vendor,
             status: 'timeout',
@@ -1001,12 +1102,12 @@ export async function pollWebAi(deps, input = {}) {
             recoverable: true,
             retryHint: 'poll-or-resume',
             error: 'timed out waiting for answer',
-        };
+        }, observations);
     }
     const timedOutSession = session ? markSessionTimeout(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
     }) : null;
-    return {
+    return mergeObservationWarnings({
         ok: false,
         vendor,
         status: 'timeout',
@@ -1020,10 +1121,16 @@ export async function pollWebAi(deps, input = {}) {
         recoverable: true,
         retryHint: 'poll-or-resume',
         error: 'timed out waiting for answer',
-    };
+    }, observations);
 }
 
 /**
+ * Read the current activity verdict.
+ *
+ * A FAILED observation reports `'unknown'`, never `'none'`. Collapsing the two
+ * meant a stalled page read as "quiet", which is the completion signal — so a
+ * stall disguised itself as a finished answer.
+ *
  * @param {any} page
  * @returns {Promise<import('./chatgpt-response-dom.mjs').ChatGptActivityState>}
  */
@@ -1034,8 +1141,9 @@ async function readActivityState(page) {
     try {
         if (await anyStopButtonVisible(page)) return { strength: 'strong', evidence: 'stop-button' };
     } catch { /* fall through to the DOM probe */ }
+    let state;
     try {
-        const state = await page.evaluate(
+        state = await page.evaluate(
             readChatGptStreamingState,
             {
                 assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
@@ -1043,13 +1151,22 @@ async function readActivityState(page) {
                 resolverSource: resolveTopLevelAssistantTurns.toString(),
             },
         );
-        if (state && typeof state === 'object' && typeof state.strength === 'string') return state;
-        // A legacy boolean from a stubbed page still means "strong or nothing".
-        if (typeof state === 'boolean') {
-            return state ? { strength: 'strong', evidence: 'stop-button' } : { strength: 'none', evidence: '' };
-        }
-    } catch { /* page may be navigating or lack a complete DOM context */ }
-    return { strength: 'none', evidence: '' };
+    } catch {
+        // Page may be navigating, stalled, or lack a complete DOM context. We do
+        // not know whether it is generating.
+        return { strength: 'unknown', evidence: 'read-failed' };
+    }
+    // Whitelist the known verdicts. `typeof strength === 'string'` would let
+    // `{strength:'bogus'}` through this `page.evaluate` boundary untouched.
+    if (state && typeof state === 'object'
+        && (state.strength === 'strong' || state.strength === 'weak' || state.strength === 'none')) {
+        return state;
+    }
+    // A legacy boolean from a stubbed page still means "strong or nothing".
+    if (typeof state === 'boolean') {
+        return state ? { strength: 'strong', evidence: 'stop-button' } : { strength: 'none', evidence: '' };
+    }
+    return { strength: 'unknown', evidence: 'read-malformed' };
 }
 
 /**
@@ -1525,14 +1642,22 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
 /**
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
-function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState }) {
+function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations }) {
     const current = getSession(session.sessionId) || session;
+    // The session write and the returned envelope must carry the SAME warnings.
+    // Merging the ledger into the return value afterwards would leave the stored
+    // session disagreeing with what the caller sees.
+    const warnings = observations
+        ? mergeObservationList([warning], observations)
+        : [warning];
+    let storedWarnings = current.warnings || [];
+    for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
     updateSession(session.sessionId, {
         status: 'polling',
         answer: null,
         completedAt: null,
         lastStreamingState: streamingState,
-        warnings: appendUniqueWarningLocal(current.warnings || [], warning),
+        warnings: storedWarnings,
     });
     return {
         ok: true,
@@ -1543,7 +1668,7 @@ function buildDeferredPollingResult({ vendor, page, session, baseline, answerTex
         answerText,
         baseline,
         usedFallbacks,
-        warnings: [warning],
+        warnings,
         recoverable: true,
         retryHint: 'watch-or-poll',
     };

@@ -3,7 +3,9 @@ import { chromium } from 'playwright-core';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
+    CHATGPT_TURN_SELECTORS,
     readAssistantSnapshotSources,
+    readAssistantTurnOrderingInPage,
     readChatGptStreamingState,
     resolveTopLevelAssistantTurns,
 } from '../../web-ai/chatgpt-response-dom.mjs';
@@ -65,6 +67,56 @@ describe('activity state browser transport', () => {
         const page = await browser.newPage();
         await page.setContent('<form><button data-testid="stop-button" style="width:40px;height:40px">stop</button></form>');
         await expect(read(page)).resolves.toMatchObject({ strength: 'strong', evidence: 'stop-button' });
+        await page.close();
+    });
+});
+
+// The poll's ordering gate is only as good as this callback. Injecting the
+// verdict into a page double would verify the CALLER while leaving the producer
+// free to be deleted, so it runs here against a real DOM instead.
+describe('turn ordering browser transport (B06)', () => {
+    let browser;
+
+    beforeAll(async () => {
+        browser = await launchTransportChromium(chromium);
+    });
+
+    afterAll(async () => {
+        await browser?.close();
+    });
+
+    const turn = (role, text) =>
+        `<article data-testid="conversation-turn-${role}" data-message-author-role="${role}">${text}</article>`;
+
+    async function readOrdering(page) {
+        return page.evaluate(readAssistantTurnOrderingInPage, CHATGPT_TURN_SELECTORS);
+    }
+
+    it('reports ordered when the assistant turn follows the user turn', async () => {
+        const page = await browser.newPage();
+        await page.setContent(`<main>${turn('user', 'q')}${turn('assistant', 'a')}</main>`);
+        await expect(readOrdering(page)).resolves.toBe('ordered');
+        await page.close();
+    });
+
+    it('reports stale when the newest assistant turn precedes the user turn', async () => {
+        const page = await browser.newPage();
+        await page.setContent(`<main>${turn('assistant', 'old a')}${turn('user', 'q')}</main>`);
+        await expect(readOrdering(page)).resolves.toBe('stale');
+        await page.close();
+    });
+
+    it('reports unverifiable — not a failure — when there is no user turn', async () => {
+        const page = await browser.newPage();
+        await page.setContent(`<main>${turn('assistant', 'system-initiated')}</main>`);
+        await expect(readOrdering(page)).resolves.toBe('unverifiable');
+        await page.close();
+    });
+
+    it('never produces the unknown sentinel: only the Node wrapper can', async () => {
+        const page = await browser.newPage();
+        await page.setContent('<main></main>');
+        await expect(readOrdering(page)).resolves.toBe('unverifiable');
         await page.close();
     });
 });

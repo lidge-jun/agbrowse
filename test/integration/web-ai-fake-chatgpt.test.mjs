@@ -152,6 +152,7 @@ describe('web-ai fake ChatGPT fixture', () => {
             rmSync(outputImage, { force: true });
         }
     });
+
 });
 
 function createFakeChatGptPage(options = {}) {
@@ -194,6 +195,12 @@ function createFakeChatGptPage(options = {}) {
                 return page.assistantTurns.map((turn, turnIndex) => ({ ...turn, turnIndex }));
             }
             if (_fn?.name === 'readChatGptStreamingState') return options.streaming === true;
+            // The turn-ordering gate must be answered explicitly. Falling through
+            // to `null` used to read as "verified ordered", which meant the gate
+            // could be deleted from production without failing a single test.
+            if (_fn?.name === 'readAssistantTurnOrderingInPage') {
+                return options.turnOrdering || 'ordered';
+            }
             if (String(_fn).includes('finishedSelector') && arg?.sample) {
                 if (options.failCompletionEvaluate) throw new Error('evaluate failed');
                 const turnIndex = page.assistantTurns.findLastIndex(turn =>
