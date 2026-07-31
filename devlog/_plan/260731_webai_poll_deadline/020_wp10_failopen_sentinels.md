@@ -554,6 +554,71 @@ work-phase의 변경은 전부 `.mjs`이므로 **typecheck는 이 변경을 전�
 
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
+### 실행 결과 (2026-07-31)
+
+커밋 셋으로 완료했다.
+
+| 커밋 | 내용 |
+| --- | --- |
+| `6742949` | 소스 교정 — 이 문서의 처방 |
+| `45aa702` | 테스트가 결함을 실제로 잡도록 보강 |
+| `21e229c` | copy 경로 격리와 경로별 관측 기록 분리 |
+
+**구현 중 처방에 없던 것 하나를 추가했다.** post-deadline recovery의 ordering
+게이트다. 테스트를 쓰다 발견했다 — 루프가 예산 내내 stale 답을 거부하고 나면
+recovery가 그 **같은 텍스트를 `complete`로 돌려준다.** 루프의 거부가 장식이
+되는 것이라 recovery에도 같은 게이트를 걸었다.
+
+copy 경로의 `isStreaming(page)`도 `readActivityState` 직접 호출로 폈다. 호출
+횟수는 같고(내부에서 하던 read를 꺼낸 것), structured verdict가 보존돼 ledger에
+기록된다.
+
+#### 감사가 잡은 것 — 테스트가 통과하는 이유가 틀렸다
+
+구현 감사 3라운드에서 blocker 4건이 나왔다. 전부 "테스트가 GREEN인데 보호하지
+않는다"는 종류였다.
+
+| # | 증상 | 원인 |
+| --- | --- | --- |
+| 1 | output-image 불변식 삭제해도 GREEN | 테스트가 `turnOrdering:'stale'`로 루프를 막았는데, 그게 recovery ordering 게이트까지 막아 불변식 없이도 deferred가 됐다 |
+| 2 | copy 불변식에 테스트 없음 | no-session copy는 recovery가 안 도는 유일한 경로인데 누락 |
+| 3 | "no-session" 테스트가 실은 session-bound | `findActiveSession`이 앞선 테스트가 남긴 active session을 채간다(`session.mjs:312`) |
+| 4 | recovery/copy의 `recordActivityObservation` 삭제해도 GREEN | 루프 첫 tick부터 read가 실패해 ledger가 이미 차 있었다 |
+
+3번이 특히 교훈이다. 테스트 간 상태 누수가 "이 경로를 테스트한다"는 전제를
+통째로 무효화했다. 지금은 active session을 내리고 baseline을 심고
+`sessionId === undefined`를 assert한다.
+
+타이밍도 한 칸 차이로 갈렸다. `offset >= 2000`이면 마지막 in-budget tick에서
+quiet으로 바뀌어 창이 1초로 떨어지고 루프가 먼저 완료된다. `> 2000`이어야
+데드라인 이후에만 전환된다.
+
+#### mutation proof
+
+넷을 각각 되돌려 정확히 RED가 되는 것을 확인했다(복원 후 `web-ai/`가
+`6742949`와 byte-identical임을 매번 확인).
+
+| mutation | 결과 |
+| --- | --- |
+| recovery `!imageOutputUnsatisfied` 삭제 | RED |
+| copy `\|\| input.outputImage !== undefined` 삭제 | RED |
+| recovery `recordActivityObservation` 삭제 | RED |
+| copy `recordActivityObservation` 삭제 | RED |
+
+#### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 179 passed (179); Tests 1972 passed (1972)
+npm run gate:all              All 16 gate(s) passed
+npm run typecheck             exit 0   (.mjs 미대상 — 위 "검증 명령의 한계")
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
+producer는 실제 Chromium에서 검증했다 — `activity-state-transport` 12/12,
+ordered/stale/unverifiable 세 판정과 "unknown은 producer가 만들지 않는다"까지.
+
 닫는 것: `021` §3 fail-open 여섯 중 **둘**(B03·B06). c7의 "fail-open B03·B06이
 fail-closed로 교정된다" 절반.
 

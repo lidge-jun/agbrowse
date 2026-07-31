@@ -27,6 +27,8 @@ must be treated as historical  do not edit them after release.evidence
 | Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 🔧 Cycle 1–12 실행 완료, Cycle 12 verdict = CONCERNS. 후속은 `260627_gptpro_remediation`. |
 | GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 5 PABCD 사이클 실행 완료. R2 verdict의 CONCERNS 5 / FAIL 2 미해소. |
 | Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 기능 트랙(Phase 10/20/30/40) 구현 완료. 런칭 트랙 Phase 100/110/120이 잔존(`10_roadmap.md:97-140`). |
+| web-ai 폴링 데드라인 계약 (#88) | `_plan/260731_webai_poll_deadline/` | 🔧 WP10 fail-open 교정 완료 — B03/B06이 fail-closed(`6742949`, `45aa702`, `21e229c`). 예산 계약 WP1~WP9는 미착수, 후보 A가 reversal gate G1~G4에 걸려 조건부. |
+| web-ai 아티팩트·finalizer 하드닝 (#88 자매) | `_plan/260731_webai_artifact_finalizer/` | 📄 로드맵만 완료(리뷰어 PASS). WP0 모델 선택이 자매 유닛과 공동이며 WP2 동기 IO 처방이 교차 critical path. |
 | Strict migration | `_plan/strict-migration/` | ⏸ Deferred. 실행 소스는 여전히 `.mjs`, TS는 declaration만. |
 
 `_plan/`에 있는 폴더는 위가 전부다. 유닛을 닫으면 같은 커밋에서 `_fin/`으로
