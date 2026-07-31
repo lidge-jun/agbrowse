@@ -54,7 +54,17 @@ import { isDurableConversationUrl } from './conversation-url.mjs';
 
 /** @type {Map<string, WebAiBaseline>} */
 const baselines = new Map();
-let loaded = false;
+/**
+ * The path the in-memory map was loaded from, or null when nothing is loaded.
+ *
+ * Keyed by path rather than a plain `loaded` flag: the map is module-global, so
+ * a boolean let rows loaded under one `BROWSER_AGENT_HOME` answer reads under a
+ * different one — and the next save copied both homes' rows into whichever was
+ * current. Tests that switch homes saw the previous home's baselines.
+ *
+ * @type {string|null}
+ */
+let loadedFrom = null;
 /**
  * Resolved per call, not at import. A frozen constant captured whatever
  * `BROWSER_AGENT_HOME` held at first import, so a test pointing the variable at
@@ -164,9 +174,12 @@ export function clearBaseline(vendor, url) {
 }
 
 function loadStore() {
-    if (loaded) return;
-    loaded = true;
     const path = storePath();
+    if (loadedFrom === path) return;
+    // The home changed under us. Drop the other home's rows instead of merging
+    // them into this one.
+    baselines.clear();
+    loadedFrom = path;
     if (!existsSync(path)) return;
     try {
         const parsed = JSON.parse(readFileSync(path, 'utf8'));

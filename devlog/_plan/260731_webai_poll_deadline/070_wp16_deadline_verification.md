@@ -450,6 +450,62 @@ called 1 times`.
 
 세 항목 모두 이번 사이클에서 닫지 않는다. 별도 유닛의 근거로 남긴다.
 
+## WP20: 2라운드 감사도 FAIL — 같은 결함의 한 칸 아래
+
+`0b5512d`를 같은 리뷰어에 다시 걸었고 또 **FAIL**이 나왔다. 진입 검사 하나를
+단계별 재검사로 바꿨는데, 그 재검사들 **사이**에 또 틈이 있었다.
+
+### blocker — transcript 저장 이후가 다시 무방비
+
+`trySaveTranscript` **앞**에는 검사를 넣었지만 **뒤**에는 없었다. 파일 쓰기
+자체가 시간을 쓰므로 그 안에서 데드라인이 지날 수 있고, 그러면 바로 다음의
+`appendArtifactRecord`(세션 쓰기)와 실패 시 warning 쓰기가 만료 후에 시작한다.
+
+리뷰어가 `stillActive`를 **transcript 파일 존재 여부에 묶어서** 재현했다.
+파일이 생긴 순간부터 false다.
+
+```json
+{"activityChecks":[true,true,false],
+ "transcriptExists":true,"artifactRecords":["transcript"]}
+```
+
+파일이 생겨 이미 만료 상태인데 artifact 레코드가 그대로 붙었다. 저장 직후
+재검사를 추가했다.
+
+이 패턴이 이 유닛에서 반복된다. **한 단계를 막으면 그 다음 단계가 드러난다.**
+"await를 건너면 재검사한다"가 아니라 **부수효과 하나마다 재검사한다**로
+규칙을 바꿔야 끝난다.
+
+### 테스트 공백 세 개
+
+리뷰어가 지적한 대로 기존 3개는 경계를 다 덮지 못했다. pooling 경계의
+`expired()`를 지워도 셋 다 green이었다. 셋을 추가했다.
+
+| 테스트 | 경계 | mutation RED |
+| --- | --- | --- |
+| transcript 저장 중 만료 | 저장 직후 ~ artifact 레코드 | 재검사 제거 → `expected [{kind:'transcript',…}] to deeply equal []` |
+| pooling 직전 만료 | archive 이후 ~ poolTab | 재검사 제거 → 1 failed |
+| 파일 실재 확인 | 세션 레코드와 별개 | — (기존 테스트 보강) |
+
+마지막은 assertion 보강이다. `session.artifacts`만 보면 **파일만 남는 유출**을
+놓친다. `transcript.md`의 실재를 직접 본다.
+
+### baseline 캐시가 home을 따라가지 않았다
+
+경로는 호출 시점 해석으로 고쳤지만 `baselines` Map과 `loaded` 플래그가
+모듈 전역이었다. home B에서 읽은 행이 home C의 읽기에 답하고, C에 저장할 때
+**두 home의 행이 함께** 기록됐다. 플래그를 `loadedFrom` 경로로 바꾸고 경로가
+달라지면 map을 비운다.
+
+`context-pack/builder.mjs:34`도 같은 import-time 고정이었다. 그 테스트가
+static import를 쓰므로 실제 `~/.browser-agent`에 패키지를 쓰고 있었다.
+
+### 리뷰어가 유보한 것
+
+deferred 3건 중 **저장된 데드라인 이중 차감**은 "#88을 닫았다고 말하기 전에
+고쳐야 한다"고 못박았다. 동의한다. 이 유닛의 계약은 durable write 차단이므로
+여기서 닫지 않되, **#88 종료 조건에 포함**시킨다.
+
 ## 남은 것
 
 single-flight(G2·G4 포함)는 여전히 미해결이다. 이번 변경은 패배한 작업이

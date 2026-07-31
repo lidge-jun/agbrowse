@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -91,6 +91,7 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
 
         const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
         const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
@@ -114,10 +115,87 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         // The entry write is allowed: it is the phase the caller's own gate
         // cleared. Everything after it is not.
         expect(getSession(session.sessionId).artifacts ?? []).toEqual([]);
+        // Checked on disk too. The session record and the file are separate
+        // effects, so asserting only the record would miss a file-only leak.
+        expect(existsSync(join(resolveArtifactsDir(session.sessionId), 'transcript.md'))).toBe(false);
         expect(archiveConversation).not.toHaveBeenCalled();
         expect(poolTab).not.toHaveBeenCalled();
         expect(result.archiveSkippedReason).toBe('poll-deadline-exceeded');
         expect(getSession(session.sessionId).archived ?? false).toBe(false);
+    });
+
+    it('registers no artifact when the deadline passes during the transcript save', async () => {
+        const archiveConversation = vi.fn(async () => ({ ok: true }));
+        const poolTab = vi.fn(async () => ({ ok: true, pooled: true }));
+        vi.doMock('../../web-ai/chatgpt-archive.mjs', async () => {
+            const actual = await vi.importActual('../../web-ai/chatgpt-archive.mjs');
+            return { ...actual, archiveConversation };
+        });
+        vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
+
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+        const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
+            { targetId: 'target-mid', conversationUrl: 'https://chatgpt.com/c/mid' },
+        );
+
+        // Expires the moment the transcript file exists — the deadline passing
+        // DURING the save. The file write and the session record that points at
+        // it are separate effects, so a check placed only before the save lets
+        // the record through.
+        const transcriptPath = join(resolveArtifactsDir(session.sessionId), 'transcript.md');
+        const stillActive = () => !existsSync(transcriptPath);
+
+        await finalizeProviderTab({ getPort: () => 9222 }, {
+            vendor: 'chatgpt',
+            session,
+            page: { url: () => 'https://chatgpt.com/c/mid' },
+            answerText: 'late answer',
+            archiveFlag: 'always',
+            stillActive,
+        });
+
+        expect(getSession(session.sessionId).artifacts ?? []).toEqual([]);
+        expect(archiveConversation).not.toHaveBeenCalled();
+        expect(poolTab).not.toHaveBeenCalled();
+    });
+
+    it('does not pool the tab when the deadline passes before pooling', async () => {
+        const archiveConversation = vi.fn(async () => ({ ok: true }));
+        const poolTab = vi.fn(async () => ({ ok: true, pooled: true }));
+        vi.doMock('../../web-ai/chatgpt-archive.mjs', async () => {
+            const actual = await vi.importActual('../../web-ai/chatgpt-archive.mjs');
+            return { ...actual, archiveConversation };
+        });
+        vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
+
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
+            { targetId: 'target-pool', conversationUrl: 'https://chatgpt.com/c/pool' },
+        );
+
+        // `archiveFlag: 'never'` keeps the archive branch out of the way, so
+        // this test lands squarely on the pooling boundary: alive through the
+        // session write and the artifact record, expired before pooling.
+        // Pooling persists a lease and can close overflow tabs.
+        let checks = 0;
+        const stillActive = () => { checks += 1; return checks <= 3; };
+
+        const result = await finalizeProviderTab({ getPort: () => 9222 }, {
+            vendor: 'chatgpt',
+            session,
+            page: { url: () => 'https://chatgpt.com/c/pool' },
+            answerText: 'late answer',
+            archiveFlag: 'never',
+            stillActive,
+        });
+
+        expect(poolTab).not.toHaveBeenCalled();
+        expect(result.archiveSkippedReason).toBe('poll-deadline-exceeded');
     });
 
     it('does not click Archive when the deadline passes before it', async () => {

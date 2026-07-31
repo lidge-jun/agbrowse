@@ -91,6 +91,12 @@ export async function finalizeProviderTab(deps, {
         artifactStatus = saved.ok
             ? { required: true, ok: true, descriptor: saved.descriptor }
             : { required: true, ok: false, stage: saved.stage, error: saved.error };
+        // Re-checked AFTER the save. Writing the transcript touches the
+        // filesystem, so the deadline can pass inside it; both branches below
+        // are session writes and must not start once it has.
+        if (expired()) {
+            return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
+        }
         if (saved.ok) {
             appendArtifactRecord(session.sessionId, saved.descriptor);
         } else {

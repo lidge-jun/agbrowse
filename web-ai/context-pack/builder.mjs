@@ -31,7 +31,17 @@ import { WebAiError } from '../errors.mjs';
  * }} BuilderInput
  */
 
-const PACKAGE_DIR = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-context-packages');
+/**
+ * Resolved per call, not at import. A frozen constant captured whatever
+ * `BROWSER_AGENT_HOME` held at first import, so a test that points the variable
+ * at a temp directory in its body still wrote packages under the developer's
+ * real `~/.browser-agent` — static imports run before test bodies.
+ *
+ * @returns {string}
+ */
+function packageDir() {
+    return join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-context-packages');
+}
 
 /** @param {BuilderInput} [input] */
 export async function buildContextPackageResult(input = {}) {
@@ -75,8 +85,9 @@ export async function prepareContextForBrowser(input = {}) {
         return result;
     }
     if (!result.files.length) throw emptyContextAttachmentError();
-    await fs.mkdir(PACKAGE_DIR, { recursive: true });
-    const filePath = join(PACKAGE_DIR, `web-ai-context-package-${randomUUID()}.zip`);
+    const packagesDir = packageDir();
+    await fs.mkdir(packagesDir, { recursive: true });
+    const filePath = join(packagesDir, `web-ai-context-package-${randomUUID()}.zip`);
     await zipContextFiles(result.files, result.attachmentText, filePath);
     const stat = await fs.stat(filePath);
     result.attachments = [{
@@ -112,14 +123,15 @@ async function buildRepomixContextResult(input) {
     if (explicitSelection && selected.files.length === 0) {
         throw emptyContextAttachmentError();
     }
-    await fs.mkdir(PACKAGE_DIR, { recursive: true });
-    const stagingDir = await fs.mkdtemp(join(PACKAGE_DIR, 'web-ai-context-repomix-'));
+    const packagesDir = packageDir();
+    await fs.mkdir(packagesDir, { recursive: true });
+    const stagingDir = await fs.mkdtemp(join(packagesDir, 'web-ai-context-repomix-'));
     let packed;
     try {
         packed = await buildRepomixArtifacts({
             cwd,
             stagingRoot: stagingDir,
-            managedRoot: PACKAGE_DIR,
+            managedRoot: packagesDir,
             explicitFiles: explicitSelection ? selected.files.map(file => file.path) : null,
             contextExclude: input.contextExclude || [],
             maxFileSize: input.maxFileSize,
