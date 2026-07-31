@@ -2,7 +2,7 @@
   "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
   "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
   "createdAt": "2026-07-31T07:28:37.608Z",
-  "updatedAt": "2026-07-31T12:22:19.165Z",
+  "updatedAt": "2026-07-31T12:39:16.378Z",
   "activeWorkPhaseId": null,
   "workPhases": [
     {
@@ -133,17 +133,17 @@
     {
       "id": "wp7",
       "title": "후속 유닛 2 로드맵: artifact/finalizer hardening (docs-only 사이클)",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "wp7-t1",
           "title": "021이 배정한 경계로 artifact/finalizer 유닛의 decade 문서를 diff-level 작성",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp7-t2",
           "title": "D에서 구현 work-phase를 goalplan에 append하고 c8를 거기에 연결",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": []
