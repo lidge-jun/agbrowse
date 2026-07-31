@@ -958,7 +958,10 @@ describe('an uncountable baseline stops the send (B01/B02)', () => {
 
     it('X8: send fails typed instead of writing a zero baseline', async () => {
         const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { getBaseline } = await import('../../web-ai/session.mjs');
+        const url = `https://chatgpt.com/c/unreadable-${Date.now()}`;
         const page = unreadablePage();
+        page.url = () => url;
 
         const failure = await sendWebAi(
             { getPage: async () => page },
@@ -970,6 +973,9 @@ describe('an uncountable baseline stops the send (B01/B02)', () => {
             stage: 'baseline-snapshot',
             retryHint: 're-snapshot',
         });
+        // Throwing the right error after already writing the baseline would be
+        // no better than not throwing at all.
+        expect(getBaseline('chatgpt', url)).toBeFalsy();
     });
 
     it('X8b: deep research fails before creating a session or a lease', async () => {
@@ -977,18 +983,172 @@ describe('an uncountable baseline stops the send (B01/B02)', () => {
         // through `sessionToBaseline`, where `Number(null) || 0` would resurrect
         // the false zero.
         const { deepResearchWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { listLeases } = await import('../../web-ai/tab-lease-store.mjs');
         const before = listSessions({ vendor: 'chatgpt' }).length;
         const page = unreadablePage();
+        // A target id is required for the lease path to be reachable at all;
+        // without it the "no lease" assertion would pass vacuously.
+        const targetId = `target-deepresearch-${Date.now()}`;
 
         const failure = await deepResearchWebAi(
-            { getPage: async () => page },
+            { getPage: async () => page, getTargetId: async () => targetId, getPort: () => 9222 },
             { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
         ).then(() => null, err => err);
 
         expect(failure).toMatchObject({
             errorCode: 'snapshot.unavailable',
             stage: 'baseline-snapshot',
+            retryHint: 're-snapshot',
         });
         expect(listSessions({ vendor: 'chatgpt' }).length).toBe(before);
+        expect((await listLeases()).some(lease => lease.targetId === targetId)).toBe(false);
+    });
+});
+
+/**
+ * The read-failure branches themselves (issue #88, boundaries B01/B02).
+ *
+ * The tests above prove the typed failure at the send boundary, but only when
+ * EVERY read fails. These cover the mixed cases, which are the ones that decide
+ * whether a real answer is found or a false zero is stored.
+ */
+describe('mixed snapshot read outcomes (B01/B02)', () => {
+    /**
+     * A page whose two snapshot attempts can be scripted independently.
+     * `readAssistantSnapshots` calls the plain-selectors form first, then the
+     * `{selectors, resolverSource}` form.
+     *
+     * @param {{ first: 'throw'|'malformed'|'empty'|'rows', second: 'throw'|'malformed'|'empty'|'rows', split?: 'ok'|'fail' }} plan
+     */
+    function scriptedPage(plan) {
+        const rows = [{ text: 'recovered answer', messageId: 'm1', turnId: 'conversation-turn-1', turnIndex: 0 }];
+        const outcome = (mode) => {
+            if (mode === 'throw') throw new Error('evaluate detached');
+            if (mode === 'malformed') return null;
+            return mode === 'rows' ? rows : [];
+        };
+        // `waitForStableAssistantCount` polls the counter repeatedly, so a
+        // one-shot counter would desync: every round calls attempt 1 then
+        // attempt 2, so use parity instead of absolute call order.
+        let snapshotCalls = 0;
+        return {
+            url: () => 'https://chatgpt.com/c/mixed',
+            waitForTimeout: async () => { await new Promise(resolve => setImmediate(resolve)); },
+            innerText: async () => '',
+            evaluate: async (fn) => {
+                const source = String(fn);
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    if ((plan.split || 'fail') === 'fail') throw new Error('split detached');
+                    return { ok: true, wrapped: [], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    snapshotCalls += 1;
+                    return outcome(snapshotCalls % 2 === 1 ? plan.first : plan.second);
+                }
+                throw new Error('evaluate detached');
+            },
+            locator: () => ({
+                all: async () => { throw new Error('detached'); },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+        };
+    }
+
+    /** @param {any} page */
+    async function countThroughSend(page) {
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        // Reaching the composer is out of scope; what matters is whether the
+        // baseline read threw before it.
+        return sendWebAi({ getPage: async () => page }, { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' })
+            .then(() => 'no-throw', err => err?.stage === 'baseline-snapshot' ? 'baseline-throw' : 'other-throw');
+    }
+
+    it('X2: a failed first attempt still falls back to the second', async () => {
+        // The two-step fallback predates this work and must survive it.
+        await expect(countThroughSend(scriptedPage({ first: 'throw', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2b: a successful empty read is not undone by a failing retry', async () => {
+        // The first attempt observed the page. The second failing adds nothing,
+        // and treating that as unknown would block sends on genuinely new chats.
+        await expect(countThroughSend(scriptedPage({ first: 'empty', second: 'throw' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2c: a malformed first result is a failed attempt, not an empty page', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'malformed', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2d: both attempts malformed is unknown, not zero', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'malformed', second: 'malformed' })))
+            .resolves.toBe('baseline-throw');
+    });
+
+    it('X7: a failed split with a working snapshot read still counts', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'rows', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+});
+
+describe('poll loop when every reader fails (B01)', () => {
+    /**
+     * @param {{ splitFails: boolean, snapshotFails: boolean }} plan
+     */
+    function pollPage(plan) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text: 'answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        let waits = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/activity',
+            waitForTimeout: async (ms) => {
+                waits += 1;
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    if (plan.splitFails) throw new Error('split detached');
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    if (plan.snapshotFails) throw new Error('snapshot detached');
+                    return [snapshot];
+                }
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({
+                all: async () => { if (plan.snapshotFails) throw new Error('detached'); return []; },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+        };
+        return { page, waitCount: () => waits };
+    }
+
+    it('X11: an unreadable tick paces the loop and reaches the deadline', async () => {
+        // A `continue` that skipped the wait would spin forever here: the virtual
+        // clock only advances inside `waitForTimeout`.
+        const { page, waitCount } = pollPage({ splitFails: true, snapshotFails: true });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+        expect(waitCount()).toBeGreaterThan(1);
+        expect(result.warnings).toContain('assistant-read-unverified');
+    });
+
+    it('X12: a failed split with a working fallback still completes', async () => {
+        // The paired case: over-applying the guard would break the legacy path.
+        const { page } = pollPage({ splitFails: true, snapshotFails: false });
+        const { result } = await poll(page, 12);
+        expect(result.status).toBe('complete');
+        expect(result.warnings || []).not.toContain('assistant-read-unverified');
     });
 });
