@@ -27,13 +27,15 @@ const REAL_REPORT = [
     'enough length to read as a completed long-form research report.',
 ].join('\n');
 
-const drResumePage = ({ assistant }) => ({
+const drResumePage = ({ assistant, stopUnreadable = false }) => ({
     waitForTimeout: async () => undefined,
     // Selector-aware: returning assistant turns for the stop-button selector too
     // handed the probe nodes with no `isVisible`, which now reads as unreadable
     // rather than as "not streaming".
     locator: (selector = '') => (/stop|Stop/.test(selector)
-        ? { first: () => ({ isVisible: async () => false }), all: async () => [] }
+        ? (stopUnreadable
+            ? { all: async () => { throw new Error('detached'); } }
+            : { first: () => ({ isVisible: async () => false }), all: async () => [] })
         : {
             first: () => ({ isVisible: async () => false }),
             all: async () => (assistant ? [{ innerText: async () => assistant }] : []),
@@ -73,5 +75,27 @@ describe('sessions resume DR routing (source contract)', () => {
     it('routes researchMode:deep sessions to resumeDeepResearch', () => {
         expect(src).toContain("session.researchMode === 'deep'");
         expect(src).toContain('resumeDeepResearch(page, sessionDeps');
+    });
+});
+
+/**
+ * Consumer policy for an unreadable stop probe (issue #88, boundary B04).
+ *
+ * The producer tests prove the verdict; this proves the caller acts on it. A
+ * shared probe returning `unknown` is worthless if the consumer still reads it
+ * as "not generating" — which is what this path did before.
+ */
+describe('deep research resume acts on an unreadable stop probe (B04)', () => {
+    it('Y10c: an unreadable probe does not settle as a finished report', async () => {
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { resumeDeepResearch } = await import('../../web-ai/chatgpt-deep-research.mjs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+        const page = drResumePage({ assistant: REAL_REPORT, stopUnreadable: true });
+
+        const result = await resumeDeepResearch(page, {}, { session, timeoutMs: 400, stableMs: 10 });
+
+        // Same page, same report text — only the probe verdict differs from the
+        // completing case above.
+        expect(result.status).not.toBe('complete');
     });
 });

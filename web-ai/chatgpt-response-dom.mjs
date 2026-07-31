@@ -148,16 +148,20 @@ export async function anyStopButtonVisible(scope) {
  * @returns {any} the `main` locator when available, else the page itself
  */
 export function scopeToMainRegion(page) {
-    // A throwing `locator()` must not escape as a raw error: callers treat the
-    // returned scope as probe input, and `probeStopButton` turns a scope it
-    // cannot use into `unknown` — which is the answer we want here too.
+    // Returning `page` when `main` cannot be resolved would defeat the reason
+    // this scoping exists: a page-wide probe matches sidebar and dictation
+    // controls that main-scoping deliberately excludes. `null` says "no usable
+    // scope", which `probeStopButton` reports as `unknown`.
     let main;
     try {
         main = page?.locator?.('main');
     } catch {
-        return page;
+        return null;
     }
-    return (main && typeof main.locator === 'function') ? main : page;
+    if (main && typeof main.locator === 'function') return main;
+    // No `main` element is a normal ChatGPT layout on some surfaces, so the page
+    // itself stays the fallback there — only a FAILED lookup is unusable.
+    return page;
 }
 
 /**

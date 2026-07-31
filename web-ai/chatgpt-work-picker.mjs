@@ -812,7 +812,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
                     taskUrl: null,
                     taskId: null,
                     turnsCount: turnLocators.length,
-                    warnings,
+                    warnings: withStopProbeWarning(warnings, lastStopProbe),
                 };
             }
 
@@ -821,9 +821,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
                 taskUrl: resolvedUrl,
                 taskId: taskId,
                 turnsCount: turnLocators.length,
-                warnings: lastStopProbe === 'unknown'
-                    ? [...warnings, 'work-stop-probe-unverified']
-                    : warnings,
+                warnings: withStopProbeWarning(warnings, lastStopProbe),
             };
         }
 
@@ -1023,6 +1021,19 @@ export async function pollWorkSession(deps, input = {}) {
  */
 
 /**
+ * Carry a sticky "the stop button was never actually checked" note onto EVERY
+ * success envelope. Applying it to only one of the two return paths let the
+ * unresolved-URL case report a clean commit.
+ *
+ * @param {string[]} warnings
+ * @param {'visible'|'absent'|'unknown'|null} stopProbe
+ * @returns {string[]}
+ */
+function withStopProbeWarning(warnings, stopProbe) {
+    return stopProbe === 'unknown' ? [...warnings, 'work-stop-probe-unverified'] : warnings;
+}
+
+/**
  * Read Work task state from the page.
  * @param {any} page
  * @returns {Promise<{ surface: 'work', status: WorkTaskStatus, answerText: string|null, evidence: Record<string, unknown> }>}
@@ -1036,7 +1047,7 @@ export async function readWorkTaskState(page) {
     const stopProbe = await probeStopButton(mainRegion);
     const stopVisible = stopProbe === 'visible';
 
-    const thinkingEl = mainRegion.getByText?.('Thinking', { exact: true });
+    const thinkingEl = mainRegion?.getByText?.('Thinking', { exact: true });
     const thinkingVisible = thinkingEl ? await thinkingEl.first().isVisible().catch(() => false) : false;
 
     if (stopVisible || thinkingVisible) {
