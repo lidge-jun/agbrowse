@@ -76,7 +76,7 @@ const RECOVERY_RESERVE_MS = 2_000;
 const MAX_RECOVERY_RESERVE_RATIO = 0.25;
 /** Never starve the loop below one tick, even on a tiny timeout. */
 const MIN_LOOP_BUDGET_MS = 500;
-/** One poll tick. The reserve prefers the budget remainder after whole ticks. */
+/** One poll tick. */
 const PACING_INTERVAL_MS = 500;
 /** How often the hard-deadline timer re-checks the clock the loop reads. */
 const POLL_EXPIRY_CHECK_MS = 250;
@@ -703,18 +703,32 @@ function mergeObservationList(warnings, observations) {
  * @param {any} input
  */
 export async function pollWebAi(deps, input = {}) {
+    // Start the clock BEFORE anything that can block. Resolving the budget may
+    // read the session store, which takes a synchronous lock with a blocking
+    // retry; measuring from after that read would let lock contention run
+    // outside the bound the caller was promised.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
     // Resolve the SAME budget the inner loop resolves. `poll`, `watch` and
     // `resume` deliberately pass `timeout: undefined` so the stored session
     // deadline is inherited (cli.mjs:730-738); falling back to 1s here capped
     // every one of those calls at a second, and the wrapper's bound wins over
     // whatever the loop computes.
-    const session = input.session ? getSession(input.session) : null;
-    const timeoutSec = resolveTimeoutBudgetSec(input, session, input.vendor || 'chatgpt');
+    //
+    // An explicit timeout needs no store read at all, so the common path never
+    // touches the lock.
+    const explicitTimeoutSec = Number(input.timeout);
+    const timeoutSec = explicitTimeoutSec > 0
+        ? explicitTimeoutSec
+        : resolveTimeoutBudgetSec(
+            input,
+            input.session ? getSession(input.session) : null,
+            input.vendor || 'chatgpt',
+        );
     const timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
     /** @type {any} */
     let expire = () => undefined;
     let timer = null;
-    const started = Date.now();
     const hardDeadline = started + timeoutMs;
     const expiry = new Promise(resolve => {
         expire = resolve;
@@ -743,7 +757,8 @@ export async function pollWebAi(deps, input = {}) {
         // claims, the caller waits at most one budget plus a check interval.
         // Tests that step the clock faster than real time still finish on the
         // first ceiling, so they are not cut short.
-        const monotonicStart = monotonicNowMs();
+        // Measured from the wrapper's FIRST instruction, not from here: a
+        // blocking store read before this point would otherwise be free time.
         const monotonicCeilingMs = timeoutMs + POLL_EXPIRY_CHECK_MS;
         const arm = () => {
             const remaining = hardDeadline - Date.now();
@@ -925,6 +940,12 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         return fn();
     };
     /**
+     * The gate's predicate, for callers that must SKIP rather than throw.
+     *
+     * @returns {boolean}
+     */
+    const isActiveRun = () => !(run.expired || Date.now() >= run.hardDeadline);
+    /**
      * Async form of the gate, for side effects that await.
      *
      * Checked once BEFORE starting: a side effect that has already begun cannot
@@ -1044,14 +1065,16 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         if ((streaming || latest) && now - lastHeartbeat >= 30_000) {
             const elapsed = Math.round((now - startedAt) / 1000);
             const phase = streaming ? 'streaming' : weakActive ? 'settling' : 'stabilizing';
-            process.stderr.write(`[poll] ${elapsed}s — ${phase}...\n`);
+            // Caller-visible output. A loser printing progress after its poll
+            // already returned `timeout` narrates a run nobody is waiting for.
+            if (isActiveRun()) process.stderr.write(`[poll] ${elapsed}s — ${phase}...\n`);
             lastHeartbeat = now;
         }
         // The image shortcut returns on the FIRST detected image with no terminal
         // evidence, so it requires true quiet: weak activity is still activity.
         if (activity.strength === 'none' && latestSnapshot && session && input.outputImage !== undefined
             && isImageOnlyGeneratedImageChromeText(latest)) {
-            const imageResult = await collectGeneratedImageAnswer(deps, input, session, baseline);
+            const imageResult = await commitAsyncIfActive(() => collectGeneratedImageAnswer(deps, input, session, baseline));
             if (imageResult) {
                 const imageWarnings = mergeObservationList(imageResult.warnings, observations);
                 if (!input.skipFinalize) {
@@ -1060,6 +1083,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                         answerText: imageResult.answerText,
                         warnings: imageWarnings,
                         archiveFlag: input.archiveFlag,
+                        stillActive: isActiveRun,
                     }));
                 }
                 return withAnswerArtifact({
@@ -1104,7 +1128,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
                             copyTarget: /** @type {any} */ (copyResolution?.target || null),
                         });
-                        traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
+                        traceSummary = commitIfActive(() => persistResolverTraceForSession(session, copyTraceCtx));
                         const copiedText = preferCopiedText(latest, copied);
                         if (copiedText) {
                             answerText = cleanAssistantText(copiedText);
@@ -1125,12 +1149,12 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                             });
                         }
                         try {
-                            const imgResult = await collectImages(cdp, {
+                            const imgResult = await commitAsyncIfActive(() => collectImages(cdp, {
                                 baselineAssistantCount: baseline?.assistantCount || 0,
                                 outputPath: input.outputImage || null,
                                 sessionId: input.outputImage ? null : session.sessionId,
                                 waitTimeoutMs: 60_000,
-                            });
+                            }));
                             warnings.push(...(imgResult.warnings || []));
                             if (imgResult.errors?.length) {
                                 throw new WebAiError({
@@ -1163,10 +1187,10 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                             const fileCdp = await deps.getCdpSession?.();
                             if (fileCdp) {
                                 try {
-                                    const fileResult = await saveAssistantDownloadableFiles(fileCdp, deps, {
+                                    const fileResult = await commitAsyncIfActive(() => saveAssistantDownloadableFiles(fileCdp, deps, {
                                         sessionId: session.sessionId,
                                         baselineAssistantCount: baseline?.assistantCount || 0,
-                                    });
+                                    }));
                                     if (fileResult.warnings?.length) warnings.push(...fileResult.warnings);
                                 } finally {
                                     await fileCdp.detach?.().catch(() => undefined);
@@ -1190,7 +1214,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                         if (!warnings.includes(observation)) warnings.push(observation);
                     }
                     if (session && !input.skipFinalize) {
-                        await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
+                        await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -1320,7 +1344,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             const answerText = recovered.text;
             const warnings = mergeObservationList(['response-recovered-after-timeout'], observations);
             if (!input.skipFinalize) {
-                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,
@@ -1340,7 +1364,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
     // 34 diagnostics: on the timeout path (recovery already failed), capture a
     // DOM snapshot + screenshot when gated. Fire-and-forget; never throws.
     if (session && diagnosticsEnabled(input)) {
-        await captureFailureDiagnostics(deps, { sessionId: session.sessionId, context: 'response-timeout', page });
+        await commitAsyncIfActive(() => captureFailureDiagnostics(deps, { sessionId: session.sessionId, context: 'response-timeout', page }));
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
@@ -1395,13 +1419,13 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
             copyTarget: /** @type {any} */ (copyResolution?.target || null),
         });
-        const traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
+        const traceSummary = commitIfActive(() => persistResolverTraceForSession(session, copyTraceCtx));
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
             const warnings = mergeObservationList([], observations);
             if (session && !input.skipFinalize) {
-                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag }));
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,

@@ -1,6 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createSession, getSession, listSessions, saveBaseline, updateSession } from '../../web-ai/session.mjs';
 import { pollWebAi } from '../../web-ai/chatgpt.mjs';
+
+// This file drives the REAL session store. Without an isolated home it reads
+// and writes `~/.browser-agent`, so it inherits whatever sessions the developer
+// (or an earlier test file) left behind — and `findActiveSession` falls back to
+// `active.at(-1)`, which hands one of those strays to a poll that created its
+// own. That produced failures that moved between tests from run to run.
+const ORIGINAL_AGBROWSE_HOME = process.env.BROWSER_AGENT_HOME;
+process.env.BROWSER_AGENT_HOME = mkdtempSync(join(tmpdir(), 'agbrowse-activity-poll-'));
 
 /**
  * Behavioural poll-loop harness for the activity strata (G8).
@@ -76,6 +87,11 @@ function poll(page, timeoutSec = 30) {
 
 afterEach(() => {
     vi.restoreAllMocks();
+});
+
+afterAll(() => {
+    if (ORIGINAL_AGBROWSE_HOME === undefined) delete process.env.BROWSER_AGENT_HOME;
+    else process.env.BROWSER_AGENT_HOME = ORIGINAL_AGBROWSE_HOME;
 });
 
 describe('ChatGPT poll loop activity strata (G8 behavioural)', () => {
@@ -1240,6 +1256,17 @@ describe('poll loop when every reader fails (B01)', () => {
  * pending. That limit is deliberate and recorded in the plan.
  */
 describe('a stalled read cannot outlive --timeout (#88)', () => {
+    // Sessions left `polling` by EARLIER describes in this file are still
+    // active when these tests run, and `findActiveSession` falls back to
+    // `active.at(-1)`. A poll here would adopt one of those, so the assertions
+    // would read a session this block never created. Retire the leftovers
+    // before each test as well as after.
+    beforeEach(() => {
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
     afterEach(() => {
         // These polls end in `polling`, so `findActiveSession` would hand them
         // to later tests that expect none. Retire them explicitly.
@@ -1377,8 +1404,16 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         // Hold every read until AFTER the 2s bound, then answer cleanly. A
         // single blocked read is not enough: the readers are individually
         // bounded, so the loop would recover and complete before the deadline.
-        const clearAt = Date.now() + 2_600;
+        //
+        // Anchored to the FIRST read, not to the test body. The deadline starts
+        // when `pollWebAi` is called, so a fixed offset taken here drifts by
+        // however long session setup takes; under a loaded full-suite run that
+        // drift pushed the clear time BEFORE the deadline, the run finalized
+        // legitimately and only then lost the race. That made this test fail
+        // roughly two runs in five while proving nothing about the fence.
+        let clearAt = null;
         const untilClear = async () => {
+            if (clearAt === null) clearAt = Date.now() + 2_600;
             const remaining = clearAt - Date.now();
             if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
         };
@@ -1408,23 +1443,44 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
                 all: async () => [],
                 count: async () => 0,
             }),
-            innerText: async () => 'late answer',
+            // Held by the SAME gate as `evaluate`. This is the text fallback:
+            // leaving it unblocked let the loop read a complete answer without
+            // ever waiting, finish legitimately before the bound, and then lose
+            // the race — a pass/fail that depended on machine load and said
+            // nothing about the fence.
+            innerText: async () => { await untilClear(); return 'late answer'; },
         };
 
-        const result = await pollWebAi(
-            { getPage: async () => page, getTargetId: async () => 'target-y8' },
-            { vendor: 'chatgpt', session: session.sessionId, timeout: 2 },
-        );
-        expect(result.status).toBe('timeout');
+        // The ledger covers every observable the loser could touch, not just the
+        // session: checking three session fields would miss the trace, the
+        // artifacts, the diagnostics and the heartbeat.
+        const stderrWrites = [];
+        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+            stderrWrites.push(String(chunk));
+            return true;
+        });
 
-        // Let the loser run to completion, then look at what it managed to do.
-        await new Promise(resolve => setTimeout(resolve, 1_500));
+        let result;
+        try {
+            result = await pollWebAi(
+                { getPage: async () => page, getTargetId: async () => 'target-y8' },
+                { vendor: 'chatgpt', session: session.sessionId, timeout: 2 },
+            );
+            expect(result.status).toBe('timeout');
+
+            // Let the loser run to completion, then look at what it managed to do.
+            await new Promise(resolve => setTimeout(resolve, 1_500));
+        } finally {
+            stderrSpy.mockRestore();
+        }
 
         const after = getSession(session.sessionId);
-        // The ledger: nothing the loser touches may show a completed answer.
         expect(after.answer ?? null).toBeNull();
         expect(after.status).not.toBe('complete');
         expect(after.completedAt ?? null).toBeNull();
+        expect(after.archived ?? false).toBe(false);
+        // Nothing may be narrated to the caller after their poll returned.
+        expect(stderrWrites.filter(line => line.includes('[poll]'))).toEqual([]);
     });
 
     it('Y9: the hard deadline honours a stored session budget, not a 1s default', async () => {
@@ -1456,11 +1512,52 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         const elapsed = Date.now() - started;
 
         expect(result.status).toBe('timeout');
-        // The paired assertion matters as much as the lower bound: without it a
-        // regression to "never expire" would also pass.
-        expect(elapsed).toBeGreaterThan(1_500);
-        expect(elapsed).toBeLessThan(6_000);
+        // Bracket the STORED budget specifically. A loose lower bound would also
+        // accept a hardcoded 2s, which is a different bug wearing this fix's
+        // clothes; the window is tight enough that only ~3s can land in it.
+        expect(elapsed).toBeGreaterThan(2_600);
+        expect(elapsed).toBeLessThan(4_500);
     }, 20_000);
+
+    it('Y11: the recovery reserve scales with the budget instead of one tick', async () => {
+        // `Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS)` is always
+        // exactly PACING_INTERVAL_MS — the remainder is smaller by definition.
+        // That term pinned the reserve to 500ms and made RECOVERY_RESERVE_MS
+        // unreachable at every budget, so recovery ran on one tick no matter how
+        // long the caller waited.
+        //
+        // Observed through the loop's own pacing: the loop stops at
+        // `hardDeadline - reserve`, so a bigger reserve means an earlier stop.
+        const session = stallSession('y11');
+        let ticks = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/stall-y11',
+            waitForTimeout: async (ms) => {
+                ticks += 1;
+                await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 500)));
+            },
+            evaluate: async () => { throw new Error('unreadable'); },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+            innerText: async () => '',
+        };
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y11' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 8, skipFinalize: true },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        expect(ticks).toBeGreaterThan(0);
+        // 8s budget, 2s reserve → the loop must leave by ~6s. The dead term
+        // capped the reserve at 500ms, which lands past 7s.
+        expect(elapsed).toBeLessThan(7_000);
+    }, 30_000);
 
     it('Y10: a frozen clock still returns, instead of re-arming forever', async () => {
         // `arm()` re-reads `Date.now` every tick. A frozen or mocked clock never

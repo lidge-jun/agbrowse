@@ -36,6 +36,7 @@ const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
  * @property {unknown[]} [warnings]
  * @property {string} [archiveFlag]
  * @property {string} [sessionType]
+ * @property {() => boolean} [stillActive] false once the caller's deadline passed
  */
 
 /**
@@ -57,9 +58,16 @@ export async function finalizeProviderTab(deps, {
     warnings = [],
     archiveFlag,
     sessionType = 'send-poll',
+    stillActive,
 } = {}) {
     if (!session?.sessionId || !session.targetId || !FINALIZABLE_STATUSES.has(status)) {
         return { finalized: false, reason: 'not-finalizable' };
+    }
+    // Checked HERE, immediately before the write, not only at the call site.
+    // `page.url()` and the caller's own awaits sit between the two, so an entry
+    // check alone lets a run that lost its deadline record a completed answer.
+    if (stillActive?.() === false) {
+        return { finalized: false, reason: 'poll-deadline-exceeded' };
     }
     const conversationUrl = page?.url?.() || session.conversationUrl || session.originalUrl || undefined;
     const baseWarnings = Array.isArray(warnings) ? warnings : [];
@@ -95,11 +103,19 @@ export async function finalizeProviderTab(deps, {
     if (shouldArchive && page && conversationUrl) {
         try {
             const archiveResult = await archiveConversation(page, { conversationUrl });
-            if (archiveResult.ok) {
+            // Re-check AFTER the await. A caller bounded by a deadline can have
+            // returned while the archive was in flight; writing then would move
+            // a session nobody is waiting on. Checking only at entry is not
+            // enough for work that spans an await.
+            if (archiveResult.ok && stillActive?.() !== false) {
                 updateSession(session.sessionId, { archived: true });
                 return { finalized: true, pool: null, archived: true };
             }
         } catch { /* archive is best-effort, fall through to pool */ }
+    }
+
+    if (stillActive?.() === false) {
+        return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
     }
 
     const port = deps?.getPort?.() || 9222;
