@@ -254,7 +254,10 @@ decade 문서를 diff-level로 작성한다 — 그것이 그 유닛의 docs-fir
   인용한다.
 - 2절의 모든 판정에 근거 인용이 있다. Page/Locator는 Playwright 소스 또는 타입
   정의, CDP는 해당 owner 코드와 프로토콜 timeout 규약을 근거로 삼는다.
-- 코드 변경 0줄. `git diff --stat`이 devlog 경로만 보여준다.
+- 코드 변경 0줄. `git diff --stat`이 devlog 경로와 `structure/str_func.md`만
+  보여준다. 후자는 devlog 문서를 추가하면 카운트가 밀려 `npm run fix:counts`가
+  갱신하는 생성 파일이라 예외다 — `web-ai/**`, `skills/**`, `test/**`는 0줄이어야
+  한다.
 
 **전수성 조건(이것이 핵심이다).** 세 번의 실패가 모두 "목록이 완전하다고 믿었는데
 아니었다"였으므로, 완전성을 주장이 아니라 검사로 만든다.

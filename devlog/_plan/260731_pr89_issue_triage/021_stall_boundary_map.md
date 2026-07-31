@@ -3,10 +3,63 @@
 명세는 `020_wp3_stall_boundary_inventory.md`. 이 문서는 그 7개 절을 채운 결과다.
 코드 변경 없음.
 
-- 기준: `dev` @ `76e4793`
+> **상태: 폐쇄 미완.** 두 차례 독립 감사에서 각각 12개와 그 이상의 누락이
+> 나왔다. 아래 §0이 그 이유와 이 문서를 어떻게 읽어야 하는지 설명한다.
+
+- 기준: `dev` @ `76e4793` (소스), 계획 문서는 이 유닛의 최신 커밋
 - 대상: `pollWebAi`(`web-ai/chatgpt.mjs:582`–`:1020`)
 
-## 1절 — 경계 전수
+## 0절 — 폐쇄가 닫히지 않는 이유 (LOOP-PESSIMIST-01)
+
+초판은 22개, 개정판은 34개를 선언했고 **둘 다 감사에서 반증됐다.** 2라운드가
+찾아낸 것만 해도 `deps.getPage` 하위(`skills/browser/browser.mjs:1235-1239` →
+persisted-state 동기 읽기, per-page CDP, `/json/list` fetch, `addInitScript`),
+`getCdpSession`의 raw WebSocket fallback(`skills/browser/tab-manager.mjs:141-195`),
+`forgetTabActivity`의 동기 파일 IO(`:35-52`), `isTabAlive`의 무제한
+fetch(`:395-400`)가 있다.
+
+**두 번 같은 방식으로 실패했다면 방식이 틀렸다.**
+
+진단: `pollWebAi`의 정체 표면은 "경계 N개"로 셀 수 있는 크기가 아니다. 호출
+그래프가 `web-ai/` 밖 `skills/browser/`의 탭 관리·CDP 연결·HTTP 폴링까지 뻗고,
+그 아래에 또 동기 파일 IO와 raw WebSocket이 있다. 열거를 한 단계 넓힐 때마다 새
+층이 나온다.
+
+더 근본적으로 `deps.getPage`/`deps.getCdpSession`은 **주입 지점**이라 구현이
+바뀔 수 있다. 지금 구현을 다 세어도 다음 구현에서 새 경계가 생긴다. 열거는
+스냅샷이지 계약이 아니다.
+
+### 방향 전환: 열거에서 계약으로
+
+경계를 다 세는 대신 **경계를 만들 수 없게** 하는 편이 실현 가능하다.
+
+| 접근 | 성질 |
+| --- | --- |
+| 경계 열거 후 개별 방어 | 스냅샷. 새 호출이 생기면 구멍이 생긴다 |
+| 진입점에서 전체 예산 강제 | 계약. 하위가 무엇을 하든 상한이 있다 |
+
+구체적으로는 `pollWebAi` 전체를 하나의 예산 안에서 실행하고, 그 예산이 끝나면
+반환을 보장하는 형태다. 하위 정체는 남지만 **명령은 반환한다** — 이슈 #88이
+보고한 증상("프로세스는 살아 있고 하트비트만 멎음")이 정확히 그 반환 실패다.
+
+동기 IO(B18~B20, B31~B34)는 이 계약으로도 못 막는다. `Promise.race`가 동기
+구간을 자를 수 없기 때문이다. 그건 별도 처방이 필요하고, 2절이 그 판정을 담고
+있다.
+
+### 이 문서의 남은 역할
+
+- 1절 경계표: 완전한 목록이 아니라 **확인된 표본**이다. "34개"라는 총량 주장은
+  철회한다.
+- 2절 방어 가능성: Playwright API 판정은 그대로 유효하다.
+- 3절 fail-open: 예산 계약과 **독립적으로** 고쳐야 할 결함 목록. 정체가 아니라
+  틀린 결론을 만들기 때문이다.
+- 4·5·6절: 후속 유닛의 입력으로 유효하다.
+- 7절 배정: 경계 단위에서 **접근 단위**로 바꿔야 한다.
+
+후속 유닛의 첫 work-phase는 경계를 더 세는 것이 아니라 **예산 계약을 설계하는
+것**이다.
+
+## 1절 — 경계 전수 (확인된 표본)
 
 ### 조사 명령
 
@@ -38,38 +91,40 @@ rg -n "page\.evaluate|locator\(|cdpSession\.send" web-ai/chatgpt-response-dom.mj
 | --- | --- | --- | --- | --- | --- |
 | B01 | `chatgpt.mjs:1439`(정의) / `:1441`,`:1442` | Page.evaluate | `readAssistantSnapshots` ← split 실패 fallback | in | split `ok:false` |
 | B02 | `chatgpt.mjs:1464`(정의) / `:1469` | Page.evaluate | `readAssistantSnapshotsSplit` ← 루프 `:658` | in | 항상 |
-| B03 | `chatgpt.mjs:1030`(정의) / `:1038` | Page.evaluate | `readActivityState` ← 루프 `:677` | in | stop-button probe 실패 시 |
-| B04 | `chatgpt-response-dom.mjs:30`(정의) / `:36`,`:39`,`:48`,`:53`,`:58` | Locator | `anyStopButtonVisible` ← `readActivityState:1035` | in | 항상 |
+| B03 | `chatgpt.mjs:1030`(정의) / `:1038` | Page.evaluate | `readActivityState` ← 루프 `:677`, recovery `:868-873`, copy `:923` | in·post | stop-button probe 실패 시 |
+| B04 | `chatgpt-response-dom.mjs:30`(정의) / `:36`,`:39`,`:48`,`:53`,`:58`,`:63` | Locator | `anyStopButtonVisible` ← `readActivityState:1035` | in·post | 항상 |
 | B05 | `chatgpt.mjs:1068`(정의) / `:1070` | Page.evaluate | `isResponseFinished` ← 루프 `:713`, recovery `:873`, copy `:943` | in·post | 항상 |
 | B06 | `chatgpt.mjs:560`(정의) / `:563` | Page.evaluate | `doesAssistantFollowUser` ← 루프 `:722` | in | wrapperless 아닌 후보 |
 | B07 | `chatgpt-response-dom.mjs:413`(정의) / `:415`,`:420`,`:428` | Locator | `readTopLevelAssistantTextsFromLocators` ← `chatgpt.mjs:1431` | in | evaluate 실패 시 |
-| B08 | `chatgpt-response-observer.mjs:78`(정의) / `:81` | Page.evaluate | `observeAssistantResponse` ← `:629` | in | 항상 — **bounded**(`timeoutMs`) |
+| B08 | `chatgpt-response-observer.mjs:78`(정의) / `:81` | Page.evaluate | `observeAssistantResponse` ← `:629` | in | 항상 — 소비는 bounded, 하위 evaluate는 unbounded·취소 안 됨 |
 | B09 | `chatgpt-response-observer.mjs:98`(정의) / `:103`,`:104` | Page.evaluate | `recoverAssistantResponse` ← `:868` | post | 세션 폴 |
-| B10 | `failure-diagnostics.mjs:27`(정의) / `:29` | Page.evaluate | `captureFailureDiagnostics` ← `:919` | post | `diagnostics` 옵션 |
+| B10 | `failure-diagnostics.mjs:57`(정의) / `readConversationSnapshot:27`, evaluate `:29` | Page.evaluate | `captureFailureDiagnostics` ← `:919` | post | `diagnostics` 옵션 |
 | B11 | `copy-markdown.mjs:68`(정의) / `:71` | Page.evaluate | `captureCopiedResponseText` ← 루프 `:738`, post `:962` | in·post | `allowCopyMarkdownFallback` |
 | B12 | `chatgpt.mjs:1308`(정의) | 외부 위임 | `resolveOptionalChatGptCopyTarget` ← `:737`, `:961` → `target-resolver.mjs` → `self-heal.mjs:222` | in·post | `allowCopyMarkdownFallback` |
 | B13 | `self-heal.mjs:222` | Locator | B12 하위 — `page.locator(sel).count()` | in·post | B12와 동일 |
 | B14 | `chatgpt-images.mjs:226`,`:241`,`:257` | CDP + fetch | `collectImages` ← 루프 `:762`, `collectGeneratedImageAnswer:1501` | in | 이미지 응답 |
 | B15 | `chatgpt-files.mjs:321`,`:347` | CDP | `saveAssistantDownloadableFiles` ← 루프 `:800` | in | 다운로드 가능 파일 |
 | B16 | `chatgpt-archive.mjs:84-105` | Locator/click | `finalizeProviderTab` ← `:698`,`:812`,`:899`,`:970` → `tab-finalizer.mjs:95` | in·post | `archiveFlag` |
-| B17 | `tab-lease-store.mjs:391`,`:630` → `skills/browser/tab-manager.mjs:305` | CDP | `finalizeProviderTab` → `poolTab`(`tab-pool.mjs:51`, await 없는 반환) → lease overflow → `closeTab` | in·post | lease 초과 |
+| B17 | `tab-lease-store.mjs:391`,`:630` → `skills/browser/tab-manager.mjs:305`(정의) / `:310` CDP send | CDP | `finalizeProviderTab` → `poolTab`(`tab-pool.mjs:51`, await 없는 반환) → lease overflow → `closeTab` | in·post | lease 초과 |
 | B18 | `session-store.mjs:136`(정의) / `:142`,`:144`,`:161` | sync-IO/lock | `markSessionTimeout`(`:986`,`:1006`) → `session.mjs:251` → `patchSession`(`session-store.mjs:337`) → `withStoreLock` | post | 세션 폴 |
 | B19 | `session-store.mjs:136` 동일 | sync-IO/lock | `updateSession`(`session.mjs:230`) → `patchSession` → `withStoreLock` | in·post | 세션 폴 |
 | B20 | `chatgpt.mjs:1386`(정의) | sync-IO | `persistResolverTraceForSession` ← `:741`, `:965` | in·post | `allowCopyMarkdownFallback` |
-| B21 | `chatgpt.mjs:594` | Page(간접) | `requireChatGptPage` | **pre** | 항상 |
+| B21 | `chatgpt.mjs:1221`(정의) / `:1223` `deps.getPage`, `:1227-1229` `addInitScript`+`evaluate` | Page + 하위 다층 | `requireChatGptPage` ← `:594`. 일반 deps에서 `browser.mjs:2148` → `getReadyPage:1235` → persisted-state 동기 읽기(`:480-485`), per-page CDP(`:1056-1063`), `/json/list` fetch(`:1103-1105`) | **pre** | 항상 |
 | B22 | `session.mjs:156`(정의) / `:161` | sync-IO | baseline store `readFileSync` ← `getBaseline`/`getLatestBaseline`(`chatgpt.mjs:604-605`) | **pre** | 세션 baseline 부재 시에만(`:603`에서 short-circuit) |
 | B23 | `session.mjs:295`(정의) / `session-store.mjs:116`,`:352` | sync-IO/lock | `getSession`(`chatgpt.mjs:597`)·`findActiveSession`(`:598-601`) → store read | **pre** | 항상 |
 | B24 | `skills/browser/browser.mjs:1056`(정의) / `:1057`,`:1059`,`:1062` | CDP | `deps.getTargetId`(`chatgpt.mjs:600`, `:634`) → `newCDPSession` + `Target.getTargetInfo` + `detach` | pre·in | 일반 browser deps |
-| B25 | `chatgpt.mjs:751`, `:797` | CDP | `deps.getCdpSession` — 이미지/파일 수집 전 세션 취득 | in | 이미지·파일 응답 |
+| B25 | `chatgpt.mjs:751`,`:797`,`:1492` 취득 / `:788`,`:806`,`:1521` detach | CDP + 하위 | `deps.getCdpSession` → `skills/browser/browser.mjs:1121-1124`, raw fallback은 `tab-manager.mjs:141-195`(무제한 fetch + WebSocket open + raw send) | in | 이미지·파일 응답 |
 | B26 | `chatgpt.mjs:1528`(정의) / `:1529`,`:1530` | sync-IO/lock | `buildDeferredPollingResult` → `getSession`+`updateSession` → `patchSession` → `withStoreLock` | in·post | deferred 반환 4곳(`:879`,`:889`,`:927`,`:947`) |
 | B27 | `chatgpt.mjs:688` | sync-IO | `process.stderr.write` 하트비트 | in | streaming 또는 latest 존재 |
 | B28 | `failure-diagnostics.mjs:57`(정의) / `:60`,`:66`,`:70` | CDP + sync-IO | `captureFailureDiagnostics` 하위 — CDP 취득, `Page.captureScreenshot`, `detach`, artifact 쓰기(`session-artifacts.mjs:265-305`) | post | `diagnostics` 옵션 |
-| B29 | `self-heal.mjs:298`(정의) / `:307`,`:311`,`:338` | Locator | B12 하위 — `isEnabled`/`isEditable`/`locator.evaluate` | in·post | `allowCopyMarkdownFallback` |
+| B29 | `self-heal.mjs:242`(정의 `validateResolvedTarget`) / `:298`,`:303`,`:307`,`:311`,`:338` | Locator | B12 하위 — 2차 `count`/`isVisible`/`isEnabled`/`isEditable`/`locator.evaluate` | in·post | `allowCopyMarkdownFallback` |
 | B30 | `chatgpt-images.mjs:139`(정의) / `:140` | CDP | 이미지 탐지 `Runtime.evaluate` — B14보다 앞선다 | in | 이미지 응답 |
 | B31 | `chatgpt-images.mjs:257`-`:273`, `session-artifacts.mjs:157`,`:314` | sync-IO/lock | 이미지 저장 `mkdirSync`/`writeFileSync` + artifact 기록 | in | 이미지 응답 |
 | B32 | `chatgpt-files.mjs:433`-`:444`, `session-artifacts.mjs:219`,`:314` | sync-IO/lock | 파일 저장 + artifact 기록 | in | 다운로드 가능 파일 |
 | B33 | `tab-finalizer.mjs:64`-`:86` | sync-IO/lock | finalizer의 session update·transcript write·artifact record | in·post | 항상(세션 폴) |
 | B34 | `tab-lease-store.mjs:179`-`:208`, `:367`-`:391` | sync-IO/lock | lease 락과 동기 파일 IO — B17 하위 | in·post | lease 조작 |
+| B35 | `skills/browser/tab-manager.mjs:35`-`:52`, `:71`-`:75` | sync-IO | `forgetTabActivity` ← `closeTab` 성공 후(`:311`,`:316`) | in·post | 탭 close |
+| B36 | `skills/browser/tab-manager.mjs:202`-`:205`, `:395`-`:400` | HTTP(무제한) | `isTabAlive` ← `tab-lease-store.mjs:630-634` close 실패 후 | in·post | close 실패 |
 
 ### 폐쇄 증명
 
@@ -94,7 +149,7 @@ B26으로 기록했다.
 `process.stderr.write`, `page.url()`, `page.waitForTimeout()`.
 이들은 재귀를 멈추되 **deadline-unaware 경계로 기록**했다(B18~B20, B22).
 
-**경계로 기록.** 위 표 B01~B22.
+**경계로 기록.** 위 표 B01~B36. 이것은 전수가 아니라 확인된 표본이다(§0).
 
 **bounded로 판정하고 끊음: 없다.**
 
@@ -122,10 +177,10 @@ signal이 없으면 evaluate Promise를 그대로 await한다(`:78-84`). 렌더�
 
 | 종류 | 제한 방법 | 근거 |
 | --- | --- | --- |
-| Page.evaluate | 옵션 없음 → **외부 race 필요** | Playwright `page.evaluate`에 timeout 파라미터가 없다 |
+| Page.evaluate | 옵션 없음 → **외부 race 필요** | `node_modules/playwright-core/types/types.d.ts:84-135`에 timeout 파라미터 없음 |
 | Locator `.all()`/`.count()` | 옵션 없음 → **외부 race 필요** | `locator.all()`이 timeout 없는 `count()`를 호출(`node_modules/playwright-core/lib/client/locator.js:280`, `lib/client/frame.js:213`) |
 | Locator `.isVisible({timeout})` | timeout 무시됨 | `node_modules/playwright-core/types/types.d.ts:14191` |
-| Locator `.innerText({timeout})` | 옵션 유효 | 기존 코드가 이미 `timeout: 500`을 쓴다 |
+| Locator `.innerText({timeout})` | 옵션은 유효하나 **기본값이 무제한** | 타입 기본값 `0`(`node_modules/playwright-core/types/types.d.ts:14009-14017`). B07은 인자 없이 호출한다(`web-ai/chatgpt-response-dom.mjs:428`) |
 | CDP `session.send()` | 옵션 없음 → **외부 race 필요** | `CDPSession.send`에 timeout 옵션 없음(`types.d.ts:15882`) |
 | `fetch` | `AbortController`로 제한 가능 | `chatgpt-files.mjs:364-382`가 이미 적용 |
 | sync-IO/lock | **동기라 race 불가** | 호출 전 조건 검사나 비동기 재작성이 필요 |
@@ -164,12 +219,20 @@ signal이 없으면 evaluate Promise를 그대로 await한다(`:78-84`). 렌더�
 | B26 | `:879`,`:889`,`:927`,`:947` | 없음(동기) | 반환 자체가 막힌다 |
 | B27~B34 | 각 호출부 | 없음(동기) 또는 예외 삼킴 | 반환 지연 |
 
-**틀린 결론을 만드는 경계는 넷이다:** B03(정체 → 조용한 완료), B06(정체 → 순서
+**틀린 결론을 만드는 경계는 최소 여섯이다:** B03(정체 → 조용한 완료), B06(정체 → 순서
 검증 통과), B24(null → mismatch 검사 생략), B25(undefined → 아티팩트 누락한 채
 성공). B23도 오래된 baseline으로 진행할 수 있다. 나머지는 지연만 만든다.
 
-넷의 공통 형태는 **fail-open**이다 — 실패를 "문제 없음"으로 해석한다. 후속 유닛의
-첫 설계 원칙은 이것을 fail-closed로 뒤집는 것이다.
+B23(빈 세션 → legacy baseline)이 다섯째, `isTabAlive` 실패가 살아 있는 탭을
+`closed`로 만드는 것(`skills/browser/tab-manager.mjs:395-400` →
+`tab-lease-store.mjs:630-648`)이 여섯째다.
+
+B25는 소비자가 갈린다: 이미지 CDP 부재는 throw로 fail-closed지만
+(`chatgpt.mjs:751-759`), 파일 CDP 부재는 조용히 건너뛰고 성공으로 간다(`:797-812`).
+후자만 fail-open이다.
+
+공통 형태는 **fail-open** — 실패를 "문제 없음"으로 해석한다. 이 목록은 예산
+계약과 **독립적으로** 고쳐야 한다. 예산을 씌워도 틀린 결론은 그대로다.
 
 ## 4절 — 종료 경로
 
@@ -251,6 +314,16 @@ offset 방식을 fake timer로 옮기는 것이 후속 유닛의 첫 작업 중 
 
 ## 7절 — 후속 유닛 배정
 
+> **재구성됨.** §0의 방향 전환에 따라 배정 단위를 "경계 N개"에서 "접근 방식"으로
+> 바꿨다. 경계 목록이 표본이므로 경계별 배정은 완결될 수 없다.
+>
+> | 유닛 | 다루는 것 | 완결 기준 |
+> | --- | --- | --- |
+> | A `webai_poll_deadline` | 예산 계약 + 답변 읽기/완료 판정 경로 + fail-open 교정 | `pollWebAi`가 어떤 하위 정체에도 데드라인 안에 반환한다 |
+> | B `webai_artifact_finalizer` | 동기 IO 처방 + CDP/HTTP 경계 + 탭 수명주기 | 동기 구간과 주입 경계가 상한을 갖는다 |
+>
+> 아래 경계 목록은 각 유닛이 **먼저 볼 곳**이지 완전한 담당 목록이 아니다.
+
 ### 유닛 A — `webai_poll_deadline` (#88 원래 범위)
 
 답변 읽기와 완료 판정 경로. 정체가 **틀린 결론**을 만드는 경계가 여기 있다.
@@ -259,6 +332,8 @@ offset 방식을 fake timer로 옮기는 것이 후속 유닛의 첫 작업 중 
 
 work-phase 분할(의존 순서):
 
+0. **예산 계약 설계** — `pollWebAi` 진입점에서 전체를 감싸는 방식을 정한다.
+   경계를 더 세는 것이 아니라 하위가 무엇을 하든 반환을 보장하는 구조다(§0).
 1. 예산 프리미티브 + sentinel 계약 + fake timer 하네스 — 이후 전부의 토대
 2. 데드라인 안 읽기 경로(B01, B02, B07) + `countAssistantMessages` 계약과
    5절의 소스-텍스트 테스트 갱신
@@ -291,23 +366,30 @@ work-phase 분할(의존 순서):
 
 수용 기준: 담당 경계 전부가 데드라인을 인지하거나 bounded임이 증명된다.
 
-### 배정 대조
-
-경계 34개(B01~B34) 전부가 배정됐다. 유닛 A 15개 + 유닛 B 19개 = 34.
+### 배정 (표본 기준)
 
 ```
 A: B01 B02 B03 B04 B05 B06 B07 B08 B09 B11 B12 B13 B26 B27 B29
-B: B10 B14 B15 B16 B17 B18 B19 B20 B21 B22 B23 B24 B25 B28 B30 B31 B32 B33 B34
+B: B10 B14 B15 B16 B17 B18 B19 B20 B21 B22 B23 B24 B25 B28 B30 B31 B32 B33 B34 B35 B36
 ```
 
-배정 없이 남긴 경계는 없다. 초판에서 B08을 bounded로 보고 제외했으나, 페이지 내
-`setTimeout`은 wall-time 상한이 아니므로 유닛 A에 넣었다.
+확인된 36개는 모두 어느 한쪽에 있다. 그러나 §0대로 이것은 완결 증명이 아니다 —
+구현 중 새 경계가 나오면 해당 유닛의 접근 방식이 이미 덮는지 확인하고, 안 덮으면
+그 work-phase에 추가한다.
 
 ### 유닛 간 선행 관계
 
-두 유닛은 독립이 아니다. 유닛 B의 2번 work-phase(동기 IO 처방)가 유닛 A의 5번
-work-phase(B26 세션 락)에 필요하다. **유닛 B를 먼저 시작해 최소한 2번까지 끝낸
-뒤 유닛 A의 5번을 진행한다.** 나머지는 병행 가능하다.
+두 유닛은 독립이 아니다. 유닛 B의 sync-IO 처방(2번)이 유닛 A의 여러 phase에
+필요하다:
+
+- B20(`persistResolverTraceForSession`)은 A의 **4번**(copy 경로)에서 호출된다
+  (`chatgpt.mjs:741`, `:965`)
+- B26(deferred 반환의 세션 락)은 A의 **5번**
+- B33/B34(finalizer)는 A의 성공·recovery·copy 경로 전부에 걸려 **7번**(warning
+  통합) 전에 끝나야 한다
+
+따라서 **유닛 B의 1~2번을 먼저 끝낸 뒤 유닛 A의 4번 이후를 진행한다.** A의 0~3번과
+B의 3~6번은 병행 가능하다.
 
 ### 문서 번호
 
