@@ -11,7 +11,9 @@
 이슈 #88의 정체 표면 중 **아티팩트 수집과 탭 수명주기** 쪽이다. 답변 읽기 경로는
 자매 유닛이 맡는다.
 
-여기 모인 것들의 공통점: CDP와 동기 IO다. 둘 다 `Promise.race`로 자를 수 없다.
+여기 모인 것들의 공통점: CDP와 동기 IO다. **둘 다 race만으로는 계약을 만족할 수
+없다** — CDP 호출자의 반환 자체는 외부 race로 제한할 수 있지만 하위 작업은
+취소되지 않고, 동기 구간은 race 자체가 불가능하다.
 
 - Playwright `CDPSession.send`에 timeout 옵션이 없다
   (`node_modules/playwright-core/types/types.d.ts:15872-15885`)
@@ -55,13 +57,13 @@ B10, B14~B25, B28, B30~B36 — 21개.
 
 | 경계 | 위치 |
 | --- | --- |
-| B18/B19 | `web-ai/session-store.mjs:136` `withStoreLock` — `openSync`/`writeFileSync` + 200회 재시도 |
-| B20 | `web-ai/chatgpt.mjs:1386` `persistResolverTraceForSession` |
+| B18/B19 | `web-ai/session-store.mjs:136-164` `withStoreLock` — `openSync`/`writeFileSync` + 200회 재시도 |
+| B20 | 호출부 `web-ai/chatgpt.mjs:1386`, 실제 동기 경로 `web-ai/trace-persistence.mjs:44-61` |
 | B22/B23 | `web-ai/session.mjs:156-161`, `session-store.mjs:116-117` |
 | B21 일부 | `skills/browser/browser.mjs:480-485` persisted-state 읽기 |
 | B31/B32 | `web-ai/chatgpt-images.mjs:257-273`, `web-ai/chatgpt-files.mjs:433-444` |
 | B33/B34 | `web-ai/tab-finalizer.mjs:64-86`, `web-ai/tab-lease-store.mjs:179-208` |
-| B35 | `skills/browser/tab-manager.mjs:35-52` `forgetTabActivity` |
+| B35 | `skills/browser/tab-manager.mjs:35-52`, `:71-75` `forgetTabActivity` |
 
 ### CDP 경계
 
@@ -85,14 +87,14 @@ B10, B14~B25, B28, B30~B36 — 21개.
 | WP3 | CDP 예산 규약 (B24, B25, B28, B30) | WP0, WP2 |
 | WP4 | 아티팩트 수집 (B14, B15, B30, B31, B32) | WP3 |
 | WP5 | diagnostics (B10, B28) | WP3 |
-| WP6 | 탭 lease와 finalizer (B16, B17, B33, B34, B35, B36) | WP2, WP3 |
-| WP7 | fail-open 교정 (B23, B24, B25, B36) | WP1, WP3, WP6 |
+| WP6 | 탭 lease와 finalizer (B16, B17, B33, B34, B35, B36의 **예산·수명주기**) | WP2, WP3 |
+| WP7 | fail-open 교정 (B23, B24, B25, B36의 **sentinel 소비 계약**) | WP1, WP3, WP6 |
 
 분할은 021 7절의 유닛 B 순서를 따르되 fail-open 교정을 독립 work-phase로
 분리했다 — 예산 계약과 성격이 달라 섞으면 어느 쪽이 효과를 냈는지 알 수 없다.
 
-**WP2가 가장 이르다.** 자매 유닛의 WP6·WP7이 이 결과를 기다린다. WP0 직후에
-착수한다.
+**WP1과 WP2는 WP0 직후 병행 가능하다.** 다만 WP2가 교차 유닛 critical path다 —
+자매 유닛의 WP6·WP7이 이 결과를 기다린다.
 
 ## 검증 (021 6절, A·B 공동)
 
@@ -100,33 +102,77 @@ C1~C5는 자매 유닛 `000_plan.md`와 동일하다. 이 유닛의 담당분:
 
 - **C5**: B23·B24·B25·B36 fail-closed (WP7)
 - **C4**: 동기 IO가 event loop를 막는 상황의 wall-time 상한 — 이 유닛의 WP2가
-  핵심이다. fake timer로 불가하므로 실시간 프로세스 하네스가 필요하다
+  필수지만 **충분조건은 아니다.** 자매 WP3가 소유하는 command lock의
+  `Atomics.wait`(`web-ai/session-store.mjs:250-316`)도 공동 C4에 포함된다.
+  fake timer로 불가하므로 실시간 프로세스 하네스가 필요하다
 - C1~C3: 자매와 공동 게이트
+
+### primitive별 pending 행렬
+
+`CDPSession.send` 하나만 보면 부족하다. 이 유닛이 다루는 blocking primitive는
+다섯 종류이고 **각각 주입해서 검증**한다.
+
+| primitive | 대표 위치 | 주입 시나리오 |
+| --- | --- | --- |
+| `fetch` | 이미지 다운로드 `web-ai/chatgpt-images.mjs:241-247`, `/json/list` `skills/browser/browser.mjs:1103-1105`, 생존 확인 `skills/browser/tab-manager.mjs:202-205` | 영원히 pending → 데드라인 안 반환 |
+| `newCDPSession` | `skills/browser/browser.mjs:1057` | 세션 취득이 pending |
+| `CDPSession.send` | `web-ai/chatgpt-images.mjs:226`, `web-ai/chatgpt-files.mjs:321`, `skills/browser/tab-manager.mjs:310` | 명령이 pending |
+| `detach` | `skills/browser/browser.mjs:1062`, `web-ai/chatgpt.mjs:788`, `:806`, `:1521` | 정리가 pending — 반환 후에도 프로세스를 붙잡는다 |
+| locator/click | `web-ai/chatgpt-archive.mjs:90-105` | archive 클릭이 pending |
+| 동기 IO | `web-ai/session-store.mjs:136-164` 등 | event loop 차단 |
+
+각 행에 대해 모델별 pass/fail을 기록한다. **B36은 두 사례로 나눈다** — fetch가
+reject하는 경우(fail-closed 검증)와 pending인 경우(데드라인 검증)는 다른 결함이다.
 
 ### 이 유닛 고유의 관측
 
 | 시나리오 | 관측 |
 | --- | --- |
-| CDP `send`가 영원히 pending | 데드라인 안 반환, 세션 detach 여부 |
 | 아티팩트 저장 중 중단 | 부분 파일 잔존 여부, 다음 명령 동작 |
 | lease 조작 중 중단 | 락 파일 잔존, 좀비 탭 |
-| `isTabAlive` fetch 실패 | 살아 있는 탭이 `closed`로 마킹되지 않음 |
+| detach 미완료 | 반환 후 CDP 세션 잔존 수 |
 
 ## 범위
 
-IN: `web-ai/chatgpt-images.mjs`, `web-ai/chatgpt-files.mjs`,
+IN — 소스:
+`web-ai/chatgpt-images.mjs`, `web-ai/chatgpt-files.mjs`,
 `web-ai/failure-diagnostics.mjs`, `web-ai/session-artifacts.mjs`,
 `web-ai/tab-finalizer.mjs`, `web-ai/tab-lease-store.mjs`,
 `web-ai/session-store.mjs`, `web-ai/session.mjs`,
+`web-ai/chatgpt-archive.mjs`(B16의 실제 locator/click owner — finalizer가
+import한다, `tab-finalizer.mjs:5`),
+`web-ai/trace-persistence.mjs`(B20의 실제 동기 세션 경로 `:44-61` —
+`chatgpt.mjs:1386`은 호출부다),
 `skills/browser/tab-manager.mjs`, `skills/browser/browser.mjs`의 CDP·
-persisted-state 경로, `web-ai/chatgpt.mjs`의 아티팩트·finalizer 호출부.
+persisted-state·fetch 경로, `web-ai/chatgpt.mjs`의 아티팩트·finalizer 호출부.
+
+예산 전달 방식에 따라 `web-ai/tab-pool.mjs:49-63`도 필요할 수 있다 — WP0의
+모델 선택 후 확정한다.
+
+IN — 테스트:
+`test/unit/web-ai-tab-finalizer.test.mjs`,
+`test/unit/web-ai-failure-diagnostics.test.mjs`,
+`test/unit/chatgpt-images.test.mjs`, `test/unit/chatgpt-files.test.mjs`,
+`test/unit/tab-lifecycle.test.mjs`, 신규 프로세스 하네스.
 
 OUT: 답변 읽기와 완료 판정 경로 — 자매 유닛 소유. #87 관련 코드. devlog 정리.
 
 ## 종료 판정
 
-담당 경계 21개가 예산 계약 아래 상한을 갖고, C5의 fail-open 넷이 fail-closed로
-검증되면 DONE이다. C1~C4는 자매 유닛 완료 후 공동 게이트다.
+**"21개를 확인했다"는 DONE 조건이 아니다.** 선행 유닛이 36개를 "완전 목록이
+아니라 먼저 볼 곳"으로 규정했고(`021` §0), 21개는 그중 이 유닛 몫일 뿐이다.
+개수 체크로 닫으면 새 경계가 계약 밖에 남아도 통과한다.
+
+DONE 조건은 셋이다.
+
+1. **구조적 커버리지** — 동기 구간·주입 경계·CDP/HTTP 경계가 선택한 모델의
+   계약으로 덮인다. 개별 경계를 하나씩 감싸는 게 아니라, 그 종류의 접근이
+   예산 밖에 있을 수 없는 구조여야 한다.
+2. **fail-open 교정** — C5의 B23·B24·B25·B36이 fail-closed로 검증된다.
+3. **ledger 편입** — 구현 중 발견된 새 경계가 `021` 표본에 없더라도 계약이
+   덮는지 확인하고, 안 덮으면 해당 work-phase에 추가한 기록이 남는다.
+
+C1~C4는 자매 유닛 완료 후 공동 게이트다.
 
 **두 유닛이 모두 끝나야 #88이 닫힌다.** 어느 한쪽만으로는 그 경로로 재현된다.
 
