@@ -14,10 +14,10 @@ This audit covers the implementation committed as:
 
 Prior planning evidence:
 
-- `devlog/_plan/260625_webai_streaming_recovery_false_complete/00_overview.md`
-- `devlog/_plan/260625_webai_streaming_recovery_false_complete/00_repro_and_root_cause.md`
-- `devlog/_plan/260625_webai_streaming_recovery_false_complete/10_patch_plan.md`
-- `devlog/_plan/260625_webai_streaming_recovery_false_complete/20_verification_matrix.md`
+- `devlog/_fin/260625_webai_streaming_recovery_false_complete/00_overview.md`
+- `devlog/_fin/260625_webai_streaming_recovery_false_complete/00_repro_and_root_cause.md`
+- `devlog/_fin/260625_webai_streaming_recovery_false_complete/10_patch_plan.md`
+- `devlog/_fin/260625_webai_streaming_recovery_false_complete/20_verification_matrix.md`
 
 Runtime smoke evidence:
 

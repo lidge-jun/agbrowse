@@ -27,7 +27,6 @@ must be treated as historical  do not edit them after release.evidence
 | Parity impl (Cycle 1–12) | `_plan/260625_webai_parity_impl/` | 🔧 Cycle 1–12 실행 완료, Cycle 12 verdict = CONCERNS. 후속은 `260627_gptpro_remediation`. |
 | GPT-Pro remediation (R1–R9) | `_plan/260627_gptpro_remediation/` | 🔧 5 PABCD 사이클 실행 완료. R2 verdict의 CONCERNS 5 / FAIL 2 미해소. |
 | Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 기능 트랙(Phase 10/20/30/40) 구현 완료. 런칭 트랙 Phase 100/110/120이 잔존(`10_roadmap.md:97-140`). |
-| devlog 정리 | `_plan/260731_devlog_reorg/` | 🔧 진행 중 — 이 표를 만든 유닛. |
 | Strict migration | `_plan/strict-migration/` | ⏸ Deferred. 실행 소스는 여전히 `.mjs`, TS는 declaration만. |
 
 `_plan/`에 있는 폴더는 위가 전부다. 유닛을 닫으면 같은 커밋에서 `_fin/`으로
@@ -38,6 +37,7 @@ must be treated as historical  do not edit them after release.evidence
 
 | Topic | Folder | Closeout signal |
 | --- | --- | --- |
+| devlog 정리 | `_fin/260731_devlog_reorg/` | `900_closeout.md` — `_plan` 11→6, 조건부 4개 증거 확인 후 이관. 릴리스 stop condition 실행, 이관으로 깨진 참조 정정. |
 | PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정(`76e4793`)과 #88 정체 경계 표본·예산 계약 확정. #88 방어 구현과 devlog 정리는 후속 유닛으로 분할 — `003_audit_synthesis.md` 참조. |
 | QA round 6 | `_fin/260726_qa_round6/` | 13개 work-phase closeout — `090_closeout.md`. |
 | Oracle chase 4 | `_fin/260726_oracle_chase4/` | 상류 델타 재검증 종료. |
@@ -47,7 +47,7 @@ must be treated as historical  do not edit them after release.evidence
 | PR #86 repomix dev rebuild | `_fin/260723_pr86_repomix_dev_rebuild/` | dev 재구축 후 closeout. |
 | Oracle chase | `_fin/260712_oracle_chase/` | 종료. |
 | Upload reliability | `_fin/260711_upload_reliability/` | `900_closeout.md` — 전체 스위트 179파일 1946건 0 failure로 기준 1 재검증. |
-| Release 0.1.17 | `_fin/260711_release_017/` | `900_closeout.md` — workflow success + GitHub/npm 게시 확인. fresh install만 미확인으로 기록. |
+| Release 0.1.17 | `_fin/260711_release_017/` | `900_closeout.md` — workflow success, GitHub/npm 게시, fresh registry install + 두 bin smoke 재현 완료. |
 | GPT-5.6 UI update | `_fin/260710_gpt56_update/` | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116`. |
 | Competitive research | `_fin/260628_competitive_research/` | `900_closeout.md` — research superseded by `260705_gapclose`, 미해결 질문 5개 disposition 기록. |
 | Search skill | `_fin/260627_search_skill/` | `900_closeout.md` — 5개 계획 사이클의 산출물이 모두 배포됨을 사후 대조. |
