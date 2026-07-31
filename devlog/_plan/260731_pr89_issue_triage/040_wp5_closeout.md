@@ -8,6 +8,7 @@ WP3.x가 하나라도 남아 있으면 이 work-phase는 시작하지 않는다.
 ## 게이트
 
 아래는 WP2 기준 목록이다. WP3.x가 확정되면 각 사이클의 영향권을 여기에 합친다.
+각 WP3.x는 자체 게이트를 갖고, 이 절은 그 합집합을 마지막으로 한 번 더 돌린다.
 
 순서대로 실행하고 각 출력을 이 문서에 기록한다.
 
@@ -32,13 +33,14 @@ bash structure/check-doc-drift.sh
 npm run gate:all
 ```
 
-영향권 선정 근거: 이 유닛에서 코드를 바꾸는 것은 WP2뿐이다
-(`web-ai/chatgpt-model.mjs` probe, `web-ai/chatgpt.mjs:120` capability 정의,
-`web-ai/mcp-server.mjs` submit_prompt 분기). `rg -l "web_ai_submit_prompt" test/`와
-`rg -l "CapabilityProbe\|chatGptModelCapabilityProbe" test/`로 영향권을 골랐다.
+영향권 선정 근거: WP2가 바꾸는 것은 `web-ai/chatgpt-model.mjs` probe,
+`web-ai/chatgpt.mjs:120` capability 정의, `web-ai/mcp-server.mjs` submit_prompt
+분기다. `rg -l "web_ai_submit_prompt" test/`와
+`rg -l "chatGptModelCapabilityProbe" test/`로 영향권을 골랐다.
 
-WP3는 문서만 만들므로 게이트 대상이 아니다. #88 구현이 후속 work-phase로
-append되면 그 사이클이 자체 게이트를 갖는다.
+WP3는 문서만 만들므로 게이트 대상이 아니다. WP3.x는 각각 `web-ai/chatgpt.mjs`
+폴링 경로와 그 위임 모듈을 바꾸므로, 확정 시점에 해당 스위트를 이 목록에
+추가한다.
 
 `typecheck:checkjs` / `typecheck:checkjs-dom`은 `dev`에 선행 오류가 있으므로
 파일별 오류 수를 변경 전후로 비교한다. 새 오류를 도입하지 않았음이 기준이지
@@ -69,7 +71,7 @@ MODIFY `devlog/00_index.md` — WP4가 만든 `_plan` 표에서 이 유닛 행�
 ```diff
  | Topic | Path | Closeout signal |
  | --- | --- | --- |
-+| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | `040_wp5_closeout.md`에 게이트 출력과 인계 기록. #87 probe/MCP 갭 수정, #88은 경계 인벤토리까지. |
++| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | `040_wp5_closeout.md`에 게이트 출력과 인계 기록. #87 probe/MCP 갭과 #88 DOM read deadline 방어를 dev에 반영. |
  | QA round 6 | `_fin/260726_qa_round6/` | ... |
 ```
 
@@ -80,7 +82,8 @@ work-phase마다 하나씩, 로컬만.
 ```
 WP1  docs(devlog): PR #89 / 이슈 #87·#88 처리 로드맵 유닛
 WP2  fix(web-ai): make the model probe and MCP honor the requested chat family
-WP3  docs(devlog): map every stall boundary in the ChatGPT poll path
+WP3   docs(devlog): map every stall boundary in the ChatGPT poll path
+WP3.x fix(web-ai): <경계별 방어> — WP3의 7절 분할안대로 사이클마다 하나씩
 WP4  docs(devlog): sync the index with the real _plan/_fin layout
 WP5  docs(devlog): close out the PR #89 / issue triage unit
 ```
@@ -95,13 +98,12 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 이 유닛이 끝나도 원격에는 다음이 남는다. 모두 사용자 결정이 필요하다.
 
 1. **PR #89 처분.** base가 `main`이라 머지해도 `dev`에 반영되지 않는다. dev에는
-   #87 배선이 이미 있고, #88 방어는 이 유닛이 경계 인벤토리까지만 진행했다.
+   #87 배선이 이미 있고, #88 방어는 이 유닛이 dev 구조에 맞춰 새로 구현했다.
    선택지: (a) 기여를 인정하며 "dev에서 다르게 반영됨"으로 닫기, (b) `main`에
    머지한 뒤 dev와의 정합을 별도로 처리, (c) 기여자에게 dev 대상 재작성을 요청.
-2. **이슈 #87 클로즈.** dev에 수정이 들어갔지만 릴리스 전이다. 클로즈 시점을
-   릴리스에 맞출지 지금 닫을지는 사용자 판단이다.
-   **이슈 #88은 열어 둔다** — 이 유닛은 경계를 확정했을 뿐 방어를 구현하지
-   않았다. 구현 work-phase가 남아 있다.
+2. **이슈 #87 / #88 클로즈.** 둘 다 dev에 수정이 들어갔지만 릴리스 전이다.
+   클로즈 시점을 릴리스에 맞출지 지금 닫을지는 사용자 판단이다. WP3 인벤토리가
+   범위 밖으로 판정한 경계가 있다면 그 목록을 이슈에 남길지도 함께 결정한다.
 3. **dev↔main 정합.** `main`에 있고 `dev`에 없는 6커밋(v0.1.18/v0.1.19 릴리스,
    #82 fix, postinstall star prompt)은 이 유닛의 범위 밖이다.
 

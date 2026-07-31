@@ -29,7 +29,7 @@
 | --- | --- |
 | `260711_upload_reliability` | 전체 `npm test`를 다시 돌려 0 failure를 얻거나(Playwright Chromium 설치 후), 환경 실패를 허용하도록 성공 기준을 수정한 판정을 유닛 안에 남긴다. 둘 다 못 하면 `_plan` 유지 |
 | `260627_search_skill` | `900_closeout.md`에 5개 계획 cycle 대 실제 배포 대조표를 채운다. 미이행 cycle이 있으면 그 사실을 적고, 남은 게 실질적이면 `_plan` 유지 |
-| `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`) 각각을 해결·비목표·후속 경로 중 하나로 매핑한 표를 closeout에 넣는다. gapclose가 일반적 승계를 선언한 것(`260705_gapclose/00_index.md:3-7`)만으로는 부족하다 |
+| `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)의 disposition 표를 closeout에 넣는다. gapclose의 일반적 승계 선언만으로는 부족하다 — 근거는 배포된 소스에 있다(아래 표) |
 | `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`)를 실제 게시된 릴리스로 충족한 기록을 남긴다 |
 
 무조건 이관 대상은 둘이다: `260625_webai_streaming_recovery_false_complete`
@@ -37,16 +37,56 @@
 `260710_gpt56_update`(`00_index.md:3-12` + root closeout
 `devlog/21_gpt56_ui_update.md:110-116`).
 
-이관은 `git mv`로 수행한다. `_fin/mvp/` 아래는 건드리지 않는다.
+### competitive_research 미해결 질문 disposition (선조사)
+
+`900_closeout.md`에 넣을 표다. 각 근거를 구현 시 재확인하고 채운다.
+
+| 질문 | 판정 | 근거 |
+| --- | --- | --- |
+| Ajv vs Zod | 해결 — 자체 validator 채택, Zod는 비목표 | `skills/browser/extract.mjs:38`이 `web-ai/extract-schema.mjs`의 자체 validator를 쓴다. `260705_gapclose/20_phase10_extract_impl.md:30`이 "Zod/TS 타입 추론"을 non-goal로 명시 |
+| LLM DOM 전달 토큰 예산 | 해결 — HTML 12,000자로 제한 | `skills/browser/extract.mjs:496` `html.replace(...).slice(0, 12_000)` |
+| 캐시 전략 | 비목표 | `260705_gapclose/20_phase10_extract_impl.md:30`이 server cache를 non-goal로 명시 |
+| web-ai 세션 기본값 | 해결 — Grok | `skills/browser/extract.mjs:60` `vendor: { type: 'string', default: 'grok' }` |
+| 다국어 instruction 범위 | **deferred/비목표** — 해결 아님 | 현재 CLI에 instruction 옵션 자체가 없다(`skills/browser/extract.mjs:53-64`). "지원 범위 결정"이 아니라 "기능 미도입" 상태다 |
+
+마지막 행을 "해결"로 적지 않는다 — 질문이 사라진 게 아니라 전제가 아직 없다.
+
+## 실행 순서
+
+무조건 이동과 조건부 이동을 명령 수준에서 분리한다. 조건 판정이 실패했는데
+명령을 그대로 실행하면 미완료 유닛이 `_fin`으로 들어간다.
+
+**1단계 — 무조건 이동 (2개).**
 
 ```
 git mv devlog/_plan/260625_webai_streaming_recovery_false_complete devlog/_fin/
-git mv devlog/_plan/260627_search_skill devlog/_fin/
-git mv devlog/_plan/260628_competitive_research devlog/_fin/
 git mv devlog/_plan/260710_gpt56_update devlog/_fin/
-git mv devlog/_plan/260711_release_017 devlog/_fin/
-git mv devlog/_plan/260711_upload_reliability devlog/_fin/
 ```
+
+**2단계 — 조건부 유닛의 closeout 작성.** closeout은 유닛이 아직 `_plan`에 있을
+때 `devlog/_plan/<unit>/900_closeout.md`로 쓴다. `_fin` 경로에 먼저 만들면 뒤의
+디렉터리 `git mv`와 충돌한다.
+
+```
+devlog/_plan/260627_search_skill/900_closeout.md
+devlog/_plan/260628_competitive_research/900_closeout.md
+devlog/_plan/260711_release_017/900_closeout.md
+devlog/_plan/260711_upload_reliability/900_closeout.md
+```
+
+새 closeout 파일 추가는 이 문서 OUT 범위의 "기존 문서 **수정**"에 해당하지
+않는다. 기존 파일은 건드리지 않는다.
+
+**3단계 — 조건을 통과한 유닛만 이동.** 각 closeout의 판정이 "종료"인 것만
+옮긴다. 통과하지 못한 유닛은 `_plan`에 남고, `00_index.md`의 `_plan` 표에 그
+상태와 이유를 적는다.
+
+```
+# 판정이 종료인 것만 실행
+git mv devlog/_plan/<통과한 유닛> devlog/_fin/
+```
+
+`_fin/mvp/` 아래는 건드리지 않는다.
 
 `devlog/_plan/.DS_Store`는 삭제하고, `.gitignore`에 이미 있는지 확인한다.
 
@@ -115,8 +155,9 @@ MODIFY `devlog/00_index.md` — `## _plan/ active or deferred work` 절 전체 �
 +번호 체계이며, 새 유닛은 3자리(`000_`, `010_`)를 쓴다.
 ```
 
-`Recent _fin/ closeouts` 표에는 이번에 이관한 6개와 인벤토리 C절의 누락 7개를
-추가한다. 행은 최신이 위로 오도록 날짜 역순으로 정렬한다.
+`Recent _fin/ closeouts` 표에는 **실제로 이동한 유닛만** 추가한다. 아래 표는
+최대치이고, 조건 미통과 유닛의 행은 쓰지 않는다. 인벤토리 C절의 누락 7개는
+무조건 추가한다. 행은 최신이 위로 오도록 날짜 역순으로 정렬한다.
 
 추가할 행(요지):
 

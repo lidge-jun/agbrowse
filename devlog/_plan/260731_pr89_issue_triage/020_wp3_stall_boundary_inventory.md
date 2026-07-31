@@ -22,12 +22,21 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
 번 실패했다. 실패 원인은 정체가 직접 호출이 아니라 **전이적 위임**을 통해
 들어오기 때문이다 — 예를 들어 `resolveOptionalChatGptCopyTarget`
 (`web-ai/chatgpt.mjs:734`, `:958`)은 `target-resolver.mjs`를 거쳐
-`self-heal.mjs:223`의 무제한 `locator.count()`에 도달한다. 어떤 `rg` 패턴도
+`self-heal.mjs:222`의 무제한 `locator.count()`에 도달한다. 어떤 `rg` 패턴도
 이것을 `chatgpt.mjs`에서 보여주지 않는다.
 
 대신 **호출 그래프를 닫는다.**
 
-1. `pollWebAi`(`web-ai/chatgpt.mjs:582`) 본문의 모든 `await` 표현식을 열거한다.
+1. `pollWebAi`(`web-ai/chatgpt.mjs:582`) 본문의 **비동기 진입점 전부**를
+   열거한다. `await` 표현식만으로는 부족하다 — 다음 넷을 모두 센다.
+   - `await` 표현식
+   - **await 없이 생성·저장되는 Promise.** `observeAssistantResponse`가 그 예다:
+     `:624-627`에서 await 없이 만들어져 `:835-841`의 `Promise.race`에서 소비된다.
+     callee 재귀만으로는 이 edge가 복원되지 않는다.
+   - **함수를 인자로 넘기는 호출.** recovery의 `readStreaming`/`readFinished`
+     콜백(`:865-871`)처럼 호출 시점이 callee 안에 있는 경우.
+   - `.then`/`.catch`/`Promise.all`/`Promise.race`로 소비되는 표현식.
+
    데드라인 안(루프)과 데드라인 후(recovery·diagnostics·copy·finalize) 양쪽 모두.
 2. 각 callee에 대해: 그 함수 본문의 모든 `await`를 다시 열거한다.
 3. 다음 중 하나에 도달할 때까지 재귀한다.
@@ -45,7 +54,7 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
 `allowCopyMarkdownFallback` · `archiveFlag`).
 
 착수 시점의 기지 항목은 아래와 같다. **이것은 완전한 목록이 아니라 출발점이다** —
-아래 12행은 직접 호출만 담고 있고, 감사에서 드러난 전이적 경로(copy target
+아래 표는 직접 호출과 감사에서 드러난 전이 경로 일부만 담고 있고, 감사에서 드러난 전이적 경로(copy target
 resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한다.
 인벤토리는 call graph 폐쇄로 이 목록을 검증하고 확장한다.
 
@@ -56,15 +65,33 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 | `chatgpt.mjs:1067` | Page.evaluate | `isResponseFinished` ← 루프 `:710`, recovery `:870` | 항상 |
 | `chatgpt.mjs:1438-1439` | Page.evaluate | `readAssistantSnapshots` | split 실패 시 |
 | `chatgpt.mjs:1466` | Page.evaluate | `readAssistantSnapshotsSplit` ← 루프 `:655` | 항상 |
-| `chatgpt-response-dom.mjs:30` | Locator | `anyStopButtonVisible` ← `readActivityState` 본문 `:1032` | 항상 |
+| `chatgpt-response-dom.mjs:30`(정의) / `:36`,`:39`,`:48`,`:53`,`:58`(blocking) | Locator | `anyStopButtonVisible` ← `readActivityState` 본문 `:1032` | 항상 |
 | `chatgpt-response-dom.mjs:415` | Locator | `readTopLevelAssistantTextsFromLocators` ← `:1428` | evaluate 실패 시 |
 | `chatgpt-response-observer.mjs:103-104` | Page.evaluate | `recoverAssistantResponse` ← `:865` | 세션 폴, 데드라인 후 |
 | `failure-diagnostics.mjs:29` | 외부 모듈 | `captureFailureDiagnostics` ← `:916` | `diagnostics` 활성, 데드라인 후 |
 | `copy-markdown.mjs:71` | 외부 모듈 | `captureCopiedResponseText` ← `:959` | `allowCopyMarkdownFallback`, 데드라인 후 |
 | `chatgpt.mjs:920`, `:940` | 간접 | copy fallback의 `isStreaming`/`isResponseFinished` | `allowCopyMarkdownFallback`, 데드라인 후 |
 | `chatgpt.mjs:734-737` | 외부 모듈 | copy target resolve + capture — **루프 내부**(데드라인 후만 있는 게 아니다) | `allowCopyMarkdownFallback` |
-| `self-heal.mjs:223` | Locator | `resolveOptionalChatGptCopyTarget`(`:1305`) → `target-resolver.mjs` → `self-heal` | `allowCopyMarkdownFallback` |
+| `self-heal.mjs:222` | Locator | `resolveOptionalChatGptCopyTarget`(`:1305`) → `target-resolver.mjs` → `self-heal` | `allowCopyMarkdownFallback` |
 | `chatgpt-archive.mjs:84-105` | Locator/click | `finalizeProviderTab`(`:695`, `:809`, `:896`, `:967`) → `tab-finalizer.mjs:95` → `archiveConversation` | `archiveFlag` |
+| `chatgpt-images.mjs` | CDP | `collectImages` ← 루프 `:759`, `collectGeneratedImageAnswer:1498` | 이미지 응답 |
+| `chatgpt-files.mjs` | CDP | `saveAssistantDownloadableFiles` ← 루프 `:797` | 다운로드 가능 파일 |
+
+**1단계 callee는 15개다.** `pollWebAi` 본문(`:582`–`:1020`)에서
+`await <함수>(` 패턴을 뽑으면 다음이 나온다 — 이것이 폐쇄의 출발 집합이다.
+
+```
+captureCopiedResponseText     captureFailureDiagnostics    collectGeneratedImageAnswer
+collectImages                 doesAssistantFollowUser      finalizeProviderTab
+isResponseFinished            isStreaming                  readActivityState
+readAssistantSnapshots        readAssistantSnapshotsSplit  recoverAssistantResponse
+requireChatGptPage            resolveOptionalChatGptCopyTarget
+saveAssistantDownloadableFiles
+```
+
+`deps.getTargetId`, `page.url()`, `page.waitForTimeout` 같은 직접 페이지 호출은
+별도로 센다. 이미지·파일 경로는 Page/Locator가 아니라 **CDP 세션**을 쓰므로
+정체 특성이 다르다 — 2절에서 별도 축으로 판정한다.
 | `chatgpt-response-observer.mjs:81` | Page.evaluate | `observeAssistantResponse` ← `:626` | 항상 — **이미 `timeoutMs` 예산 있음** |
 
 `countAssistantMessages` 경로(`chatgpt.mjs:331`, `:1151`, `:1413`)는 `pollWebAi`
@@ -73,6 +100,9 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 ### 2절 — 방어 가능성 판정
 
 각 접근 종류가 어떤 기법으로 제한 가능한지 Playwright 소스 근거와 함께 판정한다.
+접근 종류는 넷이다: Page API · Locator API · **CDP 세션** · 순수 계산/IO.
+CDP는 Playwright 타임아웃 규약이 적용되지 않으므로 별도 축으로 판정한다.
+
 감사에서 확인된 사실:
 
 - `Page.evaluate`는 timeout 옵션이 없다 → 외부 race 필요.
@@ -133,8 +163,13 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 나누지 않는다. 각 work-phase는 독립적으로 검증 가능해야 한다.
 
 예상 축(인벤토리 결과에 따라 바뀔 수 있다): 예산 프리미티브와 sentinel 계약 →
-데드라인 안 읽기 경로 → 데드라인 후 경로(recovery·diagnostics·copy) →
+데드라인 안 읽기 경로 → 데드라인 후 경로(recovery·diagnostics·copy·finalize) →
 `countAssistantMessages` 계약과 baseline 보호.
+
+**문서 번호 규칙도 7절에서 확정한다.** WP3.x 문서는 `022`, `023`…으로 배치하되
+`030`(WP4)과 충돌하지 않아야 한다. 분할이 8개를 넘으면 `020_0_`, `020_1_` 형태의
+서브인덱스로 전환한다(devlog 규약의 overflow 규칙). 어느 쪽을 쓸지 7절에서
+정하고, `000_plan.md`의 work-phase 지도도 그때 갱신한다.
 
 ## 완료 조건
 
@@ -143,7 +178,8 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 - `021_stall_boundary_map.md`가 7개 절을 모두 갖는다.
 - 1절의 모든 행이 경계 ID를 갖고, 함수 소유 위치와 blocking 호출 위치를 구분해
   인용한다.
-- 2절의 모든 판정에 Playwright 소스 또는 타입 정의 인용이 있다.
+- 2절의 모든 판정에 근거 인용이 있다. Page/Locator는 Playwright 소스 또는 타입
+  정의, CDP는 해당 owner 코드와 프로토콜 timeout 규약을 근거로 삼는다.
 - 코드 변경 0줄. `git diff --stat`이 devlog 경로만 보여준다.
 
 **전수성 조건(이것이 핵심이다).** 세 번의 실패가 모두 "목록이 완전하다고 믿었는데
@@ -153,12 +189,16 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
   부록에 방문한 함수 전체 목록(파일:라인)을 싣고, 각 함수가 (a) 말단으로
   분류됐거나 (b) 그 callee가 모두 목록에 있음을 확인할 수 있어야 한다. 목록에
   없는 callee가 하나라도 있으면 미완이다.
-- **절 간 상호 대조**: 1절의 모든 경계 ID가 3절(sentinel 소비자)과 4절(반환 경로)
-  중 최소 하나에 나타나야 한다. 어디에도 없는 ID는 "분류를 빠뜨렸다"는 신호다.
-  반대로 3·4절에 있는데 1절에 없는 항목도 오류다.
-- **7절 대조**: 1절의 모든 경계 ID가 7절 분할안의 어느 work-phase엔가 배정돼야
-  한다. 배정되지 않은 경계는 "이번에 안 고친다"는 명시적 판정과 그 근거가 있어야
-  한다 — 침묵은 누락과 구별되지 않는다.
+- **절 간 상호 대조**: 1절의 각 경계 ID에 대해 3절은 그 sentinel을 소비하는
+  지점을 **전부** 열거하고, 4절은 그 경계가 도달할 수 있는 종료 경로를 **전부**
+  열거한다. "최소 하나"로는 부족하다 — 소비자가 여럿인 경계를 하나만 적어도
+  통과해버린다. 역방향(3·4절에 있는데 1절에 없음)도 오류다.
+- **7절 대상 배정**: 1절의 모든 경계 ID가 7절 분할안의 어느 work-phase엔가
+  배정돼야 한다. 배정하지 않을 수 있는 경우는 둘뿐이다: (a) 이미 예산이 있어
+  bounded하다는 근거를 댈 수 있거나(예: `observeAssistantResponse`의 `timeoutMs`),
+  (b) 명시적으로 이 유닛의 범위 밖이라고 판정하고 그 이유를 적은 경우.
+  **무방비 경계를 근거 없이 뒤로 미루는 것은 허용하지 않는다** — 침묵도, 막연한
+  연기도 누락과 구별되지 않는다.
 - 7절의 분할안이 goalplan에 append 가능한 형태다(각 work-phase의 제목, 범위,
   수용 기준, 담당 경계 ID 목록).
 
