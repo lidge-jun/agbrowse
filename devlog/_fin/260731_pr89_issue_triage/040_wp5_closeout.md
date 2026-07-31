@@ -2,8 +2,8 @@
 
 선행: WP2, WP3.
 
-WP3가 후속 유닛들의 로드맵을 확정하고 모든 경계를 배정한 뒤에 시작한다.
-배정되지 않은 도달 가능 경계가 남아 있으면 시작하지 않는다.
+WP3가 후속 유닛들의 로드맵을 확정하고 **확인된 표본 전체와 접근 방식**을 배정한
+뒤에 시작한다. 전수 배정은 달성 조건이 아니다 — `021` §0이 그 이유를 담고 있다.
 
 devlog `_plan`/`_fin` 정리는 이 유닛의 선행이 아니다 — 별도 유닛으로 분리됐다.
 
@@ -51,7 +51,7 @@ Chromium이 설치된 경우에만 유효한 증거다. 미설치로 skip이 발
 
 ## 유닛 자체 마감
 
-이 유닛도 종료되면 `_fin`으로 옮기고 index에서 `_plan` 행을 지운다.
+이 유닛도 종료되면 `_fin`으로 옮기고 Recent `_fin` 표에 행을 추가한다.
 
 ```
 git mv devlog/_plan/260731_pr89_issue_triage devlog/_fin/
@@ -134,8 +134,8 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 들어가므로(`:679-680`, `:710-728`), DOM 예외가 조용한 완료로 이어질 수 있다.
 
 이것은 timeout이 아니라 **예외** 경로이므로 #88의 범위와 겹치되 원인이 다르다.
-WP3 인벤토리의 3절(sentinel 소비자)이 이 항목을 판정하고, 같은 유닛에서 다룰지
-분리할지 그때 결정한다 — 지금 "처리됨"으로도 "제외"로도 적지 않는다.
+`021`이 이를 B03으로 기록하고 fail-open 여섯 중 하나로 판정했으며, **유닛 A의
+3번 phase**(완료 판정 경로)에 배정했다.
 
 `web-ai/chatgpt-response-observer.mjs:78`의 `observeAssistantResponse`는 이미
 `timeoutMs` 예산을 받는다(`web-ai/chatgpt.mjs:626`).
@@ -185,7 +185,7 @@ npm run typecheck                    exit 0
 문서를 더 고치면 카운트가 또 밀린다. **이관 직전에 `fix:counts`를 한 번 더
 실행하는 것이 마감 절차의 마지막 단계다.**
 
-### 커밋
+### 커밋 (WP5 착수 전, `c7e87c1..9c9ea88` 17개)
 
 ```
 65b1e5c  WP1  docs(devlog): PR #89 / 이슈 #87·#88 처리 로드맵 유닛
@@ -221,8 +221,11 @@ c9bad92       docs(devlog): close the WP3 contract — isolation, fencing, singl
 
 ## 실패한 것 / 확인하지 못한 것 (LOOP-PESSIMIST-01)
 
-**A 게이트에서 리뷰어 5명에게 누적 14라운드를 받았다.** WP1 9, WP2 1, WP3 4.
-verdict 분포는 FAIL 11, GO-WITH-FIXES 3이다.
+**A 게이트에서 리뷰어 5명에게 누적 14라운드를 받았다(WP1 9, WP2 1, WP3 4).**
+verdict 분포는 FAIL 11, GO-WITH-FIXES 3.
+
+WP5는 별도로 2라운드(R1 FAIL, R2 GO-WITH-FIXES)를 더 받았다. 유닛 전체로는
+리뷰어 6명, 16라운드, FAIL 12 / GO-WITH-FIXES 4다.
 
 ### 죽은 가설
 

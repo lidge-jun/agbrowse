@@ -36,6 +36,7 @@ separate closeout audit.
 
 | Topic | Folder | Closeout signal |
 | --- | --- | --- |
+| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정(`76e4793`)과 #88 정체 경계 표본·예산 계약 확정. #88 방어 구현과 devlog 정리는 후속 유닛으로 분할 — `003_audit_synthesis.md` 참조. |
 | Post-MVP competitive gap closeout | `_fin/260506_post_mvp_gap_closeout/` | Historical competitive-gap plan set closed; any unshipped capabilities must be re-opened as fresh focused plans. |
 | UX blocker fixes | `_fin/260507_ux-blockers-p0p1/` | README maps fixes to implemented commits `ccb7051`, `1a4743b`, and `f7b0e97`. |
 | Oracle parity feature batch | `_fin/260508_oracle_parity/` | Implemented by `fe359a9` and follow-up commits. |

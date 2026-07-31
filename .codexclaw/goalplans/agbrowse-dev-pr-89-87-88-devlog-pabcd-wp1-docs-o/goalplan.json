@@ -3,7 +3,7 @@
   "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
   "createdAt": "2026-07-31T07:28:37.608Z",
   "updatedAt": "2026-07-31T10:59:35.958Z",
-  "activeWorkPhaseId": "wp5",
+  "activeWorkPhaseId": "wp6",
   "workPhases": [
     {
       "id": "wp1",
@@ -68,7 +68,7 @@
       "tasks": [
         {
           "id": "wp3-t1",
-          "title": "call graph 폐쇄로 pollWebAi 정체 경계 전수 (Page/Locator/CDP/순수계산)",
+          "title": "call graph 추적으로 pollWebAi 정체 경계 표본 수집 (Page/Locator/CDP/sync-IO)",
           "status": "done"
         },
         {
@@ -78,7 +78,7 @@
         },
         {
           "id": "wp3-t3",
-          "title": "모든 경계를 후속 두 유닛에 배정 + 각 유닛 로드맵 작성",
+          "title": "확인된 표본 전체와 접근 방식을 후속 유닛에 배정",
           "status": "done"
         }
       ],
@@ -89,22 +89,22 @@
     {
       "id": "wp5",
       "title": "WP5 게이트 클로즈아웃: typecheck/gate:all/doc-drift/verify-counts + 커밋",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "wp5-t1",
           "title": "structure 카운트/드리프트 동기화",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp5-t2",
           "title": "게이트 신선 출력 캡처",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "wp5-t3",
           "title": "work-phase별 로컬 커밋 확인",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
@@ -115,7 +115,7 @@
     {
       "id": "wp6",
       "title": "후속 유닛 1 로드맵: #88 DOM deadline 계약 (docs-only 사이클)",
-      "status": "pending",
+      "status": "in_progress",
       "tasks": [
         {
           "id": "wp6-t1",
@@ -172,14 +172,14 @@
       "id": "c1",
       "scenario": "PR #89의 두 커밋 각각이 dev에서 이미 충족인지 미충족인지 파일:라인 근거로 판정된 devlog 문서가 존재한다",
       "expectedEvidence": "devlog 유닛 내 대조 문서 경로 + 인용된 file:line + git show/rg 출력",
-      "capturedEvidence": "devlog/_plan/260731_pr89_issue_triage/002_pr89_delta_inventory.md — PR #89 두 커밋(d5d9475 #87, 4ada9cb #88)의 dev 판정. #87 부분충족 근거: web-ai/cli.mjs:615,761,1692-1701; web-ai/chatgpt.mjs:325-328; web-ai/chatgpt-model.mjs:400-409. 잔여갭 2건: chatGptModelCapabilityProbe(chatgpt-model.mjs:1725-1759)가 options.family 미참조, MCP는 유효 family+비ChatGPT 미차단. #88 미충족: withAssistantReadTimeout/resolveAssistantReadBudgetMs/assistant-dom-read-timeout 모두 rg 0건. 커밋 65b1e5c..03faf36",
+      "capturedEvidence": "devlog/_fin/260731_pr89_issue_triage/002_pr89_delta_inventory.md — PR #89 두 커밋(d5d9475 #87, 4ada9cb #88)의 dev 판정. #87 부분충족 근거: web-ai/cli.mjs:615,761,1692-1701; web-ai/chatgpt.mjs:325-328; web-ai/chatgpt-model.mjs:400-409. 잔여갭 2건: chatGptModelCapabilityProbe(chatgpt-model.mjs:1725-1759)가 options.family 미참조, MCP는 유효 family+비ChatGPT 미차단. #88 미충족: withAssistantReadTimeout/resolveAssistantReadBudgetMs/assistant-dom-read-timeout 모두 rg 0건. 커밋 65b1e5c..03faf36",
       "status": "met"
     },
     {
       "id": "c2",
       "scenario": "#88의 정체 경계가 확인된 표본으로 열거되고 각 경계의 방어 가능성이 판정되며, 예산 계약(sync isolation·fencing·single-flight 또는 격리 모델)과 검증 시나리오가 명세되어 모든 표본 경계가 후속 유닛에 배정된다. 전수 열거는 달성 조건이 아니다 — 두 차례 시도가 반증됐고 020/021이 그 진단과 대안 계약을 담고 있다",
       "expectedEvidence": "021 문서: 경계 표본표 + 처분 + 예산 계약 3요소 + C1~C5 + 유닛 배정표",
-      "capturedEvidence": "devlog/_plan/260731_pr89_issue_triage/021_stall_boundary_map.md (커밋 286e998→9c9ea88). 경계 표본 36개(B01~B36), bounded 0개, fail-open 6개(B03/B06/B23/B24/B25/B36). 방어 가능성 판정: page.evaluate/locator.all/CDPSession.send 모두 timeout 옵션 없음(types.d.ts 근거), 동기 IO는 race 불가. §0에 폐쇄 열거가 두 번 반증된 진단과 예산 계약(sync isolation·fencing·single-flight 또는 격리 모델) 전환 근거. 검증 시나리오 C1~C5. 유닛 A 15개 / 유닛 B 21개 배정과 선행관계(B 1~2번 → A 4번 이후). 리뷰어 4라운드 near-pass. typecheck 0, doc-drift 164, verify-counts 76 통과, 코드 변경 0줄",
+      "capturedEvidence": "devlog/_fin/260731_pr89_issue_triage/021_stall_boundary_map.md (커밋 286e998→9c9ea88). 경계 표본 36개(B01~B36), bounded 0개, fail-open 6개(B03/B06/B23/B24/B25/B36). 방어 가능성 판정: page.evaluate/locator.all/CDPSession.send 모두 timeout 옵션 없음(types.d.ts 근거), 동기 IO는 race 불가. §0에 폐쇄 열거가 두 번 반증된 진단과 예산 계약(sync isolation·fencing·single-flight 또는 격리 모델) 전환 근거. 검증 시나리오 C1~C5. 유닛 A 15개 / 유닛 B 21개 배정과 선행관계(B 1~2번 → A 4번 이후). 리뷰어 4라운드 near-pass. typecheck 0, doc-drift 164, verify-counts 76 통과, 코드 변경 0줄",
       "status": "met"
     },
     {
@@ -200,26 +200,26 @@
       "id": "c5",
       "scenario": "typecheck, 대상 vitest, gate:all(또는 영향 게이트), check-doc-drift.sh, verify-counts.sh가 신선 출력으로 통과",
       "expectedEvidence": "각 명령의 실제 stdout tail과 exit code",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "2026-07-31 WP5 최종 트리 — _fin 이관, 00_index 행 추가, c1/c2 evidence 경로 갱신, 최종 fix:counts 이후 실행.\nnpm run typecheck — exit 0.\nnpx vitest run (unit 5파일) — Test Files 5 passed (5); Tests 129 passed (129).\nnpx vitest run (integration 3파일) — Test Files 3 passed (3); Tests 70 passed (70).\nnpm run gate:all — All 16 gate(s) passed.\nbash structure/check-doc-drift.sh — All structure drift checks passed (164).\nbash structure/verify-counts.sh — All structure count checks passed (76).",
+      "status": "met"
     },
     {
       "id": "c6",
       "scenario": "각 work-phase가 로컬 커밋으로 남고 무관한 더티 파일은 건드리지 않는다",
       "expectedEvidence": "git log --oneline과 git status 출력",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "work-phase별 커밋 매핑: WP1 65b1e5c..03faf36(10), WP2 b524453+76e4793(2), WP3 286e998..9c9ea88(5), WP5 a842941 및 마감 커밋. 코드를 바꾼 것은 76e4793 하나 — git log c7e87c1..HEAD -- web-ai skills test가 그 커밋만 출력한다. git status --short에서 task-owned 경로는 clean이고, 남은 더티는 사용자 소유 .codexclaw 산출물뿐이다.",
+      "status": "met"
     },
     {
       "id": "c7",
-      "scenario": "#88 DOM deadline 유닛: 021이 그 유닛에 배정한 모든 경계(read/activity/finished/ordering/recovery/diagnostics/copy)가 데드라인을 인지하고, 각 정체 경로의 발화가 관측된다",
+      "scenario": "#88 DOM deadline 유닛: 021이 유닛 A에 배정한 경계(read/activity/finished/ordering/recovery/copy)가 예산 계약 아래 데드라인을 인지하고, fail-open B03·B06이 fail-closed로 교정된다",
       "expectedEvidence": "경계 ID별 테스트 출력 + timeout 사유 문자열. 배정 경계 전부가 대상이며 일부만으로는 met 아님 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
       "capturedEvidence": "",
       "status": "open"
     },
     {
       "id": "c8",
-      "scenario": "artifact/finalizer 유닛: 021이 그 유닛에 배정한 모든 경계(이미지/파일 다운로드, 탭 lease, CDP, sync-IO/lock)가 데드라인을 인지하거나 bounded임이 증명된다",
+      "scenario": "artifact/finalizer 유닛: 021이 유닛 B에 배정한 경계(이미지/파일 다운로드, 탭 lease, CDP, diagnostics, sync-IO/lock)가 예산 계약 아래 상한을 갖고, fail-open B23·B24·B25·B36이 fail-closed로 교정된다",
       "expectedEvidence": "경계 ID별 테스트 출력 또는 bounded 근거. 배정 경계 전부가 대상 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
       "capturedEvidence": "",
       "status": "open"
