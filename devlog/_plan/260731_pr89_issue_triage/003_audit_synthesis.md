@@ -48,7 +48,7 @@ Locator, 외부 모듈 위임(`captureFailureDiagnostics`, `captureCopiedRespons
 - `test/unit/web-ai-wrapperless-correlation.test.mjs:119-137`이 이 함수의 소스
   문자열을 검사한다 — 계약을 바꾸면 함께 갱신해야 한다.
 - MCP 응답 코드 경로는 `response.result.structuredContent.code`
-  (`web-ai/mcp-server.mjs:64`, `:403`).
+  (`web-ai/mcp-server.mjs:64`, `:404`).
 - `model` 없는 `family + effort` probe는 tier 호환을 증명할 수 없다
   (`web-ai/chatgpt-model.mjs:460`, `:492`). `ok`로 승인하면 안 된다.
 

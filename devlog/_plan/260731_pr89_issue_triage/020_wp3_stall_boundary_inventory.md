@@ -16,37 +16,55 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
 `devlog/_plan/260731_pr89_issue_triage/021_stall_boundary_map.md` — 아래 명세대로
 작성한다.
 
-### 1절 — 경계 전수
+### 1절 — 경계 전수 (call graph 폐쇄로 도출)
 
-`pollWebAi`(`web-ai/chatgpt.mjs:582`)가 데드라인 안에서, 그리고 데드라인 이후
-반환 전까지 페이지를 만지는 모든 지점을 표로 만든다. 조사 명령을 문서에 남긴다.
+**패턴 검색으로 시작하지 않는다.** `rg`로 `page.evaluate`를 찾는 방식은 이미 세
+번 실패했다. 실패 원인은 정체가 직접 호출이 아니라 **전이적 위임**을 통해
+들어오기 때문이다 — 예를 들어 `resolveOptionalChatGptCopyTarget`
+(`web-ai/chatgpt.mjs:734`, `:958`)은 `target-resolver.mjs`를 거쳐
+`self-heal.mjs:223`의 무제한 `locator.count()`에 도달한다. 어떤 `rg` 패턴도
+이것을 `chatgpt.mjs`에서 보여주지 않는다.
 
-```
-rg -n "page\.evaluate|locator\(|\.all\(\)|isVisible\(|innerText\(" web-ai/chatgpt.mjs
-rg -n "page\.evaluate|locator\(" web-ai/chatgpt-response-dom.mjs web-ai/chatgpt-response-observer.mjs \
-   web-ai/failure-diagnostics.mjs web-ai/copy-markdown.mjs
-```
+대신 **호출 그래프를 닫는다.**
 
-각 행: 파일:라인 / 접근 종류(Page.evaluate · Locator API · 외부 모듈 위임) /
-`pollWebAi`로부터의 호출 경로 / 데드라인 전인지 후인지 / 도달 조건(항상 · 세션 폴
-한정 · `diagnostics` 옵션 · `allowCopyMarkdownFallback` 옵션).
+1. `pollWebAi`(`web-ai/chatgpt.mjs:582`) 본문의 모든 `await` 표현식을 열거한다.
+   데드라인 안(루프)과 데드라인 후(recovery·diagnostics·copy·finalize) 양쪽 모두.
+2. 각 callee에 대해: 그 함수 본문의 모든 `await`를 다시 열거한다.
+3. 다음 중 하나에 도달할 때까지 재귀한다.
+   - **말단 분류**: Page API / Locator API / CDP / 순수 계산·IO(페이지 접근 없음)
+   - **이미 방문한 함수**(사이클)
+4. 방문한 함수 집합과 그 소유 파일을 모두 기록한다. `web-ai/` 밖으로 나가면
+   (`skills/browser/**` 등) 거기서도 같은 규칙을 적용한다.
 
-착수 시점의 기지 항목은 아래와 같다. 인벤토리는 이 목록을 검증하고 확장한다 —
-이대로 옮겨 적는 것은 산출물이 아니다.
+`cxc map web-ai`로 심볼 소유 관계를 먼저 파악하면 재귀가 빨라진다. 그래도
+최종 근거는 실제 파일 읽기다.
+
+각 행: 경계 ID(B01, B02…) / 파일:라인(**함수 소유 위치와 실제 blocking 호출
+위치를 구분해 둘 다**) / 접근 종류 / `pollWebAi`로부터의 전체 호출 사슬 /
+데드라인 전인지 후인지 / 도달 조건(항상 · 세션 폴 한정 · `diagnostics` ·
+`allowCopyMarkdownFallback` · `archiveFlag`).
+
+착수 시점의 기지 항목은 아래와 같다. **이것은 완전한 목록이 아니라 출발점이다** —
+아래 12행은 직접 호출만 담고 있고, 감사에서 드러난 전이적 경로(copy target
+resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한다.
+인벤토리는 call graph 폐쇄로 이 목록을 검증하고 확장한다.
 
 | 파일:라인 | 종류 | 경로 | 도달 조건 |
 | --- | --- | --- | --- |
-| `chatgpt.mjs:557` | Page.evaluate | `doesAssistantFollowUser` ← 루프 `:719` | 항상 |
+| `chatgpt.mjs:557`(정의) / `:560`(evaluate) | Page.evaluate | `doesAssistantFollowUser` ← 루프 `:719` | 항상 |
 | `chatgpt.mjs:1035` | Page.evaluate | `readActivityState` ← 루프 `:674` | 항상 |
 | `chatgpt.mjs:1067` | Page.evaluate | `isResponseFinished` ← 루프 `:710`, recovery `:870` | 항상 |
 | `chatgpt.mjs:1438-1439` | Page.evaluate | `readAssistantSnapshots` | split 실패 시 |
 | `chatgpt.mjs:1466` | Page.evaluate | `readAssistantSnapshotsSplit` ← 루프 `:655` | 항상 |
-| `chatgpt-response-dom.mjs:30` | Locator | `anyStopButtonVisible` ← `readActivityState:1031` | 항상 |
+| `chatgpt-response-dom.mjs:30` | Locator | `anyStopButtonVisible` ← `readActivityState` 본문 `:1032` | 항상 |
 | `chatgpt-response-dom.mjs:415` | Locator | `readTopLevelAssistantTextsFromLocators` ← `:1428` | evaluate 실패 시 |
 | `chatgpt-response-observer.mjs:103-104` | Page.evaluate | `recoverAssistantResponse` ← `:865` | 세션 폴, 데드라인 후 |
 | `failure-diagnostics.mjs:29` | 외부 모듈 | `captureFailureDiagnostics` ← `:916` | `diagnostics` 활성, 데드라인 후 |
 | `copy-markdown.mjs:71` | 외부 모듈 | `captureCopiedResponseText` ← `:959` | `allowCopyMarkdownFallback`, 데드라인 후 |
 | `chatgpt.mjs:920`, `:940` | 간접 | copy fallback의 `isStreaming`/`isResponseFinished` | `allowCopyMarkdownFallback`, 데드라인 후 |
+| `chatgpt.mjs:734-737` | 외부 모듈 | copy target resolve + capture — **루프 내부**(데드라인 후만 있는 게 아니다) | `allowCopyMarkdownFallback` |
+| `self-heal.mjs:223` | Locator | `resolveOptionalChatGptCopyTarget`(`:1305`) → `target-resolver.mjs` → `self-heal` | `allowCopyMarkdownFallback` |
+| `chatgpt-archive.mjs:84-105` | Locator/click | `finalizeProviderTab`(`:695`, `:809`, `:896`, `:967`) → `tab-finalizer.mjs:95` → `archiveConversation` | `archiveFlag` |
 | `chatgpt-response-observer.mjs:81` | Page.evaluate | `observeAssistantResponse` ← `:626` | 항상 — **이미 `timeoutMs` 예산 있음** |
 
 `countAssistantMessages` 경로(`chatgpt.mjs:331`, `:1151`, `:1413`)는 `pollWebAi`
@@ -120,12 +138,39 @@ rg -n "page\.evaluate|locator\(" web-ai/chatgpt-response-dom.mjs web-ai/chatgpt-
 
 ## 완료 조건
 
+형식 조건:
+
 - `021_stall_boundary_map.md`가 7개 절을 모두 갖는다.
-- 1절의 모든 행에 조사 명령으로 재현 가능한 근거가 있다.
+- 1절의 모든 행이 경계 ID를 갖고, 함수 소유 위치와 blocking 호출 위치를 구분해
+  인용한다.
 - 2절의 모든 판정에 Playwright 소스 또는 타입 정의 인용이 있다.
-- 7절의 분할안이 goalplan에 append 가능한 형태다(각 work-phase의 제목, 범위,
-  수용 기준).
 - 코드 변경 0줄. `git diff --stat`이 devlog 경로만 보여준다.
+
+**전수성 조건(이것이 핵심이다).** 세 번의 실패가 모두 "목록이 완전하다고 믿었는데
+아니었다"였으므로, 완전성을 주장이 아니라 검사로 만든다.
+
+- **폐쇄 증명**: `pollWebAi`에서 도달 가능한 함수 집합이 닫혔음을 보인다. 1절
+  부록에 방문한 함수 전체 목록(파일:라인)을 싣고, 각 함수가 (a) 말단으로
+  분류됐거나 (b) 그 callee가 모두 목록에 있음을 확인할 수 있어야 한다. 목록에
+  없는 callee가 하나라도 있으면 미완이다.
+- **절 간 상호 대조**: 1절의 모든 경계 ID가 3절(sentinel 소비자)과 4절(반환 경로)
+  중 최소 하나에 나타나야 한다. 어디에도 없는 ID는 "분류를 빠뜨렸다"는 신호다.
+  반대로 3·4절에 있는데 1절에 없는 항목도 오류다.
+- **7절 대조**: 1절의 모든 경계 ID가 7절 분할안의 어느 work-phase엔가 배정돼야
+  한다. 배정되지 않은 경계는 "이번에 안 고친다"는 명시적 판정과 그 근거가 있어야
+  한다 — 침묵은 누락과 구별되지 않는다.
+- 7절의 분할안이 goalplan에 append 가능한 형태다(각 work-phase의 제목, 범위,
+  수용 기준, 담당 경계 ID 목록).
+
+## 이 명세가 실패하는 방식 (LOOP-PESSIMIST-01)
+
+call graph 폐쇄가 실무적으로 끝나지 않을 수 있다. `finalizeProviderTab` 같은
+함수는 탭 수명주기 전체로 뻗어 있어서 재귀가 `web-ai/` 밖까지 번진다. 그 경우
+**폐쇄 범위를 "페이지를 만지는 호출"로 좁히고** 그 판단 기준을 문서에 명시한다 —
+범위를 좁혔다는 사실 자체를 숨기지 않는다.
+
+또 하나: 이 인벤토리가 경계를 20개 이상 찾아낸다면, 문제는 `pollWebAi`가 아니라
+web-ai 전반의 페이지 접근 규약이다. 그때는 유닛 자체를 다시 잡아야 한다.
 
 ## 범위 경계
 

@@ -1,8 +1,13 @@
 # 040 — WP5: 게이트 클로즈아웃과 인계
 
-선행: WP2, WP3, WP4.
+선행: WP2, WP3, **WP3.x 전부**(#88 방어 구현), WP4.
+
+WP3.x가 하나라도 남아 있으면 이 work-phase는 시작하지 않는다. #88이 미구현인
+상태로 유닛을 `_fin`으로 옮기는 것은 목표 하향이다(LOOP-CONTINUE-01).
 
 ## 게이트
+
+아래는 WP2 기준 목록이다. WP3.x가 확정되면 각 사이클의 영향권을 여기에 합친다.
 
 순서대로 실행하고 각 출력을 이 문서에 기록한다.
 
@@ -14,6 +19,8 @@ npx vitest run test/unit/web-ai-family-probe-and-mcp.test.mjs
 npx vitest run test/unit/web-ai-tool-schema.test.mjs \
                test/unit/web-ai-chatgpt-model.test.mjs \
                test/unit/web-ai-tool-validation.test.mjs \
+               test/unit/web-ai-capability.test.mjs \
+               test/unit/web-ai-timeout-default.test.mjs \
                test/integration/web-ai-cli-contract.test.mjs \
                test/integration/web-ai-policy-mcp.test.mjs \
                test/integration/web-ai-mcp-server.test.mjs
@@ -101,15 +108,15 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 ## 남긴 후속
 
 `readActivityState`의 **catch 경로**가 `{ strength: 'none' }`을 돌려준다
-(`web-ai/chatgpt.mjs:1048-1049`). 폴링 루프는 `'none'`을 quiet으로 읽어 완료 분기로
-들어가므로(`:679-680`, `:709-728`), DOM 예외가 조용한 완료로 이어질 수 있다.
+(`web-ai/chatgpt.mjs:1049`). 폴링 루프는 `'none'`을 quiet으로 읽어 완료 분기로
+들어가므로(`:679-680`, `:710-728`), DOM 예외가 조용한 완료로 이어질 수 있다.
 
-이번 유닛은 **timeout** 경로만 `'unknown'`으로 고쳤다. catch 경로까지 바꾸면
-평범한 네비게이션 중 예외가 폴링을 늘리는 회귀 위험이 있어 분리했다. 별도 유닛의
-대상이다 — 근거 없이 "처리됨"으로 적지 않는다.
+이것은 timeout이 아니라 **예외** 경로이므로 #88의 범위와 겹치되 원인이 다르다.
+WP3 인벤토리의 3절(sentinel 소비자)이 이 항목을 판정하고, 같은 유닛에서 다룰지
+분리할지 그때 결정한다 — 지금 "처리됨"으로도 "제외"로도 적지 않는다.
 
 `web-ai/chatgpt-response-observer.mjs:81`의 `observeAssistantResponse`는 이미
-`timeoutMs` 예산을 받으므로(`web-ai/chatgpt.mjs:624-627`) 이번 범위에서 제외했다.
+`timeoutMs` 예산을 받는다(`web-ai/chatgpt.mjs:626`).
 
 ## 실패한 것 / 확인하지 못한 것 (LOOP-PESSIMIST-01)
 

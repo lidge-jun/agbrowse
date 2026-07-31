@@ -104,15 +104,22 @@ PR #89의 `4ada9cb`는 `readAssistantMessages` 기반 구버전 리더를 전제
 | --- | --- | --- | --- |
 | WP1 | docs-only 로드맵: 실태 조사 + decade 문서 작성 | `000`–`003`, `010`, `020`, `030`, `040` | — |
 | WP2 | #87 잔여 갭 2건 구현(probe family 계약, MCP fail-closed) | `010` | WP1 |
-| WP3 | #88 정체 경계 인벤토리 확정 (문서 전용, 코드 변경 없음) | `020` | WP2 |
+| WP3 | #88 정체 경계 인벤토리 확정 (문서 전용, 코드 변경 없음) | `020` → `021` | WP2 |
+| WP3.x | #88 방어 구현 — 개수와 분할은 WP3의 7절이 결정 | `022`, `023`, … | WP3 |
 | WP4 | devlog `_plan`→`_fin` 이관 + `00_index.md` 동기화 | `030` | WP1 |
-| WP5 | 게이트 클로즈아웃 + 유닛 마감 + 커밋 정리 | `040` | WP2·WP3·WP4 |
+| WP5 | 게이트 클로즈아웃 + 유닛 마감 + 커밋 정리 | `040` | WP2·**WP3.x 전부**·WP4 |
 
 **WP3 범위 축소 (2026-07-31, A 페이즈 3라운드 FAIL 후).** 원래 WP3는 #88 방어를
 구현하는 것이었다. 독립 감사 3라운드가 모두 "덮어야 할 경계 목록"에서 실패해,
 목록 확정 자체를 독립 work-phase로 분리했다. 근본 원인 분석은
-`003_audit_synthesis.md`. 인벤토리가 근거와 함께 고정되면 실제 구현
-work-phase를 goalplan에 append한다(LOOP-UNIT-CHAIN-01).
+`003_audit_synthesis.md`.
+
+**축소는 분할이지 목표 축소가 아니다(LOOP-CONTINUE-01).** #88 구현은 이 유닛에
+그대로 남는다. WP3가 7절 분할안을 내면 그 개수만큼 WP3.x를 goalplan에
+append하고(LOOP-UNIT-CHAIN-01), WP5는 그 전부를 선행으로 갖는다. 즉 #88이
+구현되기 전에는 이 유닛이 `_fin`으로 닫히지 않는다. WP3 시점에 정확한 개수를
+모르는 것은 그것이 WP3의 산출물이기 때문이며, 미정인 것은 분할 방식일 뿐
+구현 여부가 아니다.
 
 문서 역할(LEXICO-SPLIT-01):
 
@@ -129,18 +136,21 @@ work-phase를 goalplan에 append한다(LOOP-UNIT-CHAIN-01).
 
 WP3가 산출할 `021_stall_boundary_map.md`는 그 사이클에서 작성한다.
 
-의존 근거: WP2가 `web-ai/chatgpt.mjs`의 capability probe 라인을 건드리고 WP3가
-같은 파일의 폴링 루프를 건드리므로 순차 실행한다. WP4는 문서 전용이라 코드
-work-phase와 독립이지만, WP1의 인벤토리 결과를 소비한다. WP5는 세 결과를 모두
-합쳐 게이트를 돌린다.
+의존 근거: WP2가 `web-ai/chatgpt.mjs:120`의 capability 정의를 바꾸고, WP3.x가
+같은 파일의 폴링 경로를 바꾸므로 순차 실행한다. WP3 자체는 문서 전용이지만
+WP2 이후에 두는 이유는, WP2가 확정한 변경이 반영된 트리에서 경계를 세야 목록이
+최신이기 때문이다. WP4는 문서 전용이라 코드 work-phase와 독립이지만 WP1의
+인벤토리 결과를 소비한다. WP5는 모든 결과를 합쳐 게이트를 돌린다.
 
 ## 수용 기준
 
 1. PR #89의 두 커밋 각각에 대해 dev 충족/미충족 판정이 `file:line` 근거와 함께
    `002_pr89_delta_inventory.md`에 있다.
 2. #88의 정체 가능 경계가 `pollWebAi` 전 구간에 대해 근거와 함께 열거되고, 각
-   경계의 방어 가능 여부(Page API / Locator API / 외부 모듈 위임)가 판정된다.
-   실제 방어 구현은 후속 work-phase로 분리한다.
+   경계의 방어 가능 여부(Page API / Locator API / 외부 모듈 위임)가 판정된다
+   (WP3). 이어서 그 목록의 모든 경계가 실제로 방어되고, 정체 경로가 발화하는
+   것이 관측된다(WP3.x, C-ACTIVATION-GROUNDING-01). 인벤토리만으로는 이 기준을
+   충족하지 않는다.
 3. #87의 잔여 갭 2건이 수정되고 테스트 출력으로 확인된다. probe는 family를
    evidence에 담고, MCP는 비-ChatGPT + family를 거부한다.
 4. `devlog/00_index.md`가 `_plan`/`_fin` 실제 디렉터리와 1:1로 맞는다.

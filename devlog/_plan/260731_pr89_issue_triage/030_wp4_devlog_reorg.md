@@ -11,7 +11,7 @@
 | `260625_webai_streaming_recovery_false_complete` | `_fin`으로 이관 | `30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE |
 | `260710_gpt56_update` | `_fin`으로 이관 | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116` |
 | `260711_release_017` | `_fin`으로 이관 | `010_release_evidence.md:19-32` 16/16 게이트 통과. 같은 문서가 post-publish 증거를 요구하므로(`:72-74`) 이관 시 실제 게시된 `v0.1.17` 릴리스를 확인해 근거로 적는다. |
-| `260711_upload_reliability` | `_fin`으로 이관 | `030_verification.md:8-35` 기능 검증 완료, 소스 반영 확인 |
+| `260711_upload_reliability` | **조건부** — 아래 참조 | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(`030_verification.md:37-46`) |
 | `260627_search_skill` | `_fin`으로 이관 + 종료 감사 추가 | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있어(`00_plan.md:32-75`) closeout이 없다 — 이관과 함께 `900_closeout.md`를 새로 쓴다. |
 | `260628_competitive_research` | `_fin`으로 이관 | 리서치 산출물이고, 후속이 `260705_gapclose`임이 그 유닛에 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`)는 gapclose가 승계했다. |
 | `260621_cli_jaw_webai_parity` | `_plan` 유지 | 외부 cli-jaw 미러 — closeout 권한이 이 저장소에 없음 |
@@ -19,6 +19,23 @@
 | `260627_gptpro_remediation` | `_plan` 유지 | R2 CONCERNS 5 / FAIL 2 미해소 |
 | `260705_gapclose` | `_plan` 유지 | 04·05·06·09가 PLANNED로 남아 있다(각 파일 `:1-3`) |
 | `strict-migration` | `_plan` 유지 | Deferred — 실행 소스는 여전히 `.mjs` |
+
+## 조건부 이관 (증거 없으면 옮기지 않는다)
+
+아래 넷은 이관 전에 충족해야 할 조건이 있다. 조건이 안 채워지면 `_plan`에 남기고
+그 사실을 `00_index.md`에 적는다. 결론을 먼저 쓰고 근거를 나중에 맞추지 않는다.
+
+| 유닛 | 조건 |
+| --- | --- |
+| `260711_upload_reliability` | 전체 `npm test`를 다시 돌려 0 failure를 얻거나(Playwright Chromium 설치 후), 환경 실패를 허용하도록 성공 기준을 수정한 판정을 유닛 안에 남긴다. 둘 다 못 하면 `_plan` 유지 |
+| `260627_search_skill` | `900_closeout.md`에 5개 계획 cycle 대 실제 배포 대조표를 채운다. 미이행 cycle이 있으면 그 사실을 적고, 남은 게 실질적이면 `_plan` 유지 |
+| `260628_competitive_research` | 미해결 질문 5개(`02_schema_bound_extraction.md:212-218`) 각각을 해결·비목표·후속 경로 중 하나로 매핑한 표를 closeout에 넣는다. gapclose가 일반적 승계를 선언한 것(`260705_gapclose/00_index.md:3-7`)만으로는 부족하다 |
+| `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`)를 실제 게시된 릴리스로 충족한 기록을 남긴다 |
+
+무조건 이관 대상은 둘이다: `260625_webai_streaming_recovery_false_complete`
+(`30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE),
+`260710_gpt56_update`(`00_index.md:3-12` + root closeout
+`devlog/21_gpt56_ui_update.md:110-116`).
 
 이관은 `git mv`로 수행한다. `_fin/mvp/` 아래는 건드리지 않는다.
 
@@ -61,8 +78,8 @@ git mv devlog/_plan/260711_upload_reliability devlog/_fin/
 
 ## 판정
 
-기능은 배포되었고 계획 사이클의 실행 기록만 없었다. 유닛을 `_fin`으로 옮긴다.
-미이행 항목이 있으면 새 유닛으로 분기한다.
+(위 대조표를 채운 뒤에 쓴다. 미이행 항목이 없으면 `_fin`으로 옮기고, 실질적인
+미이행이 남으면 `_plan`에 유지하며 그 이유를 적는다. 조사 전에 결론을 쓰지 않는다.)
 ```
 
 `030`의 OUT 범위는 "기존 유닛 내부 문서의 **수정**"이다. 이 문서는 새로 추가하는

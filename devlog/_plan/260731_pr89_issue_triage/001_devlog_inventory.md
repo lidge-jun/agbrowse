@@ -18,7 +18,7 @@
 | `260705_gapclose` | 16 | 2026-07-11 | 부분 완료 — 04·05·06·09 PLANNED 잔존 | `04_gap_schema_extract.md:1-3`, `06_gap_webai_showcase.md:1-3`, `09_launch_awareness.md:1-3` |
 | `260710_gpt56_update` | 11 + assets | 2026-07-10 | 완료 | `00_index.md:3-12`, `devlog/21_gpt56_ui_update.md:110-116` |
 | `260711_release_017` | 4 + 1 txt | 2026-07-11 | 검증 완료, publish 별도 | `010_release_evidence.md:19-32` |
-| `260711_upload_reliability` | 4 | 2026-07-11 | 기능 완료 | `030_verification.md:8-35` |
+| `260711_upload_reliability` | 4 | 2026-07-11 | 기능 완료, **성공 기준 1 미충족** | focused suite 통과 `030_verification.md:8-35`, 그러나 전체 스위트 2파일 실패 `:37-46`이고 성공 기준은 0 failure를 요구한다 `010_plan.md:59-60` |
 | `strict-migration` | 43 | 2026-05-06 | Deferred | `00_index.md:30`, `01-strategy.md:49-72` |
 
 판정 방법: (a) 유닛 문서 내부의 상태/closeout 표기, (b)

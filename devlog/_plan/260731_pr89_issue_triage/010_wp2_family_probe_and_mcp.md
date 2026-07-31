@@ -21,7 +21,7 @@
 | `findOpenFamilySubmenu(page, familyLabels)` | `:986` | 열린 서브메뉴 locator 반환 | 없음 |
 | `readVisibleChatGptFamilyEvidence(page)` | `:1007` | 현재 선택된 family 증거 읽기 | 없음 |
 | `CHATGPT_FAMILY_OPTIONS` | `:244` | alias→라벨 맵 | — |
-| `menuTextHasExactLine(text, label)` | 같은 파일 | 라벨 정확 일치 | 없음 |
+| `menuTextHasExactLine(text, label)` | `:1611` | 라벨 정확 일치 | 없음 |
 | `selectChatGptFamily(page, family)` | `:950` | **선택을 실제로 바꾼다 — probe에서 쓰지 않는다** | 있음 |
 
 probe는 선택을 바꾸면 안 되므로 `selectChatGptFamily`를 부르지 않고, 서브메뉴를 연
@@ -165,6 +165,16 @@ effort 검증이 건너뛰어진다.
 `'ok'|'warn'|'fail'|'unknown'`, `web-ai/chatgpt-model.mjs:1712-1717`) "선택은 될
 것 같지만 확정하지 못했다"를 뜻한다. 여기 의미와 정확히 맞는다.
 
+런타임 소비 정책도 확인했다: `worstCapabilityState`가 상태를 집계하고
+(`web-ai/capability.mjs:41-70`), ChatGPT status는 `worst !== 'fail'`을 `ok`로
+보므로(`web-ai/chatgpt.mjs:149-152`) `warn`은 명령을 막지 않고 capability 행에
+남는다. 기존 호출자를 깨뜨리지 않으면서 "확정 못 했다"는 신호는 보존된다 —
+이 정책을 테스트 3b로 고정한다.
+
+3b. **`warn`이 status를 막지 않는다** — probe가 `warn`을 돌려줄 때
+   `worstCapabilityState`가 `'warn'`을 내고 status의 `ok`가 `true`로 유지된다.
+   `warn`을 `fail`처럼 다루는 회귀를 막는 가드다.
+
 기존 probe와 같이 `closeModelMenu`로 원복한다.
 
 ### MODIFY `web-ai/chatgpt.mjs:120` — capability 정의
@@ -243,7 +253,7 @@ NEW `test/unit/web-ai-family-probe-and-mcp.test.mjs`:
    ```
 
    `jsonResult`(`web-ai/mcp-server.mjs:64-69`)가 payload를 `structuredContent`에
-   담고 `jsonResponse`가 `result`로 감싸므로(`:403`), 어서션은 다음과 같다.
+   담고 `jsonResponse`가 `result`로 감싸므로(`:404`), 어서션은 다음과 같다.
 
    ```js
    expect(response.result.structuredContent.code).toBe('capability.unsupported');
