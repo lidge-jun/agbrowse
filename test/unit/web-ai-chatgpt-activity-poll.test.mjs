@@ -941,11 +941,26 @@ describe('degraded reads are reported, not hidden', () => {
  * later gate to undo a poisoned candidate set is the wrong place to fix it.
  */
 describe('an uncountable baseline stops the send (B01/B02)', () => {
-    /** Every read path fails: split, snapshot retries, and the locator fallback. */
+    /**
+     * Every read path fails: split, snapshot retries, and the locator fallback.
+     *
+     * Drives a virtual clock so `waitForStableAssistantCount` reaches its 8s
+     * deadline in milliseconds. That also makes the null-reset observable: if an
+     * unreadable count were treated as stable, the wait would return after two
+     * reads instead of spending the whole budget.
+     */
     function unreadablePage() {
-        return {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        let waits = 0;
+        const page = {
             url: () => 'https://chatgpt.com/c/unreadable',
-            waitForTimeout: async () => { await new Promise(resolve => setImmediate(resolve)); },
+            waitForTimeout: async (ms) => {
+                waits += 1;
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
             evaluate: async () => { throw new Error('evaluate detached'); },
             locator: () => ({
                 all: async () => { throw new Error('detached'); },
@@ -954,6 +969,7 @@ describe('an uncountable baseline stops the send (B01/B02)', () => {
             }),
             innerText: async () => '',
         };
+        return Object.assign(page, { waitCount: () => waits });
     }
 
     it('X8: send fails typed instead of writing a zero baseline', async () => {
@@ -976,6 +992,9 @@ describe('an uncountable baseline stops the send (B01/B02)', () => {
         // Throwing the right error after already writing the baseline would be
         // no better than not throwing at all.
         expect(getBaseline('chatgpt', url)).toBeFalsy();
+        // X10: an unreadable count is never "stable". Counting it as stable
+        // would end the wait after two reads; it must spend the full budget.
+        expect(page.waitCount()).toBeGreaterThan(4);
     });
 
     it('X8b: deep research fails before creating a session or a lease', async () => {
@@ -1095,7 +1114,11 @@ describe('mixed snapshot read outcomes (B01/B02)', () => {
 
 describe('poll loop when every reader fails (B01)', () => {
     /**
-     * @param {{ splitFails: boolean, snapshotFails: boolean }} plan
+     * `failFrom`/`failUntil` describe a WINDOW of blind ticks so a read can
+     * succeed, then fail, then recover — the only sequence where a stale
+     * candidate from before the failure could still be consumed.
+     *
+     * @param {{ splitFails?: boolean, snapshotFails?: boolean, failFrom?: number, failUntil?: number }} plan
      */
     function pollPage(plan) {
         const start = Date.now();
@@ -1165,6 +1188,24 @@ describe('poll loop when every reader fails (B01)', () => {
 
         expect(result.warnings).toContain('assistant-read-unverified');
         expect(waitCount()).toBeGreaterThan(6);
+    });
+
+    it('X10: an unreadable count does not settle the pre-send stability wait', async () => {
+        // `waitForStableAssistantCount` returns as soon as two reads agree. A
+        // null count counted as agreement would let two blind ticks look like a
+        // settled page and hand a guessed baseline to the send.
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { page } = pollPage({ splitFails: true, snapshotFails: true });
+        let waits = 0;
+        const originalWait = page.waitForTimeout;
+        page.waitForTimeout = async (ms) => { waits += 1; return originalWait(ms); };
+
+        await sendWebAi({ getPage: async () => page }, {
+            vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only',
+        }).catch(() => undefined);
+
+        // Two agreeing nulls would have returned after two waits.
+        expect(waits).toBeGreaterThan(2);
     });
 
     it('X12: a failed split with a working fallback still completes', async () => {
