@@ -7,7 +7,7 @@
 > 나왔다. 아래 §0이 그 이유와 이 문서를 어떻게 읽어야 하는지 설명한다.
 
 - 기준: `dev` @ `76e4793` (소스), 계획 문서는 이 유닛의 최신 커밋
-- 대상: `pollWebAi`(`web-ai/chatgpt.mjs:582`–`:1020`)
+- 대상: `pollWebAi`(`web-ai/chatgpt.mjs:585`–`:1024`)
 
 ## 0절 — 폐쇄가 닫히지 않는 이유 (LOOP-PESSIMIST-01)
 
@@ -57,8 +57,10 @@ fetch(`:395-400`)가 있다.
 
 따라서 계약은 셋을 모두 명시해야 한다.
 
-1. **Sync isolation.** 동기 IO(B18~B20, B22, B23, B31~B35)를 제거하거나 격리한다.
-   이게 안 되면 예산이 동작하지 않는다 — 나머지 둘의 전제다.
+1. **Sync isolation.** 1절 표에서 종류가 `sync-IO` 또는 `sync-IO/lock`인 **모든**
+   경계를 제거하거나 격리한다. 현재 표본 기준으로 B18~B20, B21의 persisted-state
+   읽기, B22, B23, B26, B27, B31~B35가 해당하며, 새 경계가 나오면 같은 규칙이
+   적용된다. 이게 안 되면 예산이 동작하지 않는다 — 나머지 둘의 전제다.
 2. **Late-side-effect fencing.** 데드라인 이후에는 session·artifact·tab 상태를
    바꾸지 않는다. 패배한 실행이 뒤늦게 완료돼도 무시된다.
 3. **Single-flight.** 패배한 작업이 누적돼 프로세스를 붙잡지 않는다.
@@ -93,11 +95,11 @@ fake timer 전환만으로는 새 계약을 검증하지 못한다. 다음이 �
 | C1 | `deps.getPage` 또는 `page.evaluate`가 영원히 pending | 데드라인 안에 결과가 반환된다 |
 | C2 | 패배한 Promise가 나중에 resolve | session·finalizer·artifact 부수효과가 없다(fencing) |
 | C3 | 반복 timeout | pending 작업이 누적되지 않는다(single-flight) |
-| C4 | 동기 IO가 event loop를 막음 | worker/subprocess watchdog으로 실제 wall-time 상한이 성립한다 |
-| C5 | B23·B24·B25·B36 각각 | timeout/error sentinel을 정상 상태로 오독하지 않는다(fail-closed) |
+| C4 | 동기 IO가 event loop를 막음 | 실제 wall-time 상한이 성립한다. **격리 모델**을 고르면 watchdog이 이를 증명하고, **in-process 모델**을 고르면 동기 IO 제거가 완료됐음을 증명한다 |
+| C5 | fail-open 여섯(B03·B06·B23·B24·B25·B36) 각각 | timeout/error sentinel을 정상 상태로 오독하지 않는다(fail-closed) |
 
-C5는 fail-open 교정이라 **A·B 공통**이다. 각 유닛이 자기 경계분을 담당하되
-계약은 하나다.
+C5는 fail-open 교정이라 **A·B 공통**이다. B03·B06은 유닛 A(3번 phase), 나머지
+넷은 유닛 B가 담당하되 계약은 하나다.
 
 C1~C4는 두 유닛이 모두 끝나야 성립하므로, **최종 통합 게이트**로 둔다 — 어느 한
 유닛만으로는 met이 아니다.
@@ -228,8 +230,9 @@ signal이 없으면 evaluate Promise를 그대로 await한다(`:78-84`). 렌더�
 | `fetch` | `AbortController`로 제한 가능 | `chatgpt-files.mjs:364-382`가 이미 적용 |
 | sync-IO/lock | **동기라 race 불가** | 호출 전 조건 검사나 비동기 재작성이 필요 |
 
-마지막 행이 중요하다. B18~B20, B22는 동기 실행이라 `Promise.race`로 감쌀 수
-없다. 이 경계는 "데드라인 인지"가 아니라 **다른 처방**이 필요하다 — 락 획득에
+마지막 행이 중요하다. 1절에서 `sync-IO`/`sync-IO/lock`으로 분류된 경계 전부
+(B18~B20, B21의 persisted-state 읽기, B22, B23, B26, B27, B31~B35)는 동기
+실행이라 `Promise.race`로 감쌀 수 없다. 이 경계는 "데드라인 인지"가 아니라 **다른 처방**이 필요하다 — 락 획득에
 시간 상한을 두거나, 비동기 API로 옮기거나, 호출 자체를 조건부로 만들거나.
 
 판정 요약: **bounded인 경계는 없다.** 확인된 B01~B36 전부가 무한 정체 가능하다.
@@ -306,8 +309,8 @@ B25는 소비자가 갈린다: 이미지 CDP 부재는 throw로 fail-closed지�
 
 ## 5절 — 기존 테스트 계약 영향
 
-`rg -ln "readFileSync.*chatgpt" test/` 결과, `chatgpt.mjs` 소스 문자열을 읽는
-테스트가 **10개**다.
+`rg -ln "readFileSync.*chatgpt" test/`는 13개를 출력하고, 그중 `chatgpt.mjs`를
+직접 읽는 것이 **10개**다.
 
 ```
 test/unit/chatgpt-attachments.test.mjs
@@ -377,8 +380,12 @@ offset 방식을 fake timer로 옮기는 것이 후속 유닛의 첫 작업 중 
 
 work-phase 분할(의존 순서):
 
-0. **예산 계약 설계** — `pollWebAi` 진입점에서 전체를 감싸는 방식을 정한다.
-   경계를 더 세는 것이 아니라 하위가 무엇을 하든 반환을 보장하는 구조다(§0).
+0. **예산 계약 설계 (A·B 공동 선행)** — §0의 두 모델(in-process sync 제거 vs
+   worker/subprocess 격리)을 비교해 **하나를 고른다.** 이 선택이 A의 나머지
+   phase와 B의 1~2번을 모두 규정하므로 양 유닛의 첫 작업이다.
+   in-process를 고르면 single-flight만으로 부족하다 — 영원히 pending인 패배
+   작업을 **취소·drain**하는 조건이 추가된다. 격리를 고르면 watchdog이 그 역할을
+   대신한다.
 1. 예산 프리미티브 + sentinel 계약 + fake timer 하네스 — 이후 전부의 토대
 2. 데드라인 안 읽기 경로(B01, B02, B07) + `countAssistantMessages` 계약과
    5절의 소스-텍스트 테스트 갱신
@@ -389,20 +396,23 @@ work-phase 분할(의존 순서):
 6. B08의 취소되지 않는 evaluate 처리
 7. warning 전파(4절의 모든 반환 경로) + 활성화 관측
 
-수용 기준: 담당 경계 전부가 데드라인을 인지하고, 각 정체 경로의 발화가
-관측된다(C-ACTIVATION-GROUNDING-01). 일부만으로는 충족 아님.
+수용 기준: §0의 세 계약(sync isolation·fencing·single-flight, 또는 격리 모델)이
+담당 범위에 적용되고, C5의 B03·B06이 fail-closed로 검증된다. C1~C4는 A·B 공동
+게이트라 이 유닛만으로는 met이 아니다.
 
 ### 유닛 B — `webai_artifact_finalizer`
 
 아티팩트 수집과 탭 수명주기. CDP와 동기 IO가 여기 모인다.
 
-담당: B10, B14~B25, B28, B30~B34 (19개)
+담당: B10, B14~B25, B28, B30~B36 (21개)
 
 work-phase 분할(의존 순서):
 
-1. **pre-budget 예산 수립**(B21, B24) — 데드라인이 `:617`에서야 생기므로 그 앞
-   경계를 먼저 다뤄야 뒤의 예산이 의미를 갖는다. B22/B23의 동기 IO 부분은 2번이
-   담당한다
+0. **예산 계약 설계** — 유닛 A의 0번과 같은 작업이다. 두 유닛이 같은 모델을
+   써야 하므로 공동으로 정하고 결과를 양쪽에 기록한다.
+1. **pre-budget 예산 수립**(B21의 Page/CDP/fetch 부분, B24) — 데드라인이
+   `:617`에서야 생기므로 그 앞 경계를 먼저 다뤄야 뒤의 예산이 의미를 갖는다.
+   B21의 persisted-state 읽기와 B22/B23의 동기 IO는 2번이 담당한다
 2. **동기 IO 처방**(B18, B19, B20, B22, B23, B31~B35 + B21의 persisted-state
    읽기) — race가 불가하므로 다른 설계가 필요하다. §0의 sync isolation이 여기서
    결정되고, 유닛 A의 4번 이후가 이 결과를 받으므로 앞에 온다
@@ -411,7 +421,11 @@ work-phase 분할(의존 순서):
 5. diagnostics(B10, B28)
 6. 탭 lease와 finalizer(B16, B17, B33, B34, B35, B36) — B36의 fail-open 교정 포함
 
-수용 기준: 담당 경계 전부가 데드라인을 인지하거나 bounded임이 증명된다.
+수용 기준: §0의 세 계약이 담당 범위에 적용되고, C5의 B23·B24·B25·B36이
+fail-closed로 검증된다. C1~C4는 A·B 공동 게이트다.
+
+(초판의 "bounded임이 증명된다"는 표현을 뺐다 — 2절 판정대로 bounded인 경계는
+없다.)
 
 ### 배정 (표본 기준)
 
