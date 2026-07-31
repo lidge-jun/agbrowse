@@ -1,5 +1,5 @@
 // @ts-check
-import { createTab, isTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
+import { createTab, probeTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
 import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
@@ -16,8 +16,10 @@ import { isDurableConversationUrl } from './conversation-url.mjs';
 /**
  * @typedef {Object} RecoverResult
  * @property {boolean} recovered
- * @property {'existing-tab' | 'new-tab'} strategy
- * @property {string | null} targetId
+ * @property {'existing-tab' | 'new-tab' | 'unverified'} strategy
+ * @property {string | null} [targetId]
+ * @property {'alive'|'gone'|'unknown'} [liveness]
+ * @property {string} [reason]
  */
 
 /**
@@ -46,7 +48,18 @@ export async function recoverSessionTab(deps, session) {
     }
 
     // 1. Check if original tab still exists
-    const alive = await isTabAlive(port, /** @type {string} */ (session.targetId));
+    const liveness = await probeTabAlive(port, /** @type {string} */ (session.targetId));
+    // A tab we could not observe is not a tab we may replace: creating a new one
+    // here would rebind the session target and abandon a live conversation.
+    if (liveness === 'unknown') {
+        return {
+            recovered: false,
+            strategy: 'unverified',
+            liveness: 'unknown',
+            reason: 'tab liveness could not be verified',
+        };
+    }
+    const alive = liveness === 'alive';
 
     if (alive) {
         // Tab exists - verify URL by checking the actual page
@@ -137,6 +150,7 @@ export async function recoverSessionTab(deps, session) {
  * @property {boolean} valid
  * @property {string | null} [targetId]
  * @property {boolean} needsRecovery
+ * @property {'alive'|'gone'|'unknown'} [liveness]
  */
 
 /**
@@ -150,20 +164,27 @@ export async function verifySessionTab(deps, session) {
         return { valid: false, needsRecovery: true };
     }
 
-    const alive = await isTabAlive(deps.getPort(), session.targetId);
+    const liveness = await probeTabAlive(deps.getPort(), session.targetId);
+    // Carry the verdict upward. Collapsing `unknown` into `needsRecovery: false`
+    // makes `resolveSessionPage` report `strategy: 'recovered'` for a tab it
+    // never recovered.
+    if (liveness === 'unknown') {
+        return { valid: false, targetId: session.targetId, needsRecovery: false, liveness: 'unknown' };
+    }
+    const alive = liveness === 'alive';
 
     if (alive) {
         const page = await getPageByTargetId(deps.getPort(), session.targetId).catch(() => null);
-        if (!page) return { valid: false, targetId: session.targetId, needsRecovery: true };
+        if (!page) return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'alive' };
         try {
             page.url();
         } catch {
-            return { valid: false, targetId: session.targetId, needsRecovery: true };
+            return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'alive' };
         }
-        return { valid: true, targetId: session.targetId, needsRecovery: false };
+        return { valid: true, targetId: session.targetId, needsRecovery: false, liveness: 'alive' };
     }
 
-    return { valid: false, targetId: session.targetId, needsRecovery: true };
+    return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'gone' };
 }
 
 /**
@@ -350,7 +371,26 @@ export function isWorkSessionWithBareOrigin(session) {
  * @property {string | null} conversationUrl
  */
 
-/** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch} ResolveSessionPageResult */
+/**
+ * The tab could not be OBSERVED, so it was neither reused nor recovered. This is
+ * distinct from `ResolveSessionPageMismatch`: that one knows the tab is unusable,
+ * this one knows nothing. Consumers must be able to tell those apart mechanically,
+ * which a warning string does not allow.
+ *
+ * @typedef {Object} ResolveSessionPageUnverified
+ * @property {true} mismatch
+ * @property {null} page
+ * @property {string | null} targetId
+ * @property {WebAiSession} session
+ * @property {false} recovered
+ * @property {'unverified'} strategy
+ * @property {'unknown'} liveness
+ * @property {string[]} warnings
+ * @property {string | null} url
+ * @property {string | null} conversationUrl
+ */
+
+/** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch | ResolveSessionPageUnverified} ResolveSessionPageResult */
 
 /**
  * Fail-closed guard for ChatGPT later-session / new-tab recovery targets
@@ -445,7 +485,24 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
     const current = /** @type {WebAiSession} */ (session);
     const storedUrl = current.conversationUrl || current.originalUrl || null;
 
-    const { valid, needsRecovery } = await verifySessionTab(deps, current);
+    const { valid, needsRecovery, liveness } = await verifySessionTab(deps, current);
+
+    // Liveness unverified: do not recover, do not claim we did. Reported as its
+    // own variant so callers can retry rather than treat the tab as unusable.
+    if (liveness === 'unknown' && !forceRecover) {
+        return {
+            mismatch: true,
+            page: null,
+            targetId: current.targetId || null,
+            session: current,
+            recovered: false,
+            strategy: 'unverified',
+            liveness: 'unknown',
+            warnings: [`session ${sessionId} tab liveness could not be verified`],
+            url: null,
+            conversationUrl: current.conversationUrl || null,
+        };
+    }
 
     if (!valid || forceRecover) {
         if (!allowNavigate) {

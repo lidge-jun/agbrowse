@@ -232,6 +232,7 @@ function mockTabManagerPage(page) {
         createTab: vi.fn(),
         getPageByTargetId: vi.fn(async () => page),
         isTabAlive: vi.fn(async () => true),
+        probeTabAlive: vi.fn(async () => 'alive'),
         listManagedTabs: vi.fn(async () => []),
         waitForPageByTargetId: vi.fn(async () => page),
     }));

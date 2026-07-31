@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDuration, selectProviderTabsForCleanup, selectTabsForCleanup } from '../../skills/browser/tab-lifecycle.mjs';
 import { createTempBrowserEnv } from '../helpers/temp-env.mjs';
 import { checkoutPooledLease, cleanupLeasedTabs, listLeases, parseProviderLimitEnv, ProviderActiveCapacityError, recordActiveLease, releaseCompletedLease } from '../../web-ai/tab-lease-store.mjs';
+import { probeTabAlive } from '../../skills/browser/tab-manager.mjs';
+import { verifySessionTab } from '../../web-ai/tab-recovery.mjs';
 
 describe('tab lifecycle cleanup selection', () => {
     it('parses duration strings used by tab-cleanup UX', () => {
@@ -555,3 +557,117 @@ function expectOrder(source, anchor, first, second) {
     expect(snippet.indexOf(second)).toBeGreaterThanOrEqual(0);
     expect(snippet.indexOf(first)).toBeLessThan(snippet.indexOf(second));
 }
+
+/**
+ * Tab liveness sentinels (issue #88, boundary B36).
+ *
+ * `isTabAlive` used to answer `false` for two very different facts: "the tab is
+ * gone" and "I could not read the tab list". Since the reader is a single fetch
+ * to the CDP port, one transient failure marked EVERY tab dead at once — and the
+ * consumers act on that by closing tabs and deleting lease records.
+ */
+describe('tab liveness probing distinguishes gone from unreadable (B36)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('U6: an unreadable tab list is unknown, not gone', async () => {
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('unknown');
+    });
+
+    it('U9: a readable list without the tab is gone', async () => {
+        globalThis.fetch = async () => new Response(JSON.stringify([{ id: 'other', type: 'page' }]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('gone');
+    });
+
+    it('reports alive when the tab is listed', async () => {
+        globalThis.fetch = async () => new Response(JSON.stringify([{ id: 'target-a', type: 'page' }]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('alive');
+    });
+
+    it('a refused connection is gone: nothing can be listening', async () => {
+        // Distinguishing this from a transient failure is what keeps leases from
+        // accumulating forever after an ordinary browser exit.
+        const refused = new Error('fetch failed');
+        refused.cause = { code: 'ECONNREFUSED' };
+        globalThis.fetch = async () => { throw refused; };
+        await expect(probeTabAlive(9222, 'target-a')).resolves.toBe('gone');
+    });
+
+    it('U7: cleanup keeps leases whose tabs it could not observe', async () => {
+        const temp = createTempBrowserEnv('agbrowse-lease-unknown-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [completedLease('unreadable', '9222')],
+            }));
+
+            await cleanupLeasedTabs(9222, { browserProfileKey: '9222' });
+
+            // A deleted lease cannot be recovered; an unknown one is re-probed on
+            // the next cleanup.
+            expect((await listLeases()).map(lease => lease.targetId)).toEqual(['unreadable']);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U9b: cleanup still drops leases whose tabs are confirmed gone', async () => {
+        // The paired case: over-applying the guard would leak every lease.
+        const temp = createTempBrowserEnv('agbrowse-lease-gone-');
+        const previousHome = process.env.BROWSER_AGENT_HOME;
+        process.env.BROWSER_AGENT_HOME = temp.homeDir;
+        globalThis.fetch = async () => new Response(JSON.stringify([]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        try {
+            writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
+                version: 1,
+                leases: [completedLease('vanished', '9222')],
+            }));
+
+            await cleanupLeasedTabs(9222, { browserProfileKey: '9222' });
+
+            expect(await listLeases()).toEqual([]);
+        } finally {
+            if (previousHome === undefined) delete process.env.BROWSER_AGENT_HOME;
+            else process.env.BROWSER_AGENT_HOME = previousHome;
+            temp.cleanup();
+        }
+    });
+
+    it('U14: an unverifiable tab is reported unverified, not recovered', async () => {
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
+        const result = await verifySessionTab(
+            { getPort: () => 9222 },
+            { sessionId: 'session-x', targetId: 'target-x' },
+        );
+        // `needsRecovery: false` alone would make resolveSessionPage label this
+        // `strategy: 'recovered'` — a tab it never recovered.
+        expect(result).toMatchObject({ valid: false, needsRecovery: false, liveness: 'unknown' });
+    });
+
+    it('U14b: a confirmed-gone tab still requests recovery', async () => {
+        globalThis.fetch = async () => new Response(JSON.stringify([]), {
+            headers: { 'content-type': 'application/json' },
+        });
+        const result = await verifySessionTab(
+            { getPort: () => 9222 },
+            { sessionId: 'session-x', targetId: 'target-x' },
+        );
+        expect(result).toMatchObject({ valid: false, needsRecovery: true, liveness: 'gone' });
+    });
+});

@@ -591,6 +591,38 @@ function recordActivityObservation(activity, observations) {
 }
 
 /**
+ * Read whether the current tab still is the session's bound target.
+ *
+ * A FAILED read reports `'unknown'`, never a silent pass. The old
+ * `.catch(() => null)` made an unreadable target indistinguishable from a
+ * matching one, so the mismatch check switched itself off exactly when CDP was
+ * unstable — the moment the tab is most likely to have changed.
+ *
+ * `null` is also `'unknown'`: the reason differs from a throw, but neither is
+ * evidence that this tab is the session's target.
+ *
+ * Returns `actualTargetId` from the SAME read, because the mismatch envelope
+ * needs it as evidence and re-probing would race.
+ *
+ * @param {any} deps
+ * @param {any} session
+ * @returns {Promise<{ verdict: 'verified'|'mismatch'|'unknown', actualTargetId: string|null }>}
+ */
+async function readTargetIdentity(deps, session) {
+    let actualTargetId;
+    try {
+        actualTargetId = await deps.getTargetId?.() ?? null;
+    } catch {
+        return { verdict: 'unknown', actualTargetId: null };
+    }
+    if (!actualTargetId) return { verdict: 'unknown', actualTargetId: null };
+    return {
+        verdict: actualTargetId === session.targetId ? 'verified' : 'mismatch',
+        actualTargetId,
+    };
+}
+
+/**
  * Merge the poll's observation ledger into a result envelope.
  *
  * Applied at every result-envelope CONSTRUCTION, not at every `return`: warnings
@@ -644,9 +676,21 @@ export async function pollWebAi(deps, input = {}) {
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: url,
         });
-    const baseline = (session && sessionToBaseline(session))
-        || getBaseline(vendor, url)
-        || getLatestBaseline(vendor, { sameHostUrl: url });
+    // Observation ledger: records reads the poll could NOT make. Every result
+    // envelope merges it, so a fail-closed sentinel never disappears silently.
+    // Declared before baseline resolution because that step can already record.
+    /** @type {Set<string>} */
+    const observations = new Set();
+    let baseline = (session && sessionToBaseline(session)) || getBaseline(vendor, url);
+    if (!baseline) {
+        // Last resort: the newest baseline for this HOST, which may belong to a
+        // different conversation. `session-store.mjs:101` turns a corrupt store
+        // into an empty one, so a read failure looks exactly like "no session"
+        // and lands here. Telling the two apart needs the async store work in the
+        // sibling unit; until then, at least say the baseline was inferred.
+        baseline = getLatestBaseline(vendor, { sameHostUrl: url });
+        if (baseline) observations.add('baseline-inferred-from-host');
+    }
     if (!baseline) throw new WebAiError({
         errorCode: 'provider.poll-timeout',
         stage: 'poll',
@@ -660,10 +704,6 @@ export async function pollWebAi(deps, input = {}) {
 
     const deadline = Date.now() + timeout * 1000;
     const startedAt = Date.now();
-    // Observation ledger: records reads the poll could NOT make. Every result
-    // envelope merges it, so a fail-closed sentinel never disappears silently.
-    /** @type {Set<string>} */
-    const observations = new Set();
     let stableText = '';
     let stableSnapshot = null;
     let stableSince = 0;
@@ -678,18 +718,25 @@ export async function pollWebAi(deps, input = {}) {
         : null;
     while (Date.now() <= deadline) {
         try {
+        let identityOk = true;
         if (session?.targetId) {
-            const currentTargetId = await deps.getTargetId?.().catch(() => null);
-            if (currentTargetId && currentTargetId !== session.targetId) {
+            const identity = await readTargetIdentity(deps, session);
+            if (identity.verdict === 'mismatch') {
                 return mergeObservationWarnings(buildTargetMismatchResult({
                     vendor,
                     session,
-                    actualTargetId: currentTargetId,
+                    actualTargetId: /** @type {string} */ (identity.actualTargetId),
                     port: deps.getPort?.() || 9222,
                     url: page.url(),
                     baseline,
                 }), observations);
             }
+            // Unverified identity disqualifies the candidate, like a failed
+            // ordering read. This branch skips the conversation-URL check in the
+            // `else`, so without this the tick has no identity evidence at all
+            // and a stable answer from the wrong tab would complete.
+            identityOk = identity.verdict === 'verified';
+            if (identity.verdict === 'unknown') observations.add('target-identity-unverified');
         } else {
             const currentUrl = page.url();
             const baselineConvoId = extractConversationId(baseline.url);
@@ -780,7 +827,7 @@ export async function pollWebAi(deps, input = {}) {
             orderingOk = ordering === 'ordered' || ordering === 'unverifiable';
             if (ordering === 'unknown') observations.add('assistant-ordering-unverified');
         }
-        if (latest && !streaming && orderingOk) {
+        if (latest && !streaming && orderingOk && identityOk) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
                 // A weak signal demands a longer quiet window before we treat it as
@@ -863,6 +910,13 @@ export async function pollWebAi(deps, input = {}) {
                                 } finally {
                                     await fileCdp.detach?.().catch(() => undefined);
                                 }
+                            } else {
+                                // No CDP means no file capture. Unlike an explicit
+                                // `--output-image` this is opportunistic, so it does
+                                // not fail the answer — but it must not be silent
+                                // either: the caller would otherwise see a plain
+                                // success with attachments quietly missing.
+                                warnings.push('file-artifact-cdp-unavailable');
                             }
                         } catch (err) {
                             warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
@@ -975,7 +1029,25 @@ export async function pollWebAi(deps, input = {}) {
             const recoveredOrdering = await readAssistantTurnOrdering(page);
             if (recoveredOrdering === 'unknown') observations.add('assistant-ordering-unverified');
             const orderingOk = recoveredOrdering === 'ordered' || recoveredOrdering === 'unverifiable';
-            const canComplete = recovered.finished === true && orderingOk && !imageOutputUnsatisfied;
+            // Same reasoning for target identity: a candidate the loop rejected
+            // must not be restored here.
+            let identityOk = true;
+            if (session.targetId) {
+                const identity = await readTargetIdentity(deps, session);
+                if (identity.verdict === 'mismatch') {
+                    return mergeObservationWarnings(buildTargetMismatchResult({
+                        vendor,
+                        session,
+                        actualTargetId: /** @type {string} */ (identity.actualTargetId),
+                        port: deps.getPort?.() || 9222,
+                        url: page.url(),
+                        baseline,
+                    }), observations);
+                }
+                identityOk = identity.verdict === 'verified';
+                if (identity.verdict === 'unknown') observations.add('target-identity-unverified');
+            }
+            const canComplete = recovered.finished === true && orderingOk && identityOk && !imageOutputUnsatisfied;
             if (!canComplete) {
                 return buildDeferredPollingResult({
                     vendor, page, session, baseline,

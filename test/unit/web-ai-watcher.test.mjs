@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 const tabState = vi.hoisted(() => ({ page: null }));
 vi.mock('../../skills/browser/tab-manager.mjs', () => ({
     isTabAlive: vi.fn(async () => Boolean(tabState.page)),
+    // Liveness now has three states; the double must model the one that says
+    // "I could not tell", or every consumer reads a missing mock as dead.
+    probeTabAlive: vi.fn(async () => (tabState.page ? 'alive' : 'gone')),
     getPageByTargetId: vi.fn(async () => tabState.page),
     createTab: vi.fn(), waitForPageByTargetId: vi.fn(), listManagedTabs: vi.fn(), closeTab: vi.fn(),
 }));

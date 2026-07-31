@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { closeTab, isTabAlive } from '../skills/browser/tab-manager.mjs';
+import { closeTab, probeTabAlive } from '../skills/browser/tab-manager.mjs';
 import { isPidAlive } from '../skills/browser/profile-lock.mjs';
 import { activeCommandTargetIds } from './active-command-store.mjs';
 
@@ -317,13 +317,21 @@ export async function checkoutPooledLease(port, input = {}) {
         for (const lease of candidates) {
             const expires = Date.parse(lease.poolExpiresAt || '');
             if (Number.isFinite(expires) && now >= expires) {
-                if (await isTabAlive(port, lease.targetId)) toClose.push({ ...lease, cleanupReason: 'pool-expired' });
+                // Only close what we know is there. Closing a tab we could not
+                // observe would destroy live user work on a transient CDP hiccup.
+                if (await probeTabAlive(port, lease.targetId) === 'alive') {
+                    toClose.push({ ...lease, cleanupReason: 'pool-expired' });
+                }
                 continue;
             }
-            if (!(await isTabAlive(port, lease.targetId))) {
+            const liveness = await probeTabAlive(port, lease.targetId);
+            // `unknown` skips this candidate but is NOT recorded as dead: reuse
+            // is conservative, bookkeeping is not.
+            if (liveness === 'gone') {
                 deadIds.add(scopedTargetKey(lease));
                 continue;
             }
+            if (liveness === 'unknown') continue;
             selected = lease;
             break;
         }
@@ -409,7 +417,10 @@ export async function cleanupLeasedTabs(port, input = {}) {
         const dead = [];
         for (const lease of store.leases) {
             if (lease.browserProfileKey !== browserProfileKey) continue;
-            if (!(await isTabAlive(port, lease.targetId))) dead.push(lease.targetId);
+            // Drop the lease only for a tab we confirmed is gone. A deleted lease
+            // cannot be recovered, while an `unknown` one is simply re-probed on
+            // the next cleanup.
+            if (await probeTabAlive(port, lease.targetId) === 'gone') dead.push(lease.targetId);
         }
         store.leases = store.leases.filter(lease => lease.browserProfileKey !== browserProfileKey || !dead.includes(lease.targetId));
         const closeableLeases = store.leases.filter(lease => lease.browserProfileKey === browserProfileKey && !activeTargets.has(lease.targetId));
@@ -630,8 +641,12 @@ async function closeLeasesAndUpdateStore(port, leases) {
             await closeTab(port, lease.targetId);
             closed.push(lease);
         } catch {
-            if (await isTabAlive(port, lease.targetId)) failed.push(lease);
-            else closed.push(lease);
+            // `closeTab` threw. Treat anything short of a confirmed disappearance
+            // as a close failure: recording an unobservable tab as `closed` drops
+            // its lease while the tab itself survives, which is how ownerless
+            // zombie tabs appear.
+            if (await probeTabAlive(port, lease.targetId) === 'gone') closed.push(lease);
+            else failed.push(lease);
         }
     }
     if (closed.length > 0 || failed.length > 0) {

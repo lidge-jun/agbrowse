@@ -387,18 +387,62 @@ export async function getTabInfo(port, targetId) {
 }
 
 /**
- * Check if a tab is still alive
+ * Probe whether a tab is still alive.
+ *
+ * Reports `'unknown'` when the tab list could not be read at all — that is a
+ * FAILED OBSERVATION, not evidence the tab is gone. `listTabs` is a single
+ * `fetch` to the CDP port, so one transient failure would otherwise mark every
+ * tab dead at once and callers would act destructively on all of them.
+ *
+ * A REFUSED connection is the exception: nothing is listening on the port, so
+ * the browser itself is gone and with it every tab. Folding that into `unknown`
+ * would leak leases forever after a normal browser exit.
+ *
+ * @param {number} port - CDP port
+ * @param {string} targetId - Tab target ID
+ * @returns {Promise<'alive'|'gone'|'unknown'>}
+ */
+export async function probeTabAlive(port, targetId) {
+    let tabs;
+    try {
+        tabs = await listTabs(port);
+    } catch (err) {
+        return isEndpointAbsentError(err) ? 'gone' : 'unknown';
+    }
+    return tabs.some(t => t.id === targetId) ? 'alive' : 'gone';
+}
+
+/**
+ * Does this failure prove nothing is serving the CDP port?
+ *
+ * `ECONNREFUSED` / `ENOTFOUND` mean the endpoint is absent. A timeout, reset, or
+ * malformed body means the endpoint may well be there and merely unresponsive —
+ * those stay `unknown`.
+ *
+ * A rejected port number is the same class of fact: nothing can be listening on
+ * a port that cannot be dialled.
+ *
+ * @param {any} err
+ * @returns {boolean}
+ */
+function isEndpointAbsentError(err) {
+    const code = err?.cause?.code || err?.code;
+    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') return true;
+    return String(err?.cause?.message || '').toLowerCase().includes('bad port');
+}
+
+/**
+ * Boolean view of {@link probeTabAlive}, kept for callers that genuinely only
+ * need "can I use this tab right now". `'unknown'` reads as false here, so any
+ * caller that takes a DESTRUCTIVE action on false must use `probeTabAlive`
+ * directly and handle the third state.
+ *
  * @param {number} port - CDP port
  * @param {string} targetId - Tab target ID
  * @returns {Promise<boolean>}
  */
 export async function isTabAlive(port, targetId) {
-    try {
-        const tabs = await listTabs(port);
-        return tabs.some(t => t.id === targetId);
-    } catch {
-        return false;
-    }
+    return (await probeTabAlive(port, targetId)) === 'alive';
 }
 
 /**

@@ -1,6 +1,6 @@
 // @ts-check
 import { EventEmitter } from 'node:events';
-import { isTabAlive, getTabInfo } from './tab-manager.mjs';
+import { probeTabAlive, getTabInfo } from './tab-manager.mjs';
 
 /**
  * @typedef {Object} MonitorEntry
@@ -43,7 +43,12 @@ export class TabMonitor extends EventEmitter {
 
         const check = async () => {
             try {
-                const alive = await isTabAlive(this.port, targetId);
+                const liveness = await probeTabAlive(this.port, targetId);
+                // An unreadable tab list says nothing about this tab. Emitting
+                // `tab:closed` on a transient fetch failure would tell consumers
+                // a live tab had gone away.
+                if (liveness === 'unknown') return;
+                const alive = liveness === 'alive';
                 const previous = this.healthStatus.get(targetId);
                 
                 this.healthStatus.set(targetId, {

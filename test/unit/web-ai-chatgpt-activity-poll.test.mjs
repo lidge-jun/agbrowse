@@ -760,3 +760,76 @@ describe('observation warnings reach every envelope', () => {
         expect(result.warnings).toContain('activity-read-unverified');
     });
 });
+
+/**
+ * Target identity sentinels (issue #88, boundary B24).
+ *
+ * `deps.getTargetId().catch(() => null)` made an unreadable target look exactly
+ * like a matching one: the mismatch check is `if (currentTargetId && ...)`, so
+ * `null` switched the whole check off. It switched off precisely when CDP was
+ * unstable — the moment a tab is most likely to have changed underneath.
+ *
+ * The session branch also skips the conversation-URL check in its `else`, so a
+ * tick with no identity evidence has NO identity evidence at all.
+ */
+describe('target identity failure is not a passing check (B24)', () => {
+    function pollWithTargetProbe(getTargetId, extraInput = {}) {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        return pollWebAi(
+            { getPage: async () => page, getTargetId, getPort: () => 9222 },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true, ...extraInput },
+        );
+    }
+
+    it('U1: a throwing target probe blocks completion and is recorded', async () => {
+        const result = await pollWithTargetProbe(async () => { throw new Error('cdp unstable'); });
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('target-identity-unverified');
+    });
+
+    it('U2: a null target probe is treated exactly like a throw', async () => {
+        // The diagnostic differs; the identity evidence — none — does not.
+        const result = await pollWithTargetProbe(async () => null);
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('target-identity-unverified');
+    });
+
+    it('U2b: a matching target completes normally', async () => {
+        const result = await pollWithTargetProbe(async () => 'target-activity');
+        expect(result.status).toBe('complete');
+        expect(result.warnings || []).not.toContain('target-identity-unverified');
+    });
+
+    it('U3: a differing target still returns mismatch with its evidence', async () => {
+        const result = await pollWithTargetProbe(async () => 'someone-elses-tab');
+        expect(result.status).toBe('target-mismatch');
+        // `actualTargetId` comes from the SAME read as the verdict; re-probing to
+        // recover it would race with the tab changing again.
+        expect(JSON.stringify(result)).toContain('someone-elses-tab');
+    });
+
+    it('U1b: recovery does not restore a candidate the loop disqualified', async () => {
+        // Without the recovery-side gate the loop refuses for the whole budget
+        // and then recovery hands back the same text as `complete`.
+        let calls = 0;
+        const result = await pollWithTargetProbe(async () => {
+            calls += 1;
+            throw new Error('cdp unstable');
+        });
+        expect(calls).toBeGreaterThan(1);
+        expect(result.status).not.toBe('complete');
+    });
+});
