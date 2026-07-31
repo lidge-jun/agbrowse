@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createSession, getSession } from '../../web-ai/session.mjs';
+import { createSession, getSession, listSessions, saveBaseline, updateSession } from '../../web-ai/session.mjs';
 import { pollWebAi } from '../../web-ai/chatgpt.mjs';
 
 /**
@@ -482,7 +482,7 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
      * The copy fallback is a SEPARATE post-deadline exit. A no-session poll skips
      * recovery entirely, so guarding recovery alone leaves this route open.
      */
-    function makeCopyPage({ text }) {
+    function makeCopyPage({ text, activity }) {
         const start = Date.now();
         let offset = 0;
         vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
@@ -495,7 +495,11 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
             },
             evaluate: async (fn, arg) => {
                 const source = String(fn);
-                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    return typeof activity === 'function'
+                        ? activity(offset)
+                        : activity || { strength: 'none', evidence: '' };
+                }
                 if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
                 if (source.startsWith('function readAssistantSnapshotSources')) {
                     return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
@@ -513,7 +517,39 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
         };
     }
 
+    /**
+     * `findActiveSession` adopts the most recent active ChatGPT session when the
+     * caller passes none, so leftovers from earlier tests would silently make
+     * this a session-bound poll — and session-bound polls exit through recovery,
+     * never reaching the copy route this covers.
+     */
+    function retireActiveSessions() {
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    }
+
+    /**
+     * Weak activity inside the loop demands the 5s window, which a 2s budget
+     * cannot reach; the post-deadline read then reports quiet so `stableText`
+     * survives into the copy route.
+     *
+     * The switch must fall AFTER the deadline (offset 2000): flipping to quiet
+     * on the last in-budget tick drops the window to 1s and the loop completes
+     * before the copy route is ever reached.
+     */
+    const weakThenQuiet = (offset) => (offset > 2_000
+        ? { strength: 'none', evidence: '' }
+        : { strength: 'weak', evidence: 'panel-text' });
+
     function pollCopyNoSession(page, extraInput = {}) {
+        retireActiveSessions();
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/copy',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
         return pollWebAi(
             { getPage: async () => page },
             {
@@ -532,9 +568,13 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
         // contract's own failure mode and equally acceptable. What is NOT
         // acceptable is `status: 'complete'`.
         for (const text of ['Edit', 'a real substantive markdown answer']) {
-            const page = makeCopyPage({ text });
+            const page = makeCopyPage({ text, activity: weakThenQuiet });
             const outcome = await pollCopyNoSession(page, { outputImage: '/tmp/agbrowse-never-written.png' })
-                .then(result => result.status, err => `threw:${err?.errorCode || 'unknown'}`);
+                .then(result => {
+                    // Proves this really is the session-free copy route.
+                    expect(result.sessionId).toBeUndefined();
+                    return result.status;
+                }, err => `threw:${err?.errorCode || 'unknown'}`);
             expect(outcome).not.toBe('complete');
         }
     });
@@ -542,9 +582,11 @@ describe('an unsatisfied --output-image is never a textual complete', () => {
     it('T12e: image-chrome text still completes when no output image was asked for', async () => {
         // Classification is observational. Over-blocking on the chrome string
         // alone would break ordinary polls whose answer happens to be short.
-        const page = makeCopyPage({ text: 'Edit' });
+        const page = makeCopyPage({ text: 'Edit', activity: weakThenQuiet });
         const result = await pollCopyNoSession(page);
         expect(result.status).toBe('complete');
+        expect(result.sessionId).toBeUndefined();
+        expect(result.usedFallbacks).toContain('copy-markdown');
     });
 });
 
@@ -632,6 +674,89 @@ describe('observation warnings reach every envelope', () => {
             { vendor: 'chatgpt', session: session.sessionId, timeout: 5, skipFinalize: true },
         );
         expect(result.status).toBe('target-mismatch');
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    /**
+     * The loop, recovery and the copy fallback each perform their OWN activity
+     * read. A test whose loop read already fails cannot tell whether the later
+     * two record anything — the ledger is already populated. These keep the loop
+     * clean so only the later read can produce the observation.
+     */
+    it('T14a: recovery records an unknown the loop never saw', async () => {
+        // Every read INSIDE the loop succeeds; only the post-deadline read fails.
+        // The virtual clock passes 2s exactly when the loop exits, so this binds
+        // the failure to the loop/recovery boundary rather than a tick count.
+        const { page } = makePage({
+            activity: (offset) => {
+                if (offset > 2_000) throw new Error('stalled after the deadline');
+                return { strength: 'none', evidence: '' };
+            },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'stale', // hold the loop off completion until the deadline
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T14b: the no-session copy route records its own first unknown', async () => {
+        // No session means recovery never runs, so the copy fallback's read is
+        // the only one that can produce this observation.
+        const text = 'a real substantive markdown answer';
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        const page = {
+            url: () => 'https://chatgpt.com/c/copy',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    // Inside the budget: weak, so the 5s window holds the loop off.
+                    // After it: the read fails, which is the copy route's own read.
+                    if (offset > 2_000) throw new Error('stalled after the deadline');
+                    return { strength: 'weak', evidence: 'panel-text' };
+                }
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                if (arg?.selectorSet?.copyButtonSelectors) return { ok: true, text };
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+        };
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/copy',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true, allowCopyMarkdownFallback: true },
+        );
+
+        expect(result.sessionId).toBeUndefined();
         expect(result.warnings).toContain('activity-read-unverified');
     });
 });
