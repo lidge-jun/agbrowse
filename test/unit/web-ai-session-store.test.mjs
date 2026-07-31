@@ -245,3 +245,76 @@ describe('web-ai session-store concurrency', () => {
         expect(new Set(stored.map(s => s.sessionId)).size).toBe(25);
     });
 });
+
+/**
+ * The command lock used to wait with `Atomics.wait`, which stops the event loop
+ * outright. That is the entry-point lock a poll acquires BEFORE it starts, so a
+ * contended lock could freeze `--timeout` for up to LOCK_RETRY_LIMIT *
+ * LOCK_RETRY_MS (~5s) before the deadline was even armed.
+ *
+ * Asserting only "a timer fired" would pass even if it fired after the waiter
+ * finished, so this pins the interleaving instead.
+ */
+describe('web-ai session command lock waits without freezing the event loop', () => {
+    it('V1: a timer fires while a second caller is still waiting for the lock', async () => {
+        const { withSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONWAIT';
+        /** @type {string[]} */
+        const order = [];
+        let waiterSettled = false;
+        let releaseHolder;
+        const holderReleased = new Promise(resolve => { releaseHolder = resolve; });
+        let holderAcquired;
+        const holderIsIn = new Promise(resolve => { holderAcquired = resolve; });
+
+        const holder = withSessionCommandLock(sessionId, async () => {
+            order.push('holder-acquired');
+            holderAcquired();
+            await holderReleased;
+        }, { heartbeatMs: 0 });
+
+        // Only arm the release once the lock is genuinely held, so the second
+        // call really does contend.
+        await holderIsIn;
+        const timer = new Promise(resolve => setTimeout(() => {
+            order.push('timer-fired');
+            // The waiter must still be pending: a blocking wait would have
+            // prevented this callback from running at all.
+            expect(waiterSettled).toBe(false);
+            order.push('holder-released');
+            releaseHolder();
+            resolve(undefined);
+        }, 60));
+
+        const waiter = withSessionCommandLock(sessionId, async () => {
+            order.push('waiter-acquired');
+        }, { heartbeatMs: 0 }).then(() => { waiterSettled = true; });
+
+        await Promise.all([holder, timer, waiter]);
+
+        expect(order).toEqual([
+            'holder-acquired',
+            'timer-fired',
+            'holder-released',
+            'waiter-acquired',
+        ]);
+    });
+
+    it('V2: an uncontended lock is acquired without waiting', async () => {
+        const { withSessionCommandLock } = await freshStore();
+        const started = Date.now();
+        let ran = false;
+        await withSessionCommandLock('TESTSESSIONFREE', async () => { ran = true; }, { heartbeatMs: 0 });
+        expect(ran).toBe(true);
+        expect(Date.now() - started).toBeLessThan(200);
+    });
+
+    it('V6: the lock is released when the callback throws', async () => {
+        const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONTHROW';
+        await expect(withSessionCommandLock(sessionId, async () => {
+            throw new Error('callback failed');
+        }, { heartbeatMs: 0 })).rejects.toThrow('callback failed');
+        expect(readSessionCommandLock(sessionId)).toBeNull();
+    });
+});

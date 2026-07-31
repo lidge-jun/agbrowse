@@ -256,6 +256,20 @@ function sleepBlockingMs(ms) {
 }
 
 /**
+ * Async counterpart to {@link sleepBlockingMs}.
+ *
+ * Deliberately NOT `unref`ed: the process must stay alive while a command waits
+ * for its lock. Retries are bounded by `LOCK_RETRY_LIMIT`, so this cannot hold
+ * the loop open indefinitely.
+ *
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function delayMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/**
  * @param {string} sessionId
  * @returns {string}
  */
@@ -295,7 +309,12 @@ export async function withSessionCommandLock(sessionId, fn, options = {}) {
                 try { unlinkSync(path); } catch { /* races resolve naturally */ }
                 continue;
             }
-            sleepBlockingMs(LOCK_RETRY_MS);
+            // `withSessionCommandLock` is already async and every caller consumes
+            // the promise, so waiting here costs no signature change. Blocking
+            // instead froze the event loop for up to LOCK_RETRY_LIMIT *
+            // LOCK_RETRY_MS — timers included, which is why a `--timeout` could
+            // stall before polling even began.
+            await delayMs(LOCK_RETRY_MS);
         }
     }
     if (fd === null) {
