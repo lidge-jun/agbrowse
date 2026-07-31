@@ -126,7 +126,7 @@ runBoundCommand(command='poll', input.session 있음)
 
 따라서 WP1은 **예산의 canonical owner를 먼저 정해야 한다.** 후보:
 `pollWebAi` 자신이 예산을 만들고 모든 호출자가 데드라인을 전달하는 형태,
-또는 `deps` 계약에 예산을 필수 필드로 넣는 형태. 어느 쪽이든 네 진입점
+또는 `deps` 계약에 예산을 필수 필드로 넣는 형태. 어느 쪽이든 여섯 경로
 전부가 대상이다.
 
 세션 없는 폴은 `:1279`로 바로 간다.
@@ -141,7 +141,7 @@ runBoundCommand(command='poll', input.session 있음)
 | IPC 결과 계약 | `pollWebAi` 반환 객체가 구조화 복제 가능한가 | `baseline`·`traceSummary` 등에 함수/순환 참조가 있으면 스키마 변환 필요 |
 | kill/reap | 자식을 죽였을 때 CDP 세션과 탭이 정리되는가 | 좀비 탭이 남으면 lease 오염 |
 | 부분 쓰기 | 자식이 세션 store를 쓰던 중 죽으면 | 락 파일이 남거나 store가 깨지면 탈락 |
-| 직접 호출자 호환 | MCP·watcher·resume·deep research가 자식 모델로 동작하는가 | 넷 중 하나라도 못 쓰면 두 경로가 갈린다 |
+| 직접 호출자 호환 | MCP·resume·watcher·`queryWebAi`가 자식 모델로 동작하는가 | 넷 중 하나라도 못 쓰면 두 경로가 갈린다 |
 | 취소 불가 작업 drain | in-process를 고른 경우 | `Atomics.wait` 중인 동기 구간은 취소가 원리적으로 불가 — 이 경우 in-process 탈락 |
 | 성능 | 자식 기동 비용 | 폴은 반복 호출이라 매번 프로세스를 띄우면 비용이 문제 |
 
@@ -197,20 +197,58 @@ API를 고정하지 않는다.
 모델 선택을 주장이 아니라 측정으로 만든다. 각 행에 **실행한 명령과 결과**를
 기록한다. 사전 임계값을 여기 적고, 측정 후에 임계값을 움직이지 않는다.
 
-| # | probe | 측정 | 사전 임계값 / 탈락 조건 |
-| --- | --- | --- | --- |
-| P1 | 영원히 pending인 `page.evaluate`를 cancel 또는 drain | 프로세스가 종료되는가 | **불가면 in-process 탈락** — single-flight로는 C1을 못 만족한다 |
-| P2 | `Atomics.wait` 구간에 타이머가 도는가 | `setTimeout` 콜백 실행 여부 | 안 돌면 lock을 async로 바꾸거나 in-process 탈락 |
-| P3 | 자식에서 CDP 재연결 | Playwright `Page`를 targetId로 재획득 가능한가 | 불가면 격리 탈락 |
-| P4 | `pollWebAi` 반환 객체 구조화 복제 | `structuredClone(result)` 성공 여부 | 실패하면 IPC 스키마 변환 필요 — 비용을 P7에 반영 |
-| P5 | 자식 kill 후 정리 | 탭·CDP 세션·락 파일 잔존 여부 | 좀비가 남으면 격리 탈락 |
-| P6 | 부분 쓰기 복구 | store 쓰기 중 kill → 다음 명령이 동작하는가 | 깨지면 격리 탈락 |
-| P7 | 자식 기동 비용 | 폴 1회당 추가 지연 | **200ms 초과면 격리 탈락** — 폴은 반복 호출이다 |
-| P8 | 직접 호출자 호환 | MCP·resume·watcher·`queryWebAi` 넷이 고른 모델로 동작 | 하나라도 불가면 두 경로가 갈린다 |
-| P9 | 향후 sync 경계 유입 차단 | conformance 방식(lint 규칙·테스트·리뷰 체크) | 방식이 없으면 계약이 시간에 침식된다 |
+후보는 **셋**이다. "격리"를 한 덩어리로 묶으면, 빠른 worker의 P7과 재연결
+가능한 subprocess의 P3을 합쳐 어느 후보도 통과 못 한 것을 "격리 통과"로
+오판할 수 있다.
 
-**P1과 P7이 결정적일 가능성이 높다.** 둘을 먼저 측정한다. P1이 불가하고 P7이
-임계값을 넘으면 두 모델 모두 탈락이며, 그때는 아래 "실패하는 방식"으로 간다.
+| 후보 | 설명 |
+| --- | --- |
+| A: in-process | 동기 IO를 async로 옮기고 취소·drain을 구현 |
+| B: worker thread | `node:worker_threads`. 메모리 공유, 기동 빠름 |
+| C: subprocess | `child_process`. 완전 격리, 기동 느림 |
+
+**한 후보가 자기에게 적용되는 probe를 전부 통과해야 선택 가능하다.** 후보 간
+결과를 섞지 않는다.
+
+| # | probe | 측정 | A | B | C |
+| --- | --- | --- | --- | --- | --- |
+| P1 | 영원히 pending인 `page.evaluate` 후 상태 | 아래 정의 참조 | 필수 | — | — |
+| P2 | `Atomics.wait` 구간에 타이머가 도는가 | `setTimeout` 콜백 실행 여부 | 필수 | 필수 | — |
+| P3 | 자식/워커에서 CDP 재연결 | targetId로 `Page` 재획득 | — | 필수 | 필수 |
+| P4 | `pollWebAi` 반환 구조화 복제 | `structuredClone(result)` | — | 필수 | 필수 |
+| P5 | kill 후 정리 | 탭·CDP 세션·락 파일 잔존 | — | 필수 | 필수 |
+| P6 | 부분 쓰기 복구 | store 쓰기 중 kill → 다음 명령 동작 | — | 필수 | 필수 |
+| P7 | 기동 비용 | 폴 1회당 추가 지연 | — | 필수 | 필수 |
+| P8 | 직접 호출자 구조 호환 | 여섯 경로가 이 모델로 배선 **가능한가**(prototype) | 필수 | 필수 | 필수 |
+| P9 | 향후 sync 유입 차단 | conformance 방식 | 필수 | 필수 | 필수 |
+
+### P1 정의 (수정)
+
+"프로세스가 종료되는가"는 oracle로 쓸 수 없다. MCP(`web-ai/mcp-server.mjs:328-363`)와
+watcher(`web-ai/watcher.mjs:629-651`)는 poll 뒤에도 살아 있어야 하는 **장기
+프로세스**다. 정상 drain돼도 종료되지 않고, 반대로 pending Promise가 handle을
+안 잡으면 drain 안 돼도 one-shot 프로세스는 종료돼 false-pass한다.
+
+P1의 실제 측정:
+- 데드라인 안에 반환하는가 (C1 계약)
+- timeout 직후 outstanding operation 수, active handle, 미해제 CDP request,
+  락 파일 상태
+- 장기 프로세스에서 폴을 반복했을 때 위 수치가 **누적되는가**
+
+one-shot CLI 종료 여부는 별도 관측치로 기록하되 pass/fail 기준으로 쓰지 않는다.
+
+### 사전 임계값
+
+| probe | 임계값 |
+| --- | --- |
+| P1 | 반복 폴 20회 후 outstanding operation·handle 증가 0. 증가하면 A 탈락 |
+| P2 | 타이머가 안 돌면 lock을 async로 바꿔야 하고, 불가면 A 탈락 |
+| P7 | 폴 1회당 200ms 초과면 해당 후보 탈락 |
+
+측정 후에 임계값을 움직이지 않는다.
+
+**P1과 P7을 먼저 측정한다.** A의 P1과 B·C의 P7이 각 후보의 존폐를 가른다.
+셋 다 탈락이면 아래 "실패하는 방식"으로 간다.
 
 ### 프리미티브 단위 테스트
 
@@ -220,6 +258,18 @@ API를 고정하지 않는다.
 
 `npm run typecheck`와 위 단위 테스트가 게이트다. **P1~P9 ledger가 채워지지
 않으면 WP1은 완료가 아니다.**
+
+### 일회용 spike 허용
+
+P1~P7은 실제 프로세스·CDP·kill을 다뤄야 하므로 단위 테스트만으로 측정할 수
+없다. **WP1은 일회용 feasibility spike를 만들 수 있다** — 측정이 끝나면 버리는
+스크립트다. 정식 하네스(WP2)나 배선(WP3)을 선구현하지 않는다.
+
+P8은 두 단계로 나눈다.
+- **WP1**: 여섯 경로가 이 모델로 배선 *가능한가*를 구조적으로 판단(prototype 수준)
+- **WP3**: 실제 배선 후 runtime conformance 검증
+
+WP1이 P8을 완전히 증명할 수는 없다 — 배선이 WP3 소유이기 때문이다.
 
 ## 범위
 

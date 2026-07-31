@@ -45,6 +45,9 @@
 
 ## 모델 선택 (WP1이 결정)
 
+후보는 셋이다 — in-process, worker thread, subprocess. 아래는 in-process와
+격리 계열의 대비이며, worker/subprocess 구분은 `010`의 probe 표가 다룬다.
+
 | | in-process | 격리(worker/subprocess) |
 | --- | --- | --- |
 | sync isolation | 동기 IO를 하나씩 async로 옮기거나 제거 | 부모가 watchdog으로 종료 — 개별 수정 불필요 |
@@ -65,7 +68,7 @@
   (`web-ai/chatgpt-response-observer.mjs:78-84`). **취소 선례가 아니다** —
   소비자 race일 뿐 `evalP`는 살아남고, 현재 poll 호출(`chatgpt.mjs:627-630`)은
   signal을 넘기지도 않는다. in-process 모델 한계의 실물 예시다.
-- 진입점이 하나로 모인다. `runBoundCommand`(`web-ai/cli.mjs:1254`)가 세션 폴에서
+- **CLI 세션 경로**는 하나의 사슬로 모인다. `runBoundCommand`(`web-ai/cli.mjs:1254`)가
   `withSessionCommandLock` → `withCommandSessionPage` → `withWebAiActiveCommand`
   3중 래퍼를 거쳐 `deps`를 조립한다(`:1259-1277`). 예산을 끼울 자리가 명확하다.
 - 반대로 `withSessionCommandLock`(`web-ai/session-store.mjs:273`) 자체가
@@ -106,7 +109,7 @@ B01~B09, B11, B12, B13, B26, B27, B29 — 15개.
 **WP3가 새로 추가됐다.** `sessionDeps` 세 getter를 감싸는 것만으로는 부족하다는
 것이 감사에서 확인됐다. 진입점 배선이 독립 work-phase여야 하는 이유다.
 
-### 생산 호출 경로 다섯
+### 생산 호출 경로 여섯
 
 | # | 진입 | 경로 |
 | --- | --- | --- |
