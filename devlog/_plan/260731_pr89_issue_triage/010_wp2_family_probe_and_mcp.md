@@ -242,10 +242,13 @@ Chat family 축이 없는 provider로 보내는 것.
 
 - probe 테스트(1, 2, 3, 3a, 3c) → MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`
   — 기존 `createFakeModelPage`를 그대로 쓴다
-- `warn` 소비 정책(3b) → MODIFY `test/unit/web-ai-capability.test.mjs`
-  — `worstCapabilityState`가 `warn`을 집계하고 `ok`를 유지하는지 직접 확인한다.
-  `statusWebAi` 전체를 태우지 않고 집계 함수 수준에서 고정하는 편이 fixture가
-  작고 의도가 분명하다
+- `warn` 소비 정책(3b) → MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`
+  — `worstCapabilityState`의 `warn` 집계는 이미
+  `test/unit/web-ai-capability.test.mjs:53`이 고정하고 있고, 그 함수는 문자열만
+  돌려준다(`web-ai/capability.mjs:66`). 실제 `ok: worst !== 'fail'` 소비는
+  `statusWebAi`(`web-ai/chatgpt.mjs:149`)에 있으므로 거기까지 태워야 새 회귀를
+  잡는다. `createFakeModelPage`를 쓸 수 있는 파일에서 `statusWebAi`를 호출해
+  `capabilityState: 'warn'`과 `ok: true`를 함께 확인한다
 - MCP 테스트(4, 5) → MODIFY `test/integration/web-ai-mcp-server.test.mjs`
   — 이미 `handleMcpMessage`를 JSON-RPC로 호출하는 패턴이 있다(`:32`, `:36`)
 

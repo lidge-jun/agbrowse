@@ -34,7 +34,14 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
    멈추는 데 async일 필요는 없다.
 
    각 호출을 셋으로 분류한다: `sync-pure`(계산만) · `sync-IO/lock`(파일·락) ·
-   `async`. 앞의 둘도 정체 원인이 될 수 있으므로 말단으로 끊지 않는다.
+   `async`. 분류가 `sync-pure`라고 해서 자동으로 말단은 아니다 — 아래 말단 규칙을
+   적용한다.
+
+   `sync-IO/lock`을 넣으면 폐쇄가 로깅·파일 유틸까지 번질 수 있다. 발산을 막는
+   기준은 하나다: **재시도 한도나 상한이 있으면 bounded로 판정하고 거기서
+   끊는다.** 예를 들어 `withStoreLock`(`web-ai/session-store.mjs:136`)은
+   `LOCK_RETRY_LIMIT = 200`회 후 throw하므로(`:48`, `:164`) bounded다 — 그
+   근거를 적고 하위 호출을 더 파지 않는다. 상한이 없는 것만 계속 따라간다.
 
    비동기 호출은 특히 다음 넷을 빠짐없이 센다.
    - `await` 표현식
@@ -46,14 +53,18 @@ A 페이즈 감사 3라운드가 모두 이 목록에서 실패했다. 매번 "�
    - `.then`/`.catch`/`Promise.all`/`Promise.race`로 소비되는 표현식.
 
    데드라인 안(루프)과 데드라인 후(recovery·diagnostics·copy·finalize) 양쪽 모두.
-2. 각 callee에 대해 **1의 4종 규칙을 그대로 다시 적용한다** — `await`만 보면
+2. 각 callee에 대해 **1의 전체 규칙(모든 call expression + 3분류)을 그대로 다시
+   적용한다** — `await`만 보면
    안 된다. `poolTab`이 `releaseCompletedLease()`를 await 없이 반환하고
    (`web-ai/tab-pool.mjs:51`) 그것이 lease overflow → `closeTab` → 무제한 CDP
    `send`로 이어지는 경로(`tab-lease-store.mjs:391`, `:630`,
    `skills/browser/tab-manager.mjs:305`)가 정확히 이 규칙으로만 잡힌다.
    반환된 Promise, async iterator, event/listener 콜백도 포함한다.
 3. 다음 중 하나에 도달할 때까지 재귀한다.
-   - **말단 분류**: Page API / Locator API / CDP / **순수 계산만**.
+   - **말단**: (a) 상한이 증명된 것(재시도 한도·timeout·크기 제한), (b) 더 내려갈
+     JS callee가 없는 native primitive(`writeFileSync` 등), (c) 계산만 하는 함수.
+     Page/Locator/CDP/native sync-IO는 재귀를 멈추되 **deadline-unaware 경계로
+     기록하고 유닛에 배정한다** — 멈추는 것과 방어된 것은 다르다.
      네트워크 fetch, 파일시스템 락, 탭 수명주기 IO는 말단이 아니다 — bounded임을
      증명했을 때만 말단 처리한다. `collectImages`의 60초 루프는 이미지 *탐지*만
      제한하고, 그 뒤 `Network.getCookies`(`chatgpt-images.mjs:226`)와
@@ -105,8 +116,10 @@ resolver → self-heal, finalizeProviderTab → archive)는 일부만 포함한�
 | `chatgpt-images.mjs:140`, `:226`, `:241`, `:257` | CDP + fetch | `collectImages` ← 루프 `:759`, `collectGeneratedImageAnswer:1498` | 이미지 응답 — 탐지 루프만 bounded(`:305-308`), 이후 CDP/fetch는 무제한 |
 | `chatgpt-files.mjs:321`, `:347` | CDP | `saveAssistantDownloadableFiles` ← 루프 `:797` | 다운로드 — HTTP fetch는 bounded(`:364-382`)지만 선행 CDP는 무제한 |
 
-**1단계 callee는 15개다.** `pollWebAi` 본문(`:582`–`:1020`)에서
-`await <함수>(` 패턴을 뽑으면 다음이 나온다 — 이것이 폐쇄의 출발 집합이다.
+**await subset은 15개다.** `pollWebAi` 본문(`:582`–`:1020`)에서 `await <함수>(`
+패턴을 뽑으면 다음이 나온다. 이것은 출발 집합의 **일부**일 뿐이다 — 동기 직접
+호출(`persistResolverTraceForSession:738`, `markSessionTimeout:983` 등)을 별도
+목록으로 만들어 합쳐야 실제 출발 집합이 된다.
 
 ```
 captureCopiedResponseText     captureFailureDiagnostics    collectGeneratedImageAnswer

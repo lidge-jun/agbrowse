@@ -1,9 +1,11 @@
 # 040 — WP5: 게이트 클로즈아웃과 인계
 
-선행: WP2, WP3, WP4.
+선행: WP2, WP3.
 
-WP3가 두 후속 유닛의 로드맵을 확정하고 모든 경계를 배정한 뒤에 시작한다.
+WP3가 후속 유닛들의 로드맵을 확정하고 모든 경계를 배정한 뒤에 시작한다.
 배정되지 않은 도달 가능 경계가 남아 있으면 시작하지 않는다.
+
+devlog `_plan`/`_fin` 정리는 이 유닛의 선행이 아니다 — 별도 유닛으로 분리됐다.
 
 ## 게이트
 
@@ -12,8 +14,8 @@ WP3가 두 후속 유닛의 로드맵을 확정하고 모든 경계를 배정한
 순서대로 실행하고 각 출력을 이 문서에 기록한다.
 
 ```
-# 새 테스트 (WP2만 — WP3는 문서 전용이라 테스트가 없다)
-npx vitest run test/unit/web-ai-family-probe-and-mcp.test.mjs
+# WP2 테스트는 새 파일이 아니라 기존 스위트에 추가된다(010 참조).
+# 아래 영향권 목록이 그 파일들을 이미 포함한다.
 
 # 변경 파일의 영향권 — WP2가 건드리는 모듈을 덮는 기존 스위트.
 npx vitest run test/unit/web-ai-tool-schema.test.mjs \
@@ -55,7 +57,8 @@ Chromium이 설치된 경우에만 유효한 증거다. 미설치로 skip이 발
 git mv devlog/_plan/260731_pr89_issue_triage devlog/_fin/
 ```
 
-MODIFY `devlog/00_index.md` — WP4가 만든 `_plan` 표에서 이 유닛 행을 제거:
+MODIFY `devlog/00_index.md` — `_plan` 표에서 이 유닛 행을 제거한다. 표의 다른
+행은 devlog 정리 유닛이 다루므로 건드리지 않는다:
 
 ```diff
  | Post-MVP gap close | `_plan/260705_gapclose/` | 🔧 Phase 10/20/30/40 구현 완료. 04·05·06·09는 PLANNED 잔존. |
@@ -68,7 +71,7 @@ MODIFY `devlog/00_index.md` — WP4가 만든 `_plan` 표에서 이 유닛 행�
 ```diff
  | Topic | Path | Closeout signal |
  | --- | --- | --- |
-+| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정 + devlog 정리 + #88 경계 인벤토리. #88 방어는 후속 두 유닛으로 분할(`003_audit_synthesis.md`). |
++| PR #89 / 이슈 #87·#88 triage | `_fin/260731_pr89_issue_triage/` | #87 probe/MCP 갭 수정 + #88 경계 인벤토리. #88 방어와 devlog 정리는 후속 유닛으로 분할(`003_audit_synthesis.md`). |
  | QA round 6 | `_fin/260726_qa_round6/` | ... |
 ```
 
@@ -80,7 +83,6 @@ work-phase마다 하나씩, 로컬만.
 WP1  docs(devlog): PR #89 / 이슈 #87·#88 처리 로드맵 유닛
 WP2  fix(web-ai): make the model probe and MCP honor the requested chat family
 WP3  docs(devlog): map every stall boundary and route it to a successor unit
-WP4  docs(devlog): sync the index with the real _plan/_fin layout
 WP5  docs(devlog): close out the PR #89 / issue triage unit
 ```
 
@@ -106,15 +108,17 @@ push는 하지 않는다(DEV-GIT-PUSH-01).
 
 ## 남긴 후속
 
-**후속 유닛 두 개가 이 goal 아래 남는다** — WP3의 7절이 그 로드맵을 쓴다.
+**후속 유닛 세 개가 이 goal 아래 남는다.** 앞의 둘은 WP3의 7절이 로드맵을 쓰고,
+셋째는 `030`이 계획 문서다.
 
 | 유닛 | 범위 |
 | --- | --- |
-| `#88 DOM deadline 계약` | assistant DOM read · activity · finished · ordering · recovery |
-| `artifact/finalizer hardening` | 이미지·파일 다운로드, 탭 lease, CDP 경계 |
+| `#88 DOM deadline 계약` | assistant DOM read · activity · finished · ordering · recovery · diagnostics · copy |
+| `artifact/finalizer hardening` | 이미지·파일 다운로드, 탭 lease, CDP, sync-IO/lock 경계 |
+| `devlog 정리` | `_plan`→`_fin` 이관, `00_index.md` 동기화, 조건부 closeout 4건 |
 
 이 유닛을 `_fin`으로 옮기는 것은 "#88 완료"가 아니라 "이 유닛 범위 완료"를
-뜻한다. 두 후속 유닛이 끝나기 전에는 #88이 닫히지 않는다.
+뜻한다. 세 후속 유닛이 끝나기 전에는 goal이 닫히지 않는다.
 
 `readActivityState`의 **catch 경로**가 `{ strength: 'none' }`을 돌려준다
 (`web-ai/chatgpt.mjs:1049`). 폴링 루프는 `'none'`을 quiet으로 읽어 완료 분기로

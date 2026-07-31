@@ -9,8 +9,10 @@
 ## 목표
 
 열려 있는 GitHub 항목(PR #89, 이슈 #87, 이슈 #88)을 `dev` 기준으로 판정하고,
-실제로 남아 있는 결함만 구현하며, 그 과정을 devlog 규약대로 남긴다. devlog
-`_plan`에 쌓인 종료 유닛과 `00_index.md`의 드리프트도 같은 유닛에서 정리한다.
+#87의 잔여 갭을 구현하며, #88의 정체 경계를 확정해 후속 유닛으로 넘긴다.
+
+devlog `_plan` 정리와 `00_index.md` 드리프트는 **별도 유닛**이다 — PR triage와
+아키텍처 의존이 없는 유지보수 작업이라 분리했다(아래 후속 유닛 표).
 
 ## 제약
 
@@ -104,7 +106,7 @@ PR #89의 `4ada9cb`는 `readAssistantMessages` 기반 구버전 리더를 전제
 | --- | --- | --- | --- |
 | WP1 | docs-only 로드맵: 실태 조사 + decade 문서 작성 | `000`–`003`, `010`, `020`, `030`, `040` | — |
 | WP2 | #87 잔여 갭 2건 구현(probe family 계약, MCP fail-closed) | `010` | WP1 |
-| WP3 | #88 정체 경계 인벤토리 확정 + 후속 유닛 두 개의 로드맵 | `020` → `021` | WP2 |
+| WP3 | #88 정체 경계 인벤토리 확정 + 후속 유닛 로드맵 | `020` → `021` | WP1 |
 | WP5 | 게이트 클로즈아웃 + 유닛 마감 + 커밋 정리 | `040` | WP2·WP3 |
 
 `030`은 devlog 정리 유닛(아래)의 계획 문서로 이 유닛에 남되, 실행은 그 유닛에서
@@ -152,11 +154,11 @@ closeout에 그 구분을 명시한다.
 
 WP3가 산출할 `021_stall_boundary_map.md`는 그 사이클에서 작성한다.
 
-의존 근거: WP3는 `web-ai/chatgpt.mjs`의 폴링 경로를 조사하고, WP2는 같은 파일의
-capability 정의(`:120`)를 바꾼다. WP2를 먼저 두는 것은 WP2가 확정한 변경이 반영된
-트리에서 경계를 세야 인벤토리가 최신이기 때문이다 — 파일이 같아서가 아니라
-조사 대상의 상태가 앞 단계 결과에 의존하기 때문이다. WP5는 두 결과를 합쳐
-게이트를 돌린다.
+의존 근거: WP2와 WP3는 서로 의존하지 않는다 — WP2는 capability 정의
+(`web-ai/chatgpt.mjs:120`)와 MCP 분기를 바꾸고, WP3는 `pollWebAi`(`:582` 이후)의
+호출 그래프를 조사한다. WP3의 경계 집합은 WP2 결과를 소비하지 않는다. 둘 다
+WP1에만 의존하며, 표의 순서는 실행 편의일 뿐 구조적 선행이 아니다. WP5가 둘을
+합쳐 게이트를 돌린다.
 
 ## 수용 기준
 
@@ -169,11 +171,12 @@ capability 정의(`:120`)를 바꾼다. WP2를 먼저 두는 것은 WP2가 확�
    허용하지 않는다. 실제 방어 구현과 활성화 관측은 후속 유닛의 수용 기준이다.
 3. #87의 잔여 갭 2건이 수정되고 테스트 출력으로 확인된다. probe는 family를
    evidence에 담고, MCP는 비-ChatGPT + family를 거부한다.
-4. `devlog/00_index.md`가 `_plan`/`_fin` 실제 디렉터리와 1:1로 맞는다.
-5. `npm run typecheck`, 대상 vitest, `npm run gate:all`,
+4. `npm run typecheck`, 대상 vitest, `npm run gate:all`,
    `structure/check-doc-drift.sh`, `structure/verify-counts.sh`가 신선 출력으로
    통과한다.
-6. 각 work-phase가 로컬 커밋으로 남는다.
+5. 각 work-phase가 로컬 커밋으로 남는다.
+
+devlog `_plan`/`_fin` 정리는 이 유닛의 수용 기준이 아니다 — 후속 유닛으로 옮겼다.
 
 ## 종료 판정
 

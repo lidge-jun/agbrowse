@@ -8,12 +8,12 @@
 
 | 유닛 | 처분 | 근거 |
 | --- | --- | --- |
-| `260625_webai_streaming_recovery_false_complete` | `_fin`으로 이관 | `30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE |
-| `260710_gpt56_update` | `_fin`으로 이관 | `00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116` |
+| `260625_webai_streaming_recovery_false_complete` | `_fin`으로 이관 | `devlog/_plan/260625_webai_streaming_recovery_false_complete/30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE |
+| `260710_gpt56_update` | `_fin`으로 이관 | `devlog/_plan/260710_gpt56_update/00_index.md:3-12` 전량 실행, root closeout `devlog/21_gpt56_ui_update.md:110-116` |
 | `260711_release_017` | **조건부** | `devlog/_plan/260711_release_017/010_release_evidence.md:19-32` 16/16 게이트 통과. 단 같은 문서가 post-publish 증거를 요구한다(`:72-74`) |
 | `260711_upload_reliability` | **조건부** | 성공 기준 1이 "focused + 전체 `npm test` 0 failures"인데(`devlog/_plan/260711_upload_reliability/010_plan.md:59-60`) 기록은 전체 스위트 2파일 실패다(같은 유닛 `030_verification.md:37-46`) |
 | `260627_search_skill` | **조건부** | 기능은 `skills/browser/search.mjs:4-29`, `skills/search/SKILL.md:88-106`으로 배포됨. 단 문서는 5개 미래 cycle 형태로 남아 있고(`devlog/_plan/260627_search_skill/00_plan.md:32-75`) closeout이 없다 |
-| `260628_competitive_research` | **조건부** | 리서치 산출물이고 후속이 `260705_gapclose`임이 명시되어 있다(`_plan/260705_gapclose/00_index.md:5-7`). 단 미해결 질문 5개(`devlog/_plan/260628_competitive_research/02_schema_bound_extraction.md:212-218`)의 disposition이 필요하다 |
+| `260628_competitive_research` | **조건부** | 리서치 산출물이고 후속이 `260705_gapclose`임이 명시되어 있다(`devlog/_plan/260705_gapclose/00_index.md:5-7`). 단 미해결 질문 5개(`devlog/_plan/260628_competitive_research/02_schema_bound_extraction.md:212-218`)의 disposition이 필요하다 |
 | `260621_cli_jaw_webai_parity` | `_plan` 유지 | 외부 cli-jaw 미러 — closeout 권한이 이 저장소에 없음 |
 | `260625_webai_parity_impl` | `_plan` 유지 | Cycle 12 verdict CONCERNS, 후속이 `260627_gptpro_remediation` |
 | `260627_gptpro_remediation` | `_plan` 유지 | R2 CONCERNS 5 / FAIL 2 미해소 |
@@ -33,8 +33,8 @@
 | `260711_release_017` | post-publish 증거 요구(`010_release_evidence.md:72-74`)를 실제 게시된 릴리스로 충족한 기록을 남긴다 |
 
 무조건 이관 대상은 둘이다: `260625_webai_streaming_recovery_false_complete`
-(`30_completion_audit.md:31-52` 전 요구사항 Met + 독립 검증 DONE),
-`260710_gpt56_update`(`00_index.md:3-12` + root closeout
+(`devlog/_plan/260625_webai_streaming_recovery_false_complete/30_completion_audit.md:31-52`),
+`260710_gpt56_update`(`devlog/_plan/260710_gpt56_update/00_index.md:3-12` + root closeout
 `devlog/21_gpt56_ui_update.md:110-116`).
 
 ### competitive_research 미해결 질문 disposition (선조사)

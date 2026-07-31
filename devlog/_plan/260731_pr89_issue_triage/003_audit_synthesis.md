@@ -125,9 +125,10 @@ FAIL이었다. 라운드마다 계획은 나아졌지만 같은 자리에서 걸
 
 | 유닛 | 범위 |
 | --- | --- |
-| 이 유닛 (`260731_pr89_issue_triage`) | #87 잔여 갭 2건 + devlog 정리 + #88 경계 인벤토리 |
+| 이 유닛 (`260731_pr89_issue_triage`) | #87 잔여 갭 2건 + #88 경계 인벤토리 |
 | 후속 1 (`#88 DOM deadline 계약`) | assistant DOM read·activity·finished·ordering·recovery — 이슈 #88의 원래 범위 |
 | 후속 2 (`artifact/finalizer hardening`) | 이미지·파일 다운로드, 탭 lease, CDP 경계 |
+| 후속 3 (`devlog 정리`) | `_plan`→`_fin` 이관, `00_index.md` 동기화, 조건부 closeout 4건 |
 
 인벤토리(`021`)는 이 유닛에서 완성해 두 후속 유닛의 공통 입력이 된다. 조사가
 낭비되지 않고, 후속 유닛은 확정된 목록에서 출발한다.
