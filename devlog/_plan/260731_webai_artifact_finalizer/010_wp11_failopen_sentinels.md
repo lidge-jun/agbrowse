@@ -401,6 +401,86 @@ verdict를 직접 주입한다. 실제 fetch 실패를 공유하면 producer mut
 
 ## 이 work-phase가 닫는 것과 닫지 않는 것
 
+### 실행 결과 (2026-07-31)
+
+커밋 여섯. 소스 셋, 테스트 셋이다.
+
+| 커밋 | 내용 |
+| --- | --- |
+| `2cfb668` | 소스 교정 — 처방 본문 |
+| `a64888d` | endpoint 판정 철회 + 상위 소비자 네 곳 |
+| `3e45768` | `withSessionPage`, error code 등록, U8/U12 |
+| `cb518dc` | public envelope 고정 (U14/U15/U12b) |
+| `ae54efe` | 상위 정책 셋 (U16/U17) + U15b |
+| `25f6985` | CLI mapper와 두 번째 guard |
+
+#### 구현 중 철회한 판단
+
+`ECONNREFUSED`·`ENOTFOUND`·"bad port"를 `gone`으로 분류하는 코드를 넣었다가
+감사 지적으로 **되돌렸다.**
+
+넣은 이유는 기존 lease 테스트 넷이 죽은 포트(65531, 111)를 가리키고 있었고,
+아무것도 listen하지 않는 포트라면 탭도 없다고 봤기 때문이다. 하지만 그건
+**이 유닛이 없애려는 바로 그 혼동**이다. 단일 fetch 실패는 endpoint가 그 순간
+조용했다는 사실이지 target이 소멸했다는 증거가 아니고, `gone`의 소비자는
+lease를 지우고 탭을 새로 연다. "bad port" 문자열 매칭은 Undici 구현 의존이라
+더 나빴다.
+
+테스트 넷은 `serveEmptyTabList()`로 고쳤다 — "탭이 없다"를 읽을 수 있는 빈
+목록으로 직접 말한다. **테스트를 통과시키려고 production 의미를 바꾼 것이
+애초의 잘못이었다.**
+
+#### 감사가 잡은 것
+
+구현 감사 6라운드, blocker 12건. WP10과 같은 종류가 반복됐다.
+
+| # | 증상 |
+| --- | --- |
+| 1 | endpoint 부재를 target 소멸로 오판 (위) |
+| 2 | `ResolveSessionPageUnverified`를 반환만 하고 **아무도 읽지 않음** — reattach는 새 탭을 열고, CLI는 navigate를 권하고, forceRecover는 generic throw, doctor는 recovery 권고 |
+| 3 | `poll --session`의 실제 경로 `withSessionPage`가 누락 |
+| 4 | `cdp.liveness-unverified`를 발명해놓고 taxonomy·README·SKILL·contract test 어디에도 등록 안 함 |
+| 5 | `:633`, monitor, checkout, recovery 가드가 **삭제해도 GREEN** |
+| 6 | U15가 첫 probe에서 끝나 두 번째 guard에 도달하지 않음 |
+| 7 | "CLI mapper는 비-export라 테스트 불가"라는 내 주장이 틀림 — 기존 테스트가 이미 `runWebAiCli`로 도달 |
+
+2번과 3번이 같은 교훈이다. **계약을 만들었다고 소비자가 쓰는 것은 아니다.**
+`liveness`를 반환형에 넣고 끝냈다면 결함은 한 레이어 위에서 그대로였다.
+
+5번은 WP10의 반복이다. 가드를 넣고 테스트를 붙였는데 그 테스트가 다른 조건
+때문에 통과하고 있었다.
+
+#### mutation proof
+
+각각 되돌려 정확히 RED가 되는 것을 확인했다(복원 후 매번 diff 확인).
+
+| mutation | RED |
+| --- | --- |
+| 루프 `identityOk` conjunct | U1·U2·U1b |
+| recovery `identityOk` conjunct | U1b |
+| `probeTabAlive` unknown → gone | U6·U7·U14 |
+| lease cleanup(`:412`) 가드 | U7 |
+| close 실패(`:633`) 가드 | U11 |
+| monitor unknown early return | U13 |
+| checkout(`:323`) 가드 | U8 |
+| `recoverSessionTab` unknown 가드 | U12 |
+| `resolveSessionPage` unverified 블록 | U14·U15 |
+| `withSessionPage` 첫 guard | U15 |
+| `withSessionPage` 두 번째 guard | page-death 테스트 |
+| `recovery.strategy === 'unverified'`(forceRecover) | U15b |
+| CLI mapper 분기 | CLI envelope 테스트 |
+
+#### 검증
+
+```
+npx vitest run test/unit test/integration
+  Test Files 179 passed (179); Tests 2003 passed (2003)
+npm run gate:all              All 16 gate(s) passed (exit 0)
+npm run typecheck             exit 0   (.mjs 미대상)
+bash structure/check-doc-drift.sh   164 passed
+bash structure/verify-counts.sh      76 passed
+```
+
 닫는 것: c8의 fail-open 중 **B24·B36**.
 
 닫지 않는 것:

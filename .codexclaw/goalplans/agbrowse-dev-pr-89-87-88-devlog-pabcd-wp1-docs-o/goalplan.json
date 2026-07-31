@@ -199,6 +199,12 @@
       "status": "done",
       "title": "WP10 fail-open 교정 구현: B03 activity sentinel + B06 ordering 열거화 (예산 계약과 독립)",
       "tasks": []
+    },
+    {
+      "id": "wp11",
+      "status": "done",
+      "title": "WP11 자매 유닛 fail-open 교정: B24 target identity + B36 tab liveness (예산 계약과 독립)",
+      "tasks": []
     }
   ],
   "criteria": [
@@ -255,7 +261,7 @@
       "id": "c8",
       "scenario": "artifact/finalizer 유닛: 021이 유닛 B에 배정한 경계(이미지/파일 다운로드, 탭 lease, CDP, diagnostics, sync-IO/lock)가 예산 계약 아래 상한을 갖고, fail-open B23·B24·B25·B36이 fail-closed로 교정된다",
       "expectedEvidence": "경계 ID별 테스트 출력 또는 bounded 근거. 배정 경계 전부가 대상 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-      "capturedEvidence": "미충족 — 로드맵만 완료됐다. 이 criterion은 해당 유닛의 구현 work-phase에 연결되며, 그 work-phase는 아직 시작되지 않았다. 로드맵: devlog/_plan/260731_webai_artifact_finalizer/000_plan.md (리뷰어 PASS). 다음 단계는 두 유닛 공동 WP0 — probe P1~P9를 실행해 in-process/worker/subprocess 중 하나를 선택하는 것.",
+      "capturedEvidence": "부분 충족 — fail-open 넷 중 둘. 커밋 2cfb668, a64888d, 3e45768, cb518dc, ae54efe, 25f6985. B24: readTargetIdentity가 verified|mismatch|unknown을 actualTargetId와 함께 단일 read로 반환. null도 unknown. unknown은 루프와 recovery 양쪽에서 완료 후보 자격 박탈. B36: probeTabAlive가 alive|gone|unknown. 소비자 7곳 전수 교정 — lease store 4(:320/:323/:412/:633), tab-recovery 2(:49/:153), tab-monitor 1. :633이 021이 지목한 원 경로였고 초판 처방에서 누락됐다. VerifyResult.liveness와 ResolveSessionPageUnverified로 상위 전달, 소비자 4곳(cli-sessions/cli/tab-recovery/session-doctor)이 새 탭 생성 대신 retry. 테스트 출력: 179파일 2003건 passed, gate:all 16/16, typecheck 0, doc-drift 164, verify-counts 76. mutation 13건 RED. 미충족分: B25는 fail-visible(무음 제거)까지 — 답은 여전히 complete로 나가며 명시적 artifact 요청 계약 필요. B23은 baseline-inferred-from-host 관측만 — 동기 IO 처방(자매 WP2) 없이 조회 실패와 부재를 구분 불가. 배정 경계 21개의 예산 상한도 미해결(G1~G4).",
       "status": "open"
     }
   ],
