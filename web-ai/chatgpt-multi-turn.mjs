@@ -2,7 +2,7 @@
 import { updateSession } from './session.mjs';
 import { trySaveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
-import { anyStopButtonVisible } from './chatgpt-response-dom.mjs';
+import { probeStopButton } from './chatgpt-response-dom.mjs';
 
 /**
  * @typedef {Object} TurnResult
@@ -48,12 +48,16 @@ async function readLatestAssistant(page) {
 }
 
 /**
- * Check if ChatGPT is currently streaming.
+ * Is ChatGPT streaming right now?
+ *
+ * Returns the verdict, not a boolean: `unknown` must not be read as "finished",
+ * which is what the completion check below does with `!streaming`.
+ *
  * @param {any} page
- * @returns {Promise<boolean>}
+ * @returns {Promise<'visible'|'absent'|'unknown'>}
  */
 async function isStreaming(page) {
-    return anyStopButtonVisible(page);
+    return probeStopButton(page);
 }
 
 /**
@@ -101,9 +105,13 @@ async function pollTurn(page, { baselineAssistantCount, timeoutMs = 120_000 }) {
         if (count <= baselineAssistantCount) continue;
 
         const latest = (await readLatestAssistant(page)).trim();
-        const streaming = await isStreaming(page);
+        const stop = await isStreaming(page);
+        const streaming = stop === 'visible';
 
-        if (latest && !streaming) {
+        // `unknown` blocks completion without counting as generation: the loop
+        // keeps its deadline, so an unreadable probe delays the answer rather
+        // than turning a half-written one into the final result.
+        if (latest && stop === 'absent') {
             if (latest === stableText) {
                 if (Date.now() - stableSince >= 1500) {
                     return { ok: true, answerText: latest, warnings: [] };
@@ -112,7 +120,7 @@ async function pollTurn(page, { baselineAssistantCount, timeoutMs = 120_000 }) {
                 stableText = latest;
                 stableSince = Date.now();
             }
-        } else if (streaming) {
+        } else if (streaming || stop === 'unknown') {
             stableText = '';
             stableSince = 0;
         }

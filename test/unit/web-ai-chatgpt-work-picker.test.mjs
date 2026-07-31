@@ -277,7 +277,7 @@ describe('isWorkSession', () => {
 
 // --- pollWorkSession with fake pages ---
 
-function fakeWorkPollPage({ status = 'running', answerText = null, url = 'https://chatgpt.com/c/abc-123' } = {}) {
+function fakeWorkPollPage({ status = 'running', answerText = null, url = 'https://chatgpt.com/c/abc-123', stopUnreadable = false } = {}) {
     return {
         url: () => url,
         waitForTimeout: async () => {},
@@ -288,10 +288,12 @@ function fakeWorkPollPage({ status = 'running', answerText = null, url = 'https:
         }),
         locator: (sel) => {
             if (sel.includes('Stop')) {
+                // Real Playwright locators always expose `all()`; the probe
+                // now treats a locator without it as unreadable.
+                if (stopUnreadable) return { all: async () => { throw new Error('detached'); } };
                 return {
-                    first: () => ({
-                        isVisible: async () => status === 'running',
-                    }),
+                    all: async () => (status === 'running' ? [{ isVisible: async () => true }] : []),
+                    first: () => ({ isVisible: async () => status === 'running' }),
                 };
             }
             if (sel.includes('Copy')) {
@@ -336,6 +338,28 @@ describe('pollWorkSession', () => {
         expect(result.answerText).toBe('The answer.');
         expect(result.surface).toBe('work');
         expect(result.responseContract).toBe('work');
+    });
+
+    it('Y12: an unreadable stop probe is not completed by a leftover Copy button', async () => {
+        // Copy is visible on EARLIER assistant turns too. Checking it before the
+        // probe verdict reported a still-generating task as finished.
+        const page = fakeWorkPollPage({ status: 'complete', answerText: 'The answer.', stopUnreadable: true });
+        const deps = { getPage: async () => page, getTargetId: async () => 'target-1' };
+
+        const failure = await pollWorkSession(deps, { vendor: 'chatgpt', timeout: 5 })
+            .then(() => null, err => err);
+
+        expect(failure).toMatchObject({ errorCode: 'provider.work-state-unknown' });
+        expect(failure.evidence).toMatchObject({ stopProbe: 'unknown' });
+    });
+
+    it('Y12b: a readable absent probe with Copy still completes', async () => {
+        // The paired case: over-applying the guard would break every real
+        // completion.
+        const page = fakeWorkPollPage({ status: 'complete', answerText: 'The answer.' });
+        const deps = { getPage: async () => page, getTargetId: async () => 'target-1' };
+        const result = await pollWorkSession(deps, { vendor: 'chatgpt', timeout: 5 });
+        expect(result.status).toBe('complete');
     });
 
     it('throws provider.work-state-unknown on unknown state (fail closed)', async () => {
@@ -385,13 +409,13 @@ describe('pollWorkSession', () => {
             }),
             locator: (sel) => {
                 if (sel.includes('Stop')) {
+                    const stopNodeVisible = async () => {
+                        callCount++;
+                        return callCount <= 2;
+                    };
                     return {
-                        first: () => ({
-                            isVisible: async () => {
-                                callCount++;
-                                return callCount <= 2;
-                            },
-                        }),
+                        all: async () => [{ isVisible: stopNodeVisible }],
+                        first: () => ({ isVisible: stopNodeVisible }),
                     };
                 }
                 if (sel.includes('Copy')) {
@@ -466,10 +490,10 @@ function fakeSubmitPage({
             }
             // Stop button
             if (sel.includes('Stop')) {
+                const visible = async () => submitted && commitAppears && tickCount >= commitDelay;
                 return {
-                    first: () => ({
-                        isVisible: async () => submitted && commitAppears && tickCount >= commitDelay,
-                    }),
+                    all: async () => [{ isVisible: visible }],
+                    first: () => ({ isVisible: visible }),
                 };
             }
             // Conversation turns
@@ -593,7 +617,10 @@ describe('submitWorkPrompt URL transition', () => {
                     };
                 }
                 if (sel.includes('Stop')) {
-                    return { first: () => ({ isVisible: async () => submitted }) };
+                    return {
+                        all: async () => [{ isVisible: async () => submitted }],
+                        first: () => ({ isVisible: async () => submitted }),
+                    };
                 }
                 if (sel.includes('conversation-turn') || sel.includes('data-message-author-role')) {
                     return {
@@ -635,7 +662,10 @@ describe('submitWorkPrompt URL transition', () => {
                     };
                 }
                 if (sel.includes('Stop')) {
-                    return { first: () => ({ isVisible: async () => submitted }) };
+                    return {
+                        all: async () => [{ isVisible: async () => submitted }],
+                        first: () => ({ isVisible: async () => submitted }),
+                    };
                 }
                 if (sel.includes('conversation-turn') || sel.includes('data-message-author-role')) {
                     return {

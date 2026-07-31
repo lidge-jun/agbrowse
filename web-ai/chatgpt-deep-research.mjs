@@ -3,7 +3,7 @@ import { updateSession, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
 import { trySaveReport, appendArtifactRecord } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { chooseDeepResearchReportRead } from './chatgpt-deep-research-report.mjs';
-import { anyStopButtonVisible } from './chatgpt-response-dom.mjs';
+import { probeStopButton } from './chatgpt-response-dom.mjs';
 
 /**
  * @typedef {Object} DeepResearchResult
@@ -69,12 +69,16 @@ async function readLatestAssistant(page) {
 }
 
 /**
- * Check if ChatGPT is currently streaming/generating.
+ * Is ChatGPT streaming/generating right now?
+ *
+ * Returns the verdict: `unknown` is not evidence of finishing, and it is not
+ * evidence of research activity either.
+ *
  * @param {any} page
- * @returns {Promise<boolean>}
+ * @returns {Promise<'visible'|'absent'|'unknown'>}
  */
 async function isStreaming(page) {
-    return anyStopButtonVisible(page);
+    return probeStopButton(page);
 }
 
 /**
@@ -272,7 +276,10 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
         const count = await countAssistants(page);
         const progress = await hasProgressIndicator(page);
         if (progress) researchActivityObserved = true;
-        if (count > baselineCount || await isStreaming(page) || progress) {
+        // An unreadable probe leaves the startup wait — the main poll is
+        // bounded — but it is NOT recorded as research activity. Counting a
+        // failed read as evidence would claim work that was never observed.
+        if (count > baselineCount || (await isStreaming(page)) !== 'absent' || progress) {
             break;
         }
         await page.waitForTimeout(500);
@@ -285,12 +292,14 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
     while (Date.now() < deadline) {
         await page.waitForTimeout(2000);
 
-        const streaming = await isStreaming(page);
+        const stop = await isStreaming(page);
         const progress = await hasProgressIndicator(page);
         if (progress) researchActivityObserved = true;
         const count = await countAssistants(page);
 
-        if (count > baselineCount && !streaming && !progress) {
+        // Extracting a report on an unreadable probe would publish a partial
+        // research run as the finished product.
+        if (count > baselineCount && stop === 'absent' && !progress) {
             const latest = (await readLatestAssistant(page)).trim();
             if (latest) {
                 if (latest === stableText) {
@@ -402,7 +411,7 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
 
     while (Date.now() < deadline) {
         await page.waitForTimeout(2000);
-        if (await isStreaming(page) || await hasProgressIndicator(page)) {
+        if ((await isStreaming(page)) !== 'absent' || await hasProgressIndicator(page)) {
             stableText = '';
             stableSince = 0;
             continue;

@@ -51,6 +51,17 @@ export function readAssistantTurnOrderingInPage(selectors) {
 /**
  * Node-side probe: is a composer-scoped stop button visible within `scope`?
  *
+ * Reports a VERDICT, because "no stop button" and "could not look" are
+ * different facts and the first of them is how this codebase decides a
+ * response has finished. Every consumer that treats a bare `false` as
+ * completion evidence would otherwise finish early on a failed read.
+ *
+ * `unknown` is the answer whenever the selectors and nodes could not be fully
+ * enumerated and inspected — a throw, a malformed result, or a locator/node
+ * missing the API needed to check it. Finding a visible node short-circuits to
+ * `visible`: that is positive proof of generation, and another selector
+ * failing cannot retract it.
+ *
  * Visibility is REQUIRED — a present-but-hidden stop node is not generation
  * evidence. This is the same semantic the main ChatGPT poll path uses, and it
  * is the shared predicate every ChatGPT surface must consult so page-wide
@@ -62,45 +73,64 @@ export function readAssistantTurnOrderingInPage(selectors) {
  * idle mid-generation (premature completion in the multi-turn poll loop).
  *
  * @param {any} scope Playwright-like locator root (a page, or a `main` region locator).
+ * @returns {Promise<'visible'|'absent'|'unknown'>}
+ */
+export async function probeStopButton(scope) {
+    if (!scope || typeof scope.locator !== 'function') return 'unknown';
+    let anySelectorUninspected = false;
+    for (const selector of CHATGPT_STOP_SELECTORS) {
+        let locator;
+        try {
+            locator = scope.locator(selector);
+        } catch {
+            anySelectorUninspected = true;
+            continue;
+        }
+        // A real Playwright locator always exposes `all()`; only partial test
+        // doubles do not, and guessing at their shape is what this verdict is
+        // meant to stop.
+        if (!locator || typeof locator.all !== 'function') {
+            anySelectorUninspected = true;
+            continue;
+        }
+        let nodes;
+        try {
+            nodes = await locator.all();
+        } catch {
+            anySelectorUninspected = true;
+            continue;
+        }
+        if (!Array.isArray(nodes)) {
+            anySelectorUninspected = true;
+            continue;
+        }
+        let anyNodeUninspected = false;
+        for (const node of nodes) {
+            if (typeof node?.isVisible !== 'function') {
+                anyNodeUninspected = true;
+                continue;
+            }
+            try {
+                if (await node.isVisible()) return 'visible';
+            } catch {
+                anyNodeUninspected = true;
+            }
+        }
+        if (anyNodeUninspected) anySelectorUninspected = true;
+    }
+    return anySelectorUninspected ? 'unknown' : 'absent';
+}
+
+/**
+ * Boolean view of {@link probeStopButton}, for callers that only need "is it
+ * generating right now". `unknown` reads as false here, so any caller that
+ * treats false as COMPLETION evidence must use the verdict directly.
+ *
+ * @param {any} scope
  * @returns {Promise<boolean>}
  */
 export async function anyStopButtonVisible(scope) {
-    if (!scope || typeof scope.locator !== 'function') return false;
-    for (const selector of CHATGPT_STOP_SELECTORS) {
-        const locator = scope.locator(selector);
-        if (!locator) continue;
-        if (typeof locator.all === 'function') {
-            const nodes = await locator.all().catch(() => []);
-            for (const node of nodes) {
-                if (typeof node?.isVisible === 'function'
-                    && await node.isVisible().catch(() => false)) return true;
-            }
-            if (nodes.length) continue;
-            // An empty `all()` with a visible `first()` only happens on partial
-            // locator doubles; with a real Playwright locator `first()` is not
-            // visible when there are no matches, so this costs nothing and keeps
-            // those doubles working.
-            const firstOfEmpty = locator.first?.();
-            if (typeof firstOfEmpty?.isVisible === 'function'
-                && await firstOfEmpty.isVisible().catch(() => false)) return true;
-            continue;
-        }
-        // Fallback for locator shapes without `all()`: walk by index.
-        const total = typeof locator.count === 'function'
-            ? await locator.count().catch(() => 0)
-            : 0;
-        for (let i = 0; i < total; i += 1) {
-            const node = locator.nth?.(i);
-            if (typeof node?.isVisible === 'function'
-                && await node.isVisible().catch(() => false)) return true;
-        }
-        if (total === 0) {
-            const first = locator.first?.();
-            if (typeof first?.isVisible === 'function'
-                && await first.isVisible().catch(() => false)) return true;
-        }
-    }
-    return false;
+    return (await probeStopButton(scope)) === 'visible';
 }
 
 /**
@@ -118,7 +148,15 @@ export async function anyStopButtonVisible(scope) {
  * @returns {any} the `main` locator when available, else the page itself
  */
 export function scopeToMainRegion(page) {
-    const main = page?.locator?.('main');
+    // A throwing `locator()` must not escape as a raw error: callers treat the
+    // returned scope as probe input, and `probeStopButton` turns a scope it
+    // cannot use into `unknown` — which is the answer we want here too.
+    let main;
+    try {
+        main = page?.locator?.('main');
+    } catch {
+        return page;
+    }
     return (main && typeof main.locator === 'function') ? main : page;
 }
 

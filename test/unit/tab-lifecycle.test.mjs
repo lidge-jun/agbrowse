@@ -721,18 +721,18 @@ describe('unreadable liveness does not destroy lease or health state (B36)', () 
         const temp = createTempBrowserEnv('agbrowse-close-unknown-');
         const previousHome = process.env.BROWSER_AGENT_HOME;
         process.env.BROWSER_AGENT_HOME = temp.homeDir;
-        globalThis.fetch = async (input) => {
-            // Close attempt fails, and the follow-up liveness read is unreadable.
-            if (String(input).includes('/json/close/')) throw new Error('close refused');
-            throw new Error('socket hang up');
-        };
+        // A port nothing is serving: `closeTab` opens a real CDP session, so on
+        // 9222 a browser that happens to be running would close the tab for real
+        // and the lease removal would be correct rather than a bug.
+        const deadPort = 65_517;
+        globalThis.fetch = async () => { throw new Error('socket hang up'); };
         try {
             writeFileSync(join(temp.homeDir, 'web-ai-tab-leases.json'), JSON.stringify({
                 version: 1,
-                leases: [completedLease('close-failed', '9222')],
+                leases: [completedLease('close-failed', String(deadPort))],
             }));
 
-            await cleanupLeasedTabs(9222, { completedSessions: true, browserProfileKey: '9222' });
+            await cleanupLeasedTabs(deadPort, { completedSessions: true, browserProfileKey: String(deadPort) });
 
             expect((await listLeases()).map(lease => lease.targetId)).toEqual(['close-failed']);
         } finally {
@@ -1017,17 +1017,16 @@ describe('unverified liveness reaches callers as its own outcome (B36)', () => {
         const session = makeSessionRecord('target-closed');
 
         // Liveness was established as gone, so recovery may open a replacement.
-        // The unverified short-circuit returns cleanly BEFORE tab creation, so
-        // failing inside `createTab` is itself the evidence we got past it.
+        // The unverified short-circuit returns BEFORE tab creation, so anything
+        // other than that verdict proves we got past it. Whether the CDP dial
+        // then succeeds depends on whether a browser happens to be listening,
+        // so the assertion must not depend on it.
         const outcome = await recoverSessionTab(
             { getPort: () => 9222 },
             /** @type {any} */ (getSession(session.sessionId)),
         ).then(result => result.strategy, err => `threw:${err?.message || 'unknown'}`);
 
         expect(outcome).not.toBe('unverified');
-        // It got as far as dialling CDP to make the replacement tab, which is
-        // strictly past the short-circuit.
-        expect(String(outcome)).toMatch(/connectOverCDP|CDP session/);
     });
 });
 

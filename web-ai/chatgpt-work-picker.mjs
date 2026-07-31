@@ -13,7 +13,7 @@ import {
     detectChatGptWorkAvailability,
     workSurfaceUnsupportedError,
 } from './product-surfaces.mjs';
-import { anyStopButtonVisible, scopeToMainRegion } from './chatgpt-response-dom.mjs';
+import { probeStopButton, scopeToMainRegion } from './chatgpt-response-dom.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
 
@@ -746,6 +746,10 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
     const deadline = Date.now() + commitTimeout;
     const normalizedPrompt = prompt.toLowerCase().replace(/\s+/g, ' ').trim();
     const promptPrefix = normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 120));
+    // Sticky across ticks: if the stop button was ever unreadable, neither a
+    // later success nor a timeout should claim it was checked.
+    /** @type {'visible'|'absent'|'unknown'|null} */
+    let lastStopProbe = null;
 
     while (Date.now() <= deadline) {
         const turnLocators = await page.locator(CONVERSATION_TURN_SELECTOR).all().catch(() => []);
@@ -765,7 +769,12 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
 
         // Composer-scoped and main-scoped: a page-wide "Stop"-labelled control
         // (dictation, sidebar) is not running evidence.
-        const stopVisible = await anyStopButtonVisible(scopeToMainRegion(page));
+        const stopProbe = await probeStopButton(scopeToMainRegion(page));
+        const stopVisible = stopProbe === 'visible';
+        // Not running evidence — an unreadable probe proves nothing. But record
+        // it, so a commit that succeeded on other evidence, or a timeout, says
+        // whether the stop button was ever actually checked.
+        if (stopProbe === 'unknown') lastStopProbe = 'unknown';
         const thinkingEl = page.getByText?.('Thinking', { exact: false });
         const thinkingVisible = thinkingEl
             ? await thinkingEl.first().isVisible().catch(() => false)
@@ -812,7 +821,9 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
                 taskUrl: resolvedUrl,
                 taskId: taskId,
                 turnsCount: turnLocators.length,
-                warnings,
+                warnings: lastStopProbe === 'unknown'
+                    ? [...warnings, 'work-stop-probe-unverified']
+                    : warnings,
             };
         }
 
@@ -829,6 +840,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
             commitTimeoutMs: commitTimeout,
             baselineUrl,
             currentUrl: typeof page.url === 'function' ? page.url() : null,
+            stopProbe: lastStopProbe,
         },
     });
 }
@@ -1021,7 +1033,8 @@ export async function readWorkTaskState(page) {
     // conversation named "SMOKE_C3_THINKING_OK" matched getByText('Thinking')
     // and pinned the classifier to running forever).
     const mainRegion = scopeToMainRegion(page);
-    const stopVisible = await anyStopButtonVisible(mainRegion);
+    const stopProbe = await probeStopButton(mainRegion);
+    const stopVisible = stopProbe === 'visible';
 
     const thinkingEl = mainRegion.getByText?.('Thinking', { exact: true });
     const thinkingVisible = thinkingEl ? await thinkingEl.first().isVisible().catch(() => false) : false;
@@ -1031,7 +1044,20 @@ export async function readWorkTaskState(page) {
             surface: 'work',
             status: 'running',
             answerText: null,
-            evidence: { stopVisible, thinkingVisible, capturedAt: new Date().toISOString() },
+            evidence: { stopVisible, stopProbe, thinkingVisible, capturedAt: new Date().toISOString() },
+        };
+    }
+
+    // Ordering matters: the Copy check below would otherwise call this complete.
+    // Copy is visible on EARLIER assistant turns too, so an unreadable stop
+    // probe plus a leftover Copy button reads as "finished" while the current
+    // response is still being written.
+    if (stopProbe === 'unknown') {
+        return {
+            surface: 'work',
+            status: 'unknown',
+            answerText: null,
+            evidence: { stopVisible: null, stopProbe, thinkingVisible, capturedAt: new Date().toISOString() },
         };
     }
 
@@ -1053,7 +1079,7 @@ export async function readWorkTaskState(page) {
             surface: 'work',
             status: 'complete',
             answerText: answerText ? answerText.trim() : null,
-            evidence: { copyVisible, stopVisible: false, assistantTurnCount: count, capturedAt: new Date().toISOString() },
+            evidence: { copyVisible, stopVisible: false, stopProbe, assistantTurnCount: count, capturedAt: new Date().toISOString() },
         };
     }
 
@@ -1062,7 +1088,7 @@ export async function readWorkTaskState(page) {
         surface: 'work',
         status: 'unknown',
         answerText: null,
-        evidence: { stopVisible, thinkingVisible, copyVisible, capturedAt: new Date().toISOString() },
+        evidence: { stopVisible, stopProbe, thinkingVisible, copyVisible, capturedAt: new Date().toISOString() },
     };
 }
 

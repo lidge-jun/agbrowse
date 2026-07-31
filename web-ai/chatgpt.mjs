@@ -57,7 +57,7 @@ import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
     CHATGPT_TURN_SELECTORS,
-    anyStopButtonVisible,
+    probeStopButton,
     isActiveState,
     readAssistantSnapshotSources,
     readAssistantTurnOrderingInPage,
@@ -1229,7 +1229,11 @@ async function readActivityState(page) {
     // signal, and a page double whose `evaluate` cannot honor the options object
     // would otherwise report `none` while a stop button is plainly visible.
     try {
-        if (await anyStopButtonVisible(page)) return { strength: 'strong', evidence: 'stop-button' };
+        const stop = await probeStopButton(page);
+        if (stop === 'visible') return { strength: 'strong', evidence: 'stop-button' };
+        // Could not look. Falling through to the DOM probe would let a
+        // successful "nothing here" read stand in for evidence we never had.
+        if (stop === 'unknown') return { strength: 'unknown', evidence: 'stop-probe-failed' };
     } catch { /* fall through to the DOM probe */ }
     let state;
     try {

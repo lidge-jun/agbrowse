@@ -434,12 +434,15 @@ function createStreamingRecoveryChatGptPage(text) {
             }
         },
         waitForTimeout: async (ms) => new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 10))),
-        locator: (selector) => ({
-            first: () => ({
-                isVisible: async () => selector.includes('stop-button') || selector.includes('Stop'),
-            }),
-            all: async () => [],
-        }),
+        // A real locator lists its matches; the stop probe reads `all()` and
+        // treats an empty list as "no stop button", not as a hidden one.
+        locator: (selector) => {
+            const matches = selector.includes('stop-button') || selector.includes('Stop');
+            return {
+                first: () => ({ isVisible: async () => matches }),
+                all: async () => (matches ? [{ isVisible: async () => true }] : []),
+            };
+        },
     };
 }
 
@@ -485,7 +488,9 @@ function createCopyMarkdownDeferredChatGptPage(text) {
             first: () => ({
                 isVisible: async () => stopVisible && (selector.includes('stop-button') || selector.includes('Stop')),
             }),
-            all: async () => [],
+            all: async () => (stopVisible && (selector.includes('stop-button') || selector.includes('Stop'))
+                ? [{ isVisible: async () => true }]
+                : []),
         }),
     };
 }

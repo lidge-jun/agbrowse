@@ -29,10 +29,15 @@ const REAL_REPORT = [
 
 const drResumePage = ({ assistant }) => ({
     waitForTimeout: async () => undefined,
-    locator: () => ({
-        first: () => ({ isVisible: async () => false }),
-        all: async () => (assistant ? [{ innerText: async () => assistant }] : []),
-    }),
+    // Selector-aware: returning assistant turns for the stop-button selector too
+    // handed the probe nodes with no `isVisible`, which now reads as unreadable
+    // rather than as "not streaming".
+    locator: (selector = '') => (/stop|Stop/.test(selector)
+        ? { first: () => ({ isVisible: async () => false }), all: async () => [] }
+        : {
+            first: () => ({ isVisible: async () => false }),
+            all: async () => (assistant ? [{ innerText: async () => assistant }] : []),
+        }),
     evaluate: async () => [],
     frames: () => [],
     url: () => 'https://chatgpt.com/c/resumed',

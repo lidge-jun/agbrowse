@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import {
+    CHATGPT_STOP_SELECTORS,
     anyStopButtonVisible,
+    probeStopButton,
     scopeToMainRegion,
 } from '../../web-ai/chatgpt-response-dom.mjs';
 
@@ -116,12 +118,15 @@ describe('ChatGPT stop-button scoping (G1b)', () => {
     });
 
     it('routes every ChatGPT streaming probe through the shared helper', () => {
+        // The shared helper is now `probeStopButton`, which reports a verdict.
+        // The rule is unchanged: no surface may hand-roll its own stop probe,
+        // or a page-wide "Stop"-labelled control could be read as streaming.
         const expected = {
-            'chatgpt-deep-research.mjs': [/anyStopButtonVisible\(page\)/],
-            'chatgpt-multi-turn.mjs': [/anyStopButtonVisible\(page\)/],
+            'chatgpt-deep-research.mjs': [/probeStopButton\(page\)/],
+            'chatgpt-multi-turn.mjs': [/probeStopButton\(page\)/],
             'chatgpt-work-picker.mjs': [
-                /anyStopButtonVisible\(scopeToMainRegion\(page\)\)/,
-                /anyStopButtonVisible\(mainRegion\)/,
+                /probeStopButton\(scopeToMainRegion\(page\)\)/,
+                /probeStopButton\(mainRegion\)/,
             ],
         };
         for (const [file, callPatterns] of Object.entries(expected)) {
@@ -132,5 +137,105 @@ describe('ChatGPT stop-button scoping (G1b)', () => {
             expect(src, `${file} must not keep a page-wide Stop matcher`)
                 .not.toMatch(/locator\('button\[aria-label\*="Stop" i\]'\)/);
         }
+    });
+});
+
+/**
+ * The stop probe reports whether it could LOOK (issue #88, boundary B04).
+ *
+ * "No stop button" is how this codebase decides a response finished, and every
+ * failure path used to collapse into that same answer. Multi-turn returns after
+ * 1.5s of it, deep research extracts a report after 5s, and Work reads it as a
+ * completed task — so an unreadable probe published a half-written response.
+ */
+describe('stop probe verdict (B04)', () => {
+    /** @param {Record<string, any>} behaviour */
+    function scopeWith(behaviour) {
+        return { locator: (selector) => behaviour[selector] ?? { all: async () => [] } };
+    }
+
+    const [firstSelector, secondSelector] = CHATGPT_STOP_SELECTORS;
+
+    it('Y1: a visible stop node reports visible', async () => {
+        const scope = scopeWith({ [firstSelector]: { all: async () => [{ isVisible: async () => true }] } });
+        await expect(probeStopButton(scope)).resolves.toBe('visible');
+    });
+
+    it('Y2: every selector examined with nothing visible reports absent', async () => {
+        const scope = scopeWith({});
+        await expect(probeStopButton(scope)).resolves.toBe('absent');
+    });
+
+    it('Y3: a throwing all() reports unknown', async () => {
+        const scope = scopeWith({ [firstSelector]: { all: async () => { throw new Error('detached'); } } });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y4: a throwing isVisible() reports unknown', async () => {
+        const scope = scopeWith({
+            [firstSelector]: { all: async () => [{ isVisible: async () => { throw new Error('detached'); } }] },
+        });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y5: one failed selector poisons an otherwise empty result', async () => {
+        // The selectors are alternative paths: the stop button may have been
+        // behind the one that failed.
+        const scope = scopeWith({
+            [firstSelector]: { all: async () => { throw new Error('detached'); } },
+            [secondSelector]: { all: async () => [] },
+        });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y6: a visible node still wins over a failed selector', async () => {
+        // Positive proof of generation; another path failing cannot retract it.
+        const scope = scopeWith({
+            [firstSelector]: { all: async () => { throw new Error('detached'); } },
+            [secondSelector]: { all: async () => [{ isVisible: async () => true }] },
+        });
+        await expect(probeStopButton(scope)).resolves.toBe('visible');
+    });
+
+    it('Y7: a scope without locator() reports unknown', async () => {
+        await expect(probeStopButton(null)).resolves.toBe('unknown');
+        await expect(probeStopButton({})).resolves.toBe('unknown');
+    });
+
+    it('Y14: a locator() that throws synchronously reports unknown', async () => {
+        const scope = { locator: () => { throw new Error('bad selector'); } };
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y15: a non-array all() reports unknown', async () => {
+        const scope = scopeWith({ [firstSelector]: { all: async () => null } });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y16: a locator without all() reports unknown', async () => {
+        // Real Playwright locators always expose `all()`. Guessing at a partial
+        // double's shape is exactly what this verdict exists to stop.
+        const scope = scopeWith({ [firstSelector]: { first: () => ({ isVisible: async () => true }) } });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('Y17: a matched node without isVisible() reports unknown', async () => {
+        const scope = scopeWith({ [firstSelector]: { all: async () => [{}] } });
+        await expect(probeStopButton(scope)).resolves.toBe('unknown');
+    });
+
+    it('anyStopButtonVisible stays a boolean view of the verdict', async () => {
+        const visible = scopeWith({ [firstSelector]: { all: async () => [{ isVisible: async () => true }] } });
+        const unknown = scopeWith({ [firstSelector]: { all: async () => { throw new Error('detached'); } } });
+        await expect(anyStopButtonVisible(visible)).resolves.toBe(true);
+        await expect(anyStopButtonVisible(unknown)).resolves.toBe(false);
+    });
+
+    it('Y18: scopeToMainRegion survives a throwing locator()', async () => {
+        // It used to escape as a raw error, so the Work path never reached the
+        // typed unknown contract at all.
+        const page = { locator: () => { throw new Error('detached'); } };
+        expect(() => scopeToMainRegion(page)).not.toThrow();
+        await expect(probeStopButton(scopeToMainRegion(page))).resolves.toBe('unknown');
     });
 });
