@@ -886,17 +886,16 @@ const WORK_POLL_HEARTBEAT_SEC = 30;
  * @returns {Promise<Record<string, unknown>>}
  */
 export async function pollWorkSession(deps, input = {}) {
-    const { getSession, updateSession, resolveTimeoutBudgetSec } = await import('./session.mjs');
+    const { getSession, updateSession, resolvePollTimeoutSec } = await import('./session.mjs');
 
     const vendor = input.vendor || 'chatgpt';
     const sessionId = input.session || input.sessionId;
     const session = sessionId ? getSession(sessionId) : null;
 
-    const timeoutSec = Math.max(1,
-        Number(input.timeout) > 0
-            ? Number(input.timeout)
-            : resolveTimeoutBudgetSec(input, session, vendor),
-    );
+    // Not floored at a whole second: this becomes a hard deadline below, and
+    // rounding a sub-second remainder up is how a poll outlives the session it
+    // belongs to. `resolvePollTimeoutSec` already refuses to return zero.
+    const timeoutSec = resolvePollTimeoutSec(input, session, vendor);
     const deadline = Date.now() + timeoutSec * 1000;
     const startedAt = Date.now();
     let lastHeartbeat = 0;
@@ -992,7 +991,10 @@ export async function pollWorkSession(deps, input = {}) {
             lastHeartbeat = now;
         }
 
-        await page.waitForTimeout?.(WORK_POLL_INTERVAL_MS);
+        // Capped by what is left. The loop condition is checked before this
+        // wait, so on a deadline with under 2s remaining the wait itself is
+        // the overrun.
+        await page.waitForTimeout?.(Math.max(1, Math.min(WORK_POLL_INTERVAL_MS, deadline - Date.now())));
     }
 
     // Deadline reached — timeout

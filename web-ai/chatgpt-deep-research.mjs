@@ -290,7 +290,10 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        await page.waitForTimeout(2000);
+        // Capped by what is left: the loop condition is checked before the
+        // wait, so a fixed 2s tick is itself the overrun on a deadline with
+        // less than that remaining.
+        await page.waitForTimeout(Math.max(1, Math.min(2000, deadline - Date.now())));
 
         const stop = await isStreaming(page);
         const progress = await hasProgressIndicator(page);
@@ -410,7 +413,10 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        await page.waitForTimeout(2000);
+        // Capped by what is left. A fixed 2s tick overshoots a deadline that
+        // has under two seconds on it — the loop condition is checked before
+        // the wait, not during it, so the wait itself is the overrun.
+        await page.waitForTimeout(Math.max(1, Math.min(2000, deadline - Date.now())));
         if ((await isStreaming(page)) !== 'absent' || await hasProgressIndicator(page)) {
             stableText = '';
             stableSince = 0;

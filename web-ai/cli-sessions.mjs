@@ -10,7 +10,7 @@ import { grokPollWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { resumeDeepResearch } from './chatgpt-deep-research.mjs';
 import { WebAiError } from './errors.mjs';
-import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolveTimeoutBudgetSec } from './session.mjs';
+import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolvePollTimeoutSec, resolveTimeoutBudgetSec } from './session.mjs';
 import { resolveSessionPage, withSessionPage, openConversationInNewTab } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { buildSessionDoctorReport } from './session-doctor.mjs';
@@ -105,7 +105,10 @@ export async function runSessionsCommand(args, values, deps, input) {
                     getTargetId: async () => targetId,
                     getCdpSession: async () => /** @type {any} */ (page).context?.().newCDPSession?.(page),
                 };
-                const budgetMs = resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt') * 1000;
+                // Clamped to the stored deadline. This value is used as a HARD
+                // `timeoutMs`, so the budget resolver's whole-second floor let a
+                // sub-second remainder run past the session's own deadline.
+                const budgetMs = resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt') * 1000;
                 return resumeDeepResearch(page, sessionDeps, { session: refreshed, timeoutMs: budgetMs });
             }));
             return { ...drResult, status: drResult.status || 'resumed' };
@@ -131,16 +134,12 @@ export async function runSessionsCommand(args, values, deps, input) {
                 ...pollInput,
                 vendor: refreshed.vendor,
                 session: refreshed.sessionId,
-                // Resolve a timeout here ONLY when the caller gave one. Resolving
-                // it unconditionally floored the stored remainder to a whole
-                // second and handed it down as if the user had typed it, which
-                // is indistinguishable from a real override — so a session with
-                // 400ms left was granted a fresh second past its own deadline.
-                // Omitting it lets the provider read the stored deadline in
-                // milliseconds and refuse outright when it has already passed.
-                ...(Number(input.timeout) > 0
-                    ? { timeout: resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt') }
-                    : {}),
+                // Clamped to the stored deadline, fractional. Resolving a plain
+                // budget floored the remainder to a whole second and handed it
+                // down as if the user had typed it. Omitting it instead is only
+                // safe for ChatGPT: Gemini and Grok read no stored deadline and
+                // fall back to their own 1200s/600s defaults.
+                timeout: resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt'),
             });
         }));
         return { ...result, status: result.status || 'resumed' };

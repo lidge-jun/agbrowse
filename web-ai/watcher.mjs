@@ -12,7 +12,7 @@ import { pollWebAi } from './chatgpt.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
-import { getSession, storedDeadlineRemainderMs, updateSession } from './session.mjs';
+import { getSession, resolvePollTimeoutSec, updateSession } from './session.mjs';
 import { isRecoverableCdpDisconnect, probeCdpLiveness } from './cdp-liveness.mjs';
 import { isCdpDisconnectError, reattachSessionPage, withSessionPage, urlsCompatible } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
@@ -664,29 +664,6 @@ async function ensureWatcherAttached(page, session, options) {
 }
 
 /**
- * The per-poll slice, never longer than what the session has left.
- *
- * A watch tick asks for a fixed slice (30s by default) and the provider treats
- * an explicit timeout as the caller's authority, so an unclamped slice let a
- * nearly-expired session keep polling well past its own deadline. Sessions
- * without a stored deadline are unaffected.
- *
- * Floors at one second rather than zero: the watcher's own expiry check runs
- * before this (`isDeadlineExpired`, :188), so a session reaching here still has
- * time, and a zero slice would turn a live poll into an immediate timeout.
- *
- * @param {any} session
- * @param {number} requestedSec
- * @returns {number}
- */
-function clampToStoredDeadlineSec(session, requestedSec) {
-    const requested = Number(requestedSec) > 0 ? Number(requestedSec) : 1;
-    const remainderMs = storedDeadlineRemainderMs(session);
-    if (remainderMs === null) return requested;
-    return Math.max(1, Math.min(requested, remainderMs / 1000));
-}
-
-/**
  * @param {any} deps
  * @param {any} vendor
  * @param {any} session
@@ -701,13 +678,17 @@ async function callVendorPoll(deps, vendor, session, options) {
         return await pollFn(deps, {
             vendor,
             session: session.sessionId,
-            // Clamped to the stored deadline. This is a PER-POLL slice — 30s by
-            // default — and passing it straight through let a session with
-            // 400ms of budget left poll for another 30 seconds past its own
-            // deadline, because the provider treats an explicit timeout as the
-            // caller's authority. The slice may be shorter than requested; it
-            // may never be longer than what the session has left.
-            timeout: String(clampToStoredDeadlineSec(session, Number(options.pollTimeoutSec))),
+            // Clamped to the stored deadline, and fractional. This is a PER-POLL
+            // slice — 30s by default — and passing it straight through let a
+            // session with 400ms left poll for another 30 seconds, because the
+            // provider treats an explicit timeout as the caller's authority.
+            // A whole-second floor here was the same bug one order smaller: it
+            // rounded 400ms back up to a full second.
+            timeout: String(resolvePollTimeoutSec(
+                { timeout: options.pollTimeoutSec },
+                session,
+                vendor,
+            )),
             allowCopyMarkdownFallback: options.allowCopyMarkdownFallback === true,
             navigate: options.navigate === true,
         });

@@ -251,6 +251,31 @@ describe('watch does not poll past the session deadline', () => {
         expect(seen[0]).toBeGreaterThan(0);
     });
 
+    it('does not round a sub-second remainder back up to a whole second', async () => {
+        // The first version of this clamp floored at 1s, which is the same
+        // defect one order smaller: a session with 400ms left was still handed
+        // a full second. A live session really can have under a second on it —
+        // the watcher's expiry check runs earlier, and page resolution happens
+        // in between.
+        const session = createWatcherSession({
+            deadlineAt: new Date(Date.now() + 400).toISOString(),
+        });
+        const seen = [];
+        pollState.impl = async (_deps, input) => {
+            seen.push(Number(input.timeout));
+            return { ok: true, status: 'polling', answerText: '' };
+        };
+
+        await watchSessionOnce(baseDeps(), { session: session.sessionId, pollTimeoutSec: 30 }, {
+            probeCdpLiveness: vi.fn(async () => ({ endpointReachable: true, targetFound: true })),
+            reattachSessionPage: vi.fn(),
+        });
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toBeLessThan(1);
+        expect(seen[0]).toBeGreaterThan(0);
+    });
+
     it('still passes the requested slice when the session has plenty of budget', async () => {
         // The paired assertion: a clamp that always shortened would satisfy the
         // test above and break every ordinary watch tick.

@@ -523,6 +523,40 @@ export function storedDeadlineRemainderMs(session = null, nowMs = Date.now()) {
 }
 
 /**
+ * The timeout to hand a provider poll, in seconds, never outliving the stored
+ * deadline.
+ *
+ * Every entry point that resumes an existing session needs this, and each one
+ * got it wrong differently. Resolving a budget and passing it down floored the
+ * remainder to a whole second, which reads to the provider as an explicit
+ * `--timeout` the user typed. Omitting it instead is only safe for ChatGPT,
+ * whose wrapper reads `deadlineAt` itself — Gemini and Grok fall back to their
+ * own 1200s and 600s defaults (`gemini-live.mjs:646`, `grok-live.mjs:277`), so
+ * omitting turns a 400ms remainder into twenty minutes.
+ *
+ * Fractional by design. Returning whole seconds is what let a sub-second
+ * remainder round up past the deadline it was supposed to enforce.
+ *
+ * @param {WebAiEnvelope} [input] the caller's own request; an explicit timeout wins
+ * @param {WebAiSession|null} [session]
+ * @param {string} [vendor]
+ * @param {number} [nowMs]
+ * @returns {number} seconds, > 0; approaches zero as the deadline arrives
+ */
+export function resolvePollTimeoutSec(input = {}, session = null, vendor = 'chatgpt', nowMs = Date.now()) {
+    const explicitSec = Number(input.timeout);
+    const requestedSec = Number.isFinite(explicitSec) && explicitSec > 0
+        ? explicitSec
+        : resolveTimeoutBudgetSec(input, session, vendor, nowMs);
+    const remainderMs = storedDeadlineRemainderMs(session, nowMs);
+    if (remainderMs === null) return requestedSec;
+    // Never zero or negative: a provider reads that as "no budget" and some
+    // floor it back up. Callers that must refuse an expired session check the
+    // remainder themselves — this function's job is only to not exceed it.
+    return Math.max(0.001, Math.min(requestedSec, remainderMs / 1000));
+}
+
+/**
  * Resolve one polling budget in seconds.
  * Priority: explicit timeout -> stored deadline remainder -> tier/vendor default.
  * @param {WebAiEnvelope} [input]

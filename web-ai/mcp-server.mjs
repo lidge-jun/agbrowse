@@ -11,7 +11,7 @@ import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiSendWebAi, geminiPollWebAi } from './gemini-live.mjs';
 import { grokSendWebAi, grokPollWebAi } from './grok-live.mjs';
 import { runDoctor } from './doctor.mjs';
-import { getSession, resolveTimeoutBudgetSec } from './session.mjs';
+import { getSession, resolvePollTimeoutSec } from './session.mjs';
 import {
     captureCopiedResponseText,
     CHATGPT_COPY_SELECTORS,
@@ -352,20 +352,15 @@ async function runMcpSessionPoll(name, args, deps) {
                     ...args,
                     vendor: session.vendor || provider,
                     session: session.sessionId,
-                    // Only when the caller supplied one. Resolving it here
-                    // unconditionally floored the stored remainder to a whole
-                    // second and passed it down as an explicit override, which
-                    // let an expired session poll for another second. Leaving
-                    // it off lets the provider use the millisecond remainder.
-                    ...(Number(args?.timeout) > 0
-                        ? {
-                            timeout: resolveTimeoutBudgetSec(
-                                args,
-                                session,
-                                session.vendor || provider,
-                            ),
-                        }
-                        : {}),
+                    // Clamped to the stored deadline, fractional. A plain budget
+                    // floored the remainder to a whole second and read as an
+                    // explicit override; omitting it would hand Gemini and Grok
+                    // their own multi-minute defaults instead.
+                    timeout: resolvePollTimeoutSec(
+                        args,
+                        session,
+                        session.vendor || provider,
+                    ),
                 });
             });
         }),
