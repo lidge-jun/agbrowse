@@ -538,13 +538,20 @@ export function storedDeadlineRemainderMs(session = null, nowMs = Date.now()) {
  *
  * @param {string} sessionId
  * @param {string} [fallbackVendor]
- * @param {number} [nowMs]
+ * @param {number} [nowMs] explicit clock for deterministic tests; otherwise
+ *   sampled AFTER the store read
  * @returns {Record<string, unknown>|null}
  */
-export function expiredSessionTimeoutResult(sessionId, fallbackVendor = 'chatgpt', nowMs = Date.now()) {
+export function expiredSessionTimeoutResult(sessionId, fallbackVendor = 'chatgpt', nowMs = undefined) {
     const session = getSession(sessionId);
     if (!session) return null;
-    const remainderMs = storedDeadlineRemainderMs(session, nowMs);
+    // Sampled AFTER the read, not as a default parameter. `getSession` takes
+    // the store lock, which retries and can block for seconds; a clock read
+    // before it would compare a fresh session against a stale time and let an
+    // already-expired session through. A caller-supplied `nowMs` still wins so
+    // tests stay deterministic.
+    const effectiveNowMs = nowMs === undefined ? Date.now() : nowMs;
+    const remainderMs = storedDeadlineRemainderMs(session, effectiveNowMs);
     if (remainderMs === null || remainderMs > 0) return null;
     return {
         ok: false,

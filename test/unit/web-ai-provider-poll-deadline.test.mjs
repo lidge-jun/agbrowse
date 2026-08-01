@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSession, saveBaseline } from '../../web-ai/session.mjs';
+import { createSession, expiredSessionTimeoutResult, saveBaseline, updateSession } from '../../web-ai/session.mjs';
 import { geminiPollWebAi } from '../../web-ai/gemini-live.mjs';
 import { grokPollWebAi } from '../../web-ai/grok-live.mjs';
 import { runSessionsCommand } from '../../web-ai/cli-sessions.mjs';
+import { runWebAiCli } from '../../web-ai/cli.mjs';
+import { handleMcpMessage } from '../../web-ai/mcp-server.mjs';
 import { withSessionCommandLock } from '../../web-ai/session-store.mjs';
 
 /**
@@ -263,5 +265,138 @@ describe('an expired session is refused before its page is opened', () => {
         expect(resumed.status).toBe('timeout');
         expect(resumed.errorCode).toBe('provider.poll-timeout');
         expect(pageRequests).toBe(0);
+    }, 20_000);
+
+    it('poll --session returns a timeout without resolving a page', async () => {
+        const url = 'https://chatgpt.com/c/expired-cli-poll';
+        saveBaseline({ vendor: 'chatgpt', url, assistantCount: 0, envelope: { vendor: 'chatgpt', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-expired-cli-poll',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() - 5_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const deps = {
+            getPort: () => 9222,
+            getPage: async () => { pageRequests += 1; throw new Error('poll must not open a page'); },
+            getTargetId: async () => 'target-expired-cli-poll',
+        };
+
+        const result = await runWebAiCli(['poll', '--session', session.sessionId, '--json'], deps);
+
+        expect(result.status).toBe('timeout');
+        expect(result.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+    }, 20_000);
+
+    it('the MCP session poll returns a timeout without resolving a page', async () => {
+        const url = 'https://chatgpt.com/c/expired-mcp';
+        saveBaseline({ vendor: 'chatgpt', url, assistantCount: 0, envelope: { vendor: 'chatgpt', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-expired-mcp',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() - 5_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const deps = {
+            getPort: () => 9222,
+            getPage: async () => { pageRequests += 1; throw new Error('MCP poll must not open a page'); },
+            getTargetId: async () => 'target-expired-mcp',
+        };
+
+        const response = await handleMcpMessage({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'web_ai_wait_response', arguments: { sessionId: session.sessionId } },
+        }, deps);
+
+        const payload = JSON.parse(response.result.content[0].text);
+        expect(payload.status).toBe('timeout');
+        expect(payload.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+    }, 20_000);
+});
+
+/**
+ * The helper itself, not just its call sites. It re-reads the session through
+ * the store lock, so WHEN it reads the clock matters: sampling before that
+ * blocking read compares a fresh session against a stale time.
+ */
+describe('expiredSessionTimeoutResult', () => {
+    /** @param {number} offsetMs */
+    function sessionWithDeadline(offsetMs, slug) {
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: `target-${slug}`,
+                conversationUrl: `https://chatgpt.com/c/${slug}`,
+                deadlineAt: new Date(Date.now() + offsetMs).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('returns null while the session still has time', () => {
+        const session = sessionWithDeadline(60_000, 'helper-live');
+        expect(expiredSessionTimeoutResult(session.sessionId, 'chatgpt')).toBeNull();
+    });
+
+    it('returns null for a session with no stored deadline', () => {
+        const session = sessionWithDeadline(60_000, 'helper-none');
+        updateSession(session.sessionId, { deadlineAt: null });
+        expect(expiredSessionTimeoutResult(session.sessionId, 'chatgpt')).toBeNull();
+    });
+
+    it('carries the fields a caller would otherwise use to tell the fast path apart', () => {
+        const session = sessionWithDeadline(-5_000, 'helper-expired');
+        const result = expiredSessionTimeoutResult(session.sessionId, 'chatgpt');
+        expect(result).toMatchObject({
+            ok: false,
+            status: 'timeout',
+            errorCode: 'provider.poll-timeout',
+            sessionId: session.sessionId,
+            usedFallbacks: [],
+            conversationUrl: 'https://chatgpt.com/c/helper-expired',
+        });
+    });
+
+    it('judges expiry on a clock read AFTER the store lookup', async () => {
+        // `getSession` takes the store lock, which retries and can block for
+        // seconds. A clock sampled as a DEFAULT PARAMETER is read before that
+        // blocking call, so the check compares a freshly-read session against a
+        // stale time and lets an already-expired session through.
+        //
+        // Reproduced by making the read genuinely slow: another holder keeps
+        // the store's own lock while the deadline passes. A spin loop before
+        // the call cannot show this — both clock samples would be late.
+        const session = sessionWithDeadline(150, 'helper-stale-clock');
+        const lockPath = join(tmpHome, 'web-ai-sessions.json.lock');
+        mkdirSync(tmpHome, { recursive: true });
+        // The store's retry loop sleeps SYNCHRONOUSLY, so a timer cannot
+        // release this. Instead the lock is written so it becomes stale ~300ms
+        // from now: the read blocks until then, breaks the stale lock, and
+        // completes — a real blocking read, past the session's 150ms deadline.
+        const staleAfterMs = 5 * 60 * 1000;
+        writeFileSync(lockPath, JSON.stringify({
+            pid: process.pid,
+            acquiredAt: new Date(Date.now() - staleAfterMs + 300).toISOString(),
+        }));
+
+        const result = expiredSessionTimeoutResult(session.sessionId, 'chatgpt');
+        rmSync(lockPath, { force: true });
+
+        // The read blocked past the 150ms deadline, so the answer must be
+        // "expired" even though the session was live when the call began.
+        expect(result).not.toBeNull();
+        expect(result?.errorCode).toBe('provider.poll-timeout');
     }, 20_000);
 });
