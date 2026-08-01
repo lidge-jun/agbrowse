@@ -365,6 +365,34 @@ export function patchSession(sessionId, patch) {
 }
 
 /**
+ * Append artifact descriptors to a session INSIDE the store lock.
+ *
+ * `patchSession` protects the write, not the read that produced the value: two
+ * callers that each read `artifacts` and then patch `[...previous, ...mine]`
+ * both write an array built from the same snapshot, and the second erases the
+ * first one's descriptors. Reading the current row here closes that window.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @returns {WebAiSession|null}
+ */
+export function appendSessionArtifacts(sessionId, descriptors) {
+    return withStoreLock(() => {
+        const store = readSessionStore();
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+        if (idx < 0) return null;
+        const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
+        store.sessions[idx] = {
+            ...store.sessions[idx],
+            artifacts: [...current, ...descriptors],
+            updatedAt: new Date().toISOString(),
+        };
+        writeSessionStore(store);
+        return store.sessions[idx];
+    });
+}
+
+/**
  * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
  * @returns {WebAiSession[]}
  */

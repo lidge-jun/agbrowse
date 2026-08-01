@@ -615,13 +615,13 @@ describe('saveAssistantDownloadableFiles', () => {
             const { createSession } = await import('../../web-ai/session.mjs');
             const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
             const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
-            const sessionModule = await import('../../web-ai/session.mjs');
+            const storeModule = await import('../../web-ai/session-store.mjs');
             const { readdirSync, existsSync } = await import('node:fs');
             const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
 
             vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
             const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
-            const spy = vi.spyOn(sessionModule, 'updateSession').mockImplementation(() => {
+            const spy = vi.spyOn(storeModule, 'appendSessionArtifacts').mockImplementation(() => {
                 throw new Error('store lock unavailable');
             });
 
@@ -667,6 +667,43 @@ describe('saveAssistantDownloadableFiles', () => {
             expect(result.files[0].path).not.toBe('race.txt');
             expect(readFileSync(join(dir, 'race.txt'), 'utf8')).toBe('WINNER');
             expect(readFileSync(join(dir, result.files[0].path), 'utf8')).toBe('LOSER');
+        });
+
+        it('F13: a concurrent commit cannot erase another run\'s descriptors', async () => {
+            // Sequential commits cannot interleave in one process, so the stale
+            // snapshot is created directly: another run appends WHILE this
+            // commit is between its read and its write. A read-then-write
+            // implementation writes the array it read and drops the other
+            // descriptor; appending under the store lock cannot.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts } = await import('../../web-ai/session-artifacts.mjs');
+            const { appendSessionArtifacts } = await import('../../web-ai/session-store.mjs');
+            const sessionModule = await import('../../web-ai/session.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            // The other run's descriptor, already recorded.
+            appendSessionArtifacts(session.sessionId, [{
+                kind: 'file', label: 'other.txt', path: 'other.txt', sha256: 'x',
+                validation: { type: 'generic', ok: true },
+            }]);
+
+            const staged = stageFileArtifact(session.sessionId, {
+                filename: 'mine.txt', buffer: Buffer.from('MINE'), mimeType: 'text/plain', txId: 'tx1', slot: 0,
+            });
+            // The snapshot this commit would have read before the other run
+            // landed. Appending under the lock never consults it; reading and
+            // rewriting the whole array does, and loses `other.txt`.
+            const spy = vi.spyOn(sessionModule, 'getSession').mockImplementation((id) => ({
+                sessionId: id, vendor: 'chatgpt', artifacts: [],
+            }));
+            try {
+                expect(commitStagedArtifacts(session.sessionId, [staged]).ok).toBe(true);
+            } finally {
+                spy.mockRestore();
+            }
+
+            const artifacts = getSession(session.sessionId).artifacts || [];
+            expect(artifacts.map(a => a.path).sort()).toEqual(['mine.txt', 'other.txt']);
         });
     });
 });

@@ -4,6 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } 
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
+import { appendSessionArtifacts } from './session-store.mjs';
 
 /**
  * Resolved per call, not at import. A frozen constant took whatever
@@ -267,7 +268,21 @@ function publishStaged(dir, stagedPath, safeName) {
         // processes can both see the name free and the second overwrites the
         // first, leaving bytes that no longer match the descriptor's hash.
         linkSync(stagedPath, join(dir, name));
-        rmSync(stagedPath, { force: true });
+        try {
+            rmSync(stagedPath, { force: true });
+        } catch (err) {
+            // The link exists but the caller never learns its name, so it would
+            // never be rolled back. Undo it here; if that also fails, say so
+            // rather than leaving an orphan nobody knows about.
+            try {
+                rmSync(join(dir, name), { force: true });
+            } catch {
+                const orphan = new Error(`rollback-failed:${name}`);
+                /** @type {any} */ (orphan).code = 'EROLLBACK';
+                throw orphan;
+            }
+            throw err;
+        }
         return name;
     };
     try {
@@ -393,10 +408,10 @@ export function commitStagedArtifacts(sessionId, staged) {
             publishedPaths.push(join(dir, finalName));
             published.push({ ...entry.descriptor, path: finalName });
         }
-        const session = getSession(sessionId);
-        if (!session) return undo('session-missing');
-        const artifacts = /** @type {ArtifactDescriptor[]} */ (session.artifacts || []);
-        const updated = updateSession(sessionId, { artifacts: [...artifacts, ...published] });
+        // Appended inside the store lock. Reading `artifacts` here and patching
+        // `[...previous, ...published]` would let a concurrent commit that read
+        // the same snapshot erase these descriptors when it writes second.
+        const updated = appendSessionArtifacts(sessionId, published);
         if (!updated) return undo('session-update-failed');
     } catch (err) {
         return undo(`commit-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
