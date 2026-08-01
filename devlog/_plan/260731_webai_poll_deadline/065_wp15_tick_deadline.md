@@ -1,4 +1,4 @@
-# 060 — WP15 tick 내부 데드라인 (이슈 #88 본체)
+# 065 — WP15 tick 내부 데드라인 (이슈 #88 본체)
 
 - unit: `devlog/_plan/260731_webai_poll_deadline/`
 - work-phase: WP15
