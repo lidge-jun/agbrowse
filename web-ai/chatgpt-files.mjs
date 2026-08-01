@@ -637,7 +637,12 @@ async function saveAssistantDownloadableFilesStrict(cdpSession, {
                 ],
             };
         }
-        return abort('save-failed', undefined, committed.reason);
+        // A deadline that passed while the commit waited for the lock is not a
+        // storage problem: collapsing it into `save-failed` sends the caller to
+        // check their disk when the answer is to poll again.
+        return committed.reason === 'deadline-exceeded'
+            ? abort('deadline-exceeded')
+            : abort('save-failed', undefined, committed.reason);
     }
     const files = [...reused, ...committed.files];
     return {

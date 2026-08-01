@@ -485,18 +485,32 @@ export function appendSessionArtifactsAsync(sessionId, descriptors, stillActive)
         // exactly the gap where a deadline can pass, and a check taken before
         // it says nothing about this moment.
         if (stillActive?.() === false) return DEADLINE_PASSED;
-        const store = readSessionStore();
-        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
-        if (idx < 0) return null;
-        const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
-        store.sessions[idx] = {
-            ...store.sessions[idx],
-            artifacts: [...current, ...descriptors],
-            updatedAt: new Date().toISOString(),
-        };
-        writeSessionStore(store);
-        return store.sessions[idx];
+        return appendSessionArtifactsLocked(sessionId, descriptors);
     });
+}
+
+/**
+ * The append itself, for a caller that ALREADY holds the store lock.
+ *
+ * Taking the lock again here would deadlock against the holder, and doing the
+ * work outside it reintroduces the lost-update race this exists to prevent.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @returns {WebAiSession|null}
+ */
+export function appendSessionArtifactsLocked(sessionId, descriptors) {
+    const store = readSessionStore();
+    const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+    if (idx < 0) return null;
+    const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
+    store.sessions[idx] = {
+        ...store.sessions[idx],
+        artifacts: [...current, ...descriptors],
+        updatedAt: new Date().toISOString(),
+    };
+    writeSessionStore(store);
+    return store.sessions[idx];
 }
 
 /**

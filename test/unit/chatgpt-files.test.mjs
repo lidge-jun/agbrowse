@@ -621,7 +621,7 @@ describe('saveAssistantDownloadableFiles', () => {
 
             vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
             const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
-            const spy = vi.spyOn(storeModule, 'appendSessionArtifactsAsync').mockImplementation(() => {
+            const spy = vi.spyOn(storeModule, 'appendSessionArtifactsLocked').mockImplementation(() => {
                 throw new Error('store lock unavailable');
             });
 

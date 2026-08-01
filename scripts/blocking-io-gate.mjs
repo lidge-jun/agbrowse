@@ -68,10 +68,29 @@ const BLOCKING_STORE_LOCK = /\bwithStoreLock\s*\(/g;
  * `withStoreLockAsync` shares the prefix, so the boundary is explicit.
  */
 const ANY_STORE_LOCK_REF = /\bwithStoreLock\b(?!Async)/g;
-/** `store['withStoreLock'](…)` — a literal computed member dodges both forms. */
-const COMPUTED_STORE_LOCK = /\[\s*['"`]withStoreLock['"`]\s*\]/g;
-/** The one legitimate non-call reference: `export function withStoreLock(`. */
-const STORE_LOCK_DECLARATION = /\bfunction\s+withStoreLock\b(?!Async)/;
+/**
+ * Remove comments so prose about a rule is not counted as a use of it.
+ *
+ * Deliberately NOT applied to the primitive counters: those are reference
+ * counts where a mention in a comment is a cheap false positive that costs a
+ * rename, and tightening them is out of scope here.
+ *
+ * @param {string} source
+ * @returns {string}
+ */
+function stripComments(source) {
+    return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+/**
+ * A computed call on a store-ish receiver: `store['withStoreLock'](…)`,
+ * `store[name](…)`, `store['withStore' + 'Lock'](…)`.
+ *
+ * Scoped to those receiver names for the same reason `COMPUTED_FS_CALL` is:
+ * banning every `obj[i](…)` would reject ordinary array dispatch. A literal
+ * name cannot be required here — `store[name]` carries no literal at all, and
+ * that is precisely the form a text scan cannot resolve.
+ */
+const COMPUTED_STORE_LOCK = /\b(?:store|sessionStore|sessions|lockModule|mod)\s*\[\s*[^\]]+\s*\]\s*\(/g;
 /** A CDP command: `.send('Domain.method'` with a literal. */
 const CDP_LITERAL_SEND = /\.send\(\s*['"`][A-Z][A-Za-z]*\.[A-Za-z]/g;
 /**
@@ -150,11 +169,14 @@ export function scanSource(source) {
     if (countMatches(source, COMPUTED_STORE_LOCK) > 0) evasions.push('computed-store-lock');
     // Every reference that is not a direct call is an alias or an indirect call
     // shape, both of which are rejected outright: a manifest cannot ratchet a
-    // name it cannot predict. The file that DECLARES the lock carries one such
-    // reference by definition, so it is allowed exactly that one.
-    const declaresLock = STORE_LOCK_DECLARATION.test(source);
-    STORE_LOCK_DECLARATION.lastIndex = 0;
-    const indirectRefs = countMatches(source, ANY_STORE_LOCK_REF) - storeLockCalls - (declaresLock ? 1 : 0);
+    // name it cannot predict.
+    //
+    // No allowance for the declaration: `function withStoreLock(` already
+    // matches the direct-call pattern, so subtracting it again gave the
+    // declaring file a free alias.
+    // Prose is stripped first: a doc comment naming the lock is not a call, and
+    // counting it would make explaining the rule a violation of it.
+    const indirectRefs = countMatches(stripComments(source), ANY_STORE_LOCK_REF) - storeLockCalls;
     if (indirectRefs > 0) evasions.push('store-lock-alias');
     for (const alias of findSyncBindingAliases(source)) evasions.push(`sync-binding-alias:${alias}`);
     return {

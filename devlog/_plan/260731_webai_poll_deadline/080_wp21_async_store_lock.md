@@ -60,9 +60,32 @@ strict 경로만 우회시켰을 뿐 그 함수 자체는 여전히 동기다.
 `active=false`인데 `out.ok=true`, artifact 1건이 기록됐다. 타이머는 살아났지만
 패배한 작업의 durable write는 안 막혔다.
 
-그래서 `appendSessionArtifactsAsync`가 **락을 잡은 뒤** 다시 검사하고,
-만료됐으면 `DEADLINE_PASSED`를 돌려준다. `null`(세션 없음)과 구분하는 이유는
-처리가 다르기 때문이다 — 하나는 없는 레코드, 하나는 일어나면 안 되는 쓰기다.
+그래서 **락을 잡은 뒤** 다시 검사하고, 만료됐으면 `DEADLINE_PASSED`를 돌려준다.
+`null`(세션 없음)과 구분하는 이유는 처리가 다르기 때문이다 — 하나는 없는
+레코드, 하나는 일어나면 안 되는 쓰기다.
+
+**재검사만으로도 부족했다.** 2라운드 감사가 짚었다 — 파일을 먼저 publish하고
+그다음 락을 기다리면, **기다리는 내내 파일이 디스크에 보인다.** 타임아웃을 받은
+호출자가 그 순간 디렉터리를 보면 있다. 나중에 undo하지만 그건 이미 승부가 난
+뒤이고, hard deadline의 `Promise.race`는 패배자의 undo를 기다리지 않는다.
+
+재현: `visibleAtExpiry: ["late.txt"]`, `finalFiles: []`.
+
+publish 자체를 **락 안으로** 옮겼다. 순서가 이렇게 된다.
+
+1. 락을 기다린다 (이 동안 디스크에 아무것도 없다)
+2. 락을 잡고 데드라인을 재검사한다
+3. 통과하면 publish하고 같은 락 안에서 세션에 기록한다
+
+`appendSessionArtifactsLocked`를 분리한 이유가 이것이다 — 이미 락을 쥔 호출자가
+다시 잡으면 자기 자신과 데드락한다.
+
+#### 그리고 이유가 또 소실됐다
+
+`DEADLINE_PASSED`를 `null`과 구분해 놓고, 상위 호출부가 모든 commit 실패를
+`save-failed`로 뭉갰다. retryHint가 `check-artifact-storage`가 된다 — 다시
+폴하면 되는 상황에서 디스크를 확인하라고 한다. `deadline-exceeded`를 그대로
+올리도록 고쳤다.
 
 ### 3. ratchet 게이트
 
@@ -81,8 +104,17 @@ member 둘. 전부 통과했다. 기존 `Sync` 프리미티브는 별칭·comput
 거부하는데 새 차원에만 그 방어가 없었다.
 
 지금은 직접 호출을 **세고**, 그 외의 참조는 **거부한다**. 별칭은 ratchet할 수
-없기 때문이다 — manifest가 다음에 어떤 이름을 쓸지 알 수 없다. 선언 파일은
-정의상 참조 하나를 갖고 있으므로 그 하나만 허용한다.
+없기 때문이다 — manifest가 다음에 어떤 이름을 쓸지 알 수 없다.
+
+2라운드에서 두 개가 더 나왔다.
+
+- `store[name](…)`처럼 **리터럴이 없는** computed 호출. 리터럴만 찾으면 못 잡는데,
+  그게 정확히 텍스트 스캔이 해석할 수 없는 형태다. `Sync` 쪽이 이미 쓰는 방식대로
+  receiver 이름으로 범위를 좁혀 잡는다.
+- 선언 파일에 별칭 하나가 공짜였다. `function withStoreLock(`이 직접 호출 패턴에
+  **이미 매치되는데** 선언을 한 번 더 빼고 있었다. 그 차감을 없앴다.
+
+대신 주석은 벗겨내고 센다. 규칙을 설명하는 문장이 규칙 위반이 되면 곤란하다.
 
 ## 테스트
 
@@ -91,6 +123,10 @@ member 둘. 전부 통과했다. 기존 `Sync` 프리미티브는 별칭·comput
 | L1 async가 타이머를 살림 | `delayMs` → `sleepBlockingMs` | `expected null not to be null` |
 | W2c 새 blocking 호출자 거부 | ratchet 분기 제거 | `expected true to be false` |
 | R3 락 대기 중 만료 | post-lock 재검사 제거 | `expected true to be false` |
+| R4 대기 중 publish 금지 | publish를 락 밖으로 | `expected ['held.txt'] to deeply equal []` |
+
+R3만으로는 부족했다 — 시작부터 만료 상태라 **실제 락 대기를 타지 않는다.** R4는
+다른 프로세스가 락을 쥔 상태를 만들고, 대기 중에 디렉터리를 들여다본다.
 
 L2는 짝이다 — **동기 락에서는 타이머가 정말로 안 도는지**를 같은 하네스로
 확인한다. L1만 있으면 애초에 경합하지 않는 구현에서도 통과한다.

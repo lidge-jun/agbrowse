@@ -133,4 +133,43 @@ describe('a rollback that cannot finish is reported (#88)', () => {
         const left = existsSync(dir) ? readdirSync(dir).filter(f => !f.startsWith('.')) : [];
         expect(left).toEqual([]);
     });
+
+    it('R4: nothing is published while the commit waits for the lock', async () => {
+        // R3 expires before the commit starts, so it never exercises the wait.
+        // Here the lock is held by someone else, and the question is what a
+        // caller who times out DURING that wait can see: publishing before
+        // taking the lock left the files on disk for its whole duration, and
+        // the undo that follows runs after the race is already decided.
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+            await import('../../web-ai/session-artifacts.mjs');
+        const { existsSync, readdirSync, openSync, closeSync, writeFileSync: write, rmSync: remove } =
+            await import('node:fs');
+        const { join } = await import('node:path');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+        const dir = resolveArtifactsDir(session.sessionId);
+
+        const staged = stageFileArtifact(session.sessionId, {
+            filename: 'held.txt', buffer: Buffer.from('HELD'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+        });
+
+        // A live holder, so the commit has to wait.
+        const lockPath = `${join(tmpHome, 'web-ai-sessions.json')}.lock`;
+        const fd = openSync(lockPath, 'wx');
+        write(fd, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+        closeSync(fd);
+
+        const pending = commitStagedArtifacts(session.sessionId, [staged], { stillActive: () => true });
+        // Look at the directory while the wait is still in progress — this is
+        // the moment a timed-out caller would see.
+        await new Promise(resolve => setTimeout(resolve, 120));
+        const visibleDuringWait = existsSync(dir)
+            ? readdirSync(dir).filter(f => !f.startsWith('.'))
+            : [];
+
+        remove(lockPath, { force: true });
+        await pending;
+
+        expect(visibleDuringWait).toEqual([]);
+    }, 30_000);
 });

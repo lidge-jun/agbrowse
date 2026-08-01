@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } 
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
-import { appendSessionArtifactsAsync, DEADLINE_PASSED } from './session-store.mjs';
+import { appendSessionArtifactsLocked, withStoreLockAsync, DEADLINE_PASSED } from './session-store.mjs';
 
 /**
  * Resolved per call, not at import. A frozen constant took whatever
@@ -402,22 +402,26 @@ export async function commitStagedArtifacts(sessionId, staged, { stillActive } =
             ? { ok: /** @type {const} */ (false), reason, rollbackFailed: failed }
             : { ok: /** @type {const} */ (false), reason };
     };
-    // The session write is INSIDE the try: it takes a store lock that can throw,
-    // and leaving it outside published the files while recording nothing.
+    // Publishing happens INSIDE the lock, after the wait for it. Publishing
+    // first and writing the session afterwards left the files visible for the
+    // whole duration of that wait, so a caller who timed out mid-wait saw them
+    // on disk even though the run was later undone: the undo runs after the
+    // race has already been decided, and nothing waits for it.
     try {
-        for (const entry of staged) {
-            const finalName = publishStaged(dir, entry.stagedPath, entry.descriptor.path);
-            publishedPaths.push(join(dir, finalName));
-            published.push({ ...entry.descriptor, path: finalName });
-        }
-        // Appended inside the store lock. Reading `artifacts` here and patching
-        // `[...previous, ...published]` would let a concurrent commit that read
-        // the same snapshot erase these descriptors when it writes second.
-        // Re-checked INSIDE the lock, after the wait. Making the wait awaitable
-        // introduced this window: the caller's deadline can pass while this
-        // queues for the lock, and the check before the commit no longer says
-        // anything about the moment the write actually happens.
-        const updated = await appendSessionArtifactsAsync(sessionId, published, stillActive);
+        const updated = await withStoreLockAsync(() => {
+            // Re-checked once the lock is held, which is the only moment that
+            // says anything about when the write happens.
+            if (stillActive?.() === false) return DEADLINE_PASSED;
+            for (const entry of staged) {
+                const finalName = publishStaged(dir, entry.stagedPath, entry.descriptor.path);
+                publishedPaths.push(join(dir, finalName));
+                published.push({ ...entry.descriptor, path: finalName });
+            }
+            // Read inside the same lock: reading `artifacts` outside it and
+            // patching `[...previous, ...published]` would let a concurrent
+            // commit that saw the same snapshot erase these descriptors.
+            return appendSessionArtifactsLocked(sessionId, published);
+        });
         if (updated === DEADLINE_PASSED) return undo('deadline-exceeded');
         if (!updated) return undo('session-update-failed');
     } catch (err) {
