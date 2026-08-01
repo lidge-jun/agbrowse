@@ -34,6 +34,8 @@ export function monotonicNowMs() {
  * @typedef {Object} PollDeadlineToken
  * @property {boolean} expired flipped once the caller has been answered
  * @property {number} hardDeadline reported-clock deadline in ms
+ * @property {(timeoutMs: number) => void} [tighten] shorten the bound once the
+ *   run has learned its real budget; never lengthens it
  */
 
 /**
@@ -55,7 +57,8 @@ export async function withPollDeadline(runFn, { startedAt, monotonicStartMs, tim
     // reached and must not be free time.
     const started = startedAt === undefined ? Date.now() : startedAt;
     const monotonicStart = monotonicStartMs === undefined ? monotonicNowMs() : monotonicStartMs;
-    const hardDeadline = started + timeoutMs;
+    let hardDeadline = started + timeoutMs;
+    let budgetMs = timeoutMs;
     /** @type {any} */
     let expire = () => undefined;
     /** @type {any} */
@@ -78,17 +81,27 @@ export async function withPollDeadline(runFn, { startedAt, monotonicStartMs, tim
         // claims, the caller waits at most one budget plus a check interval.
         // Tests that step the clock faster than real time still finish on the
         // first ceiling, so they are not cut short.
-        const monotonicCeilingMs = timeoutMs + POLL_EXPIRY_CHECK_MS;
         const arm = () => {
             const remaining = hardDeadline - Date.now();
             const monotonicElapsedMs = monotonicNowMs() - monotonicStart;
-            if (remaining <= 0 || monotonicElapsedMs >= monotonicCeilingMs) { resolve(POLL_EXPIRED); return; }
+            if (remaining <= 0 || monotonicElapsedMs >= budgetMs + POLL_EXPIRY_CHECK_MS) { resolve(POLL_EXPIRED); return; }
             timer = setTimeout(arm, Math.min(remaining, POLL_EXPIRY_CHECK_MS));
         };
         arm();
     });
     /** @type {PollDeadlineToken} */
     const token = { expired: false, hardDeadline };
+    // Only ever TIGHTENS. A run that learns its real budget after the race is
+    // armed — because reading it would have blocked the event loop, which is
+    // the thing being bounded — can hand it back here. Letting it extend would
+    // turn the bound into a suggestion, so a longer budget is ignored.
+    token.tighten = (nextTimeoutMs) => {
+        const candidate = started + nextTimeoutMs;
+        if (!(nextTimeoutMs > 0) || candidate >= hardDeadline) return;
+        hardDeadline = candidate;
+        budgetMs = nextTimeoutMs;
+        token.hardDeadline = candidate;
+    };
     try {
         const run = runFn(hardDeadline, token).then(
             // Normalise BOTH settlement paths before the race: a stalled promise

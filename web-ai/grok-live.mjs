@@ -8,7 +8,7 @@ import { normalizeEnvelope, renderQuestionEnvelope, renderQuestionEnvelopeWithCo
 import {
     bindSessionToTab,
     createSession,
-    findActiveSession,
+    findActiveSessionAsync,
     getBaseline,
     getLatestBaseline,
     getSession,
@@ -331,7 +331,10 @@ async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: n
     // it waits, so a contended store defeated the bound entirely.
     const session = input.session
         ? await readSessionAsync(input.session).catch(() => null)
-        : findActiveSession({
+        // Async for the same reason as the read above: the synchronous form
+        // lists sessions under a lock whose wait stops the event loop, so the
+        // deadline timer could not fire while the implicit lookup ran.
+        : await findActiveSessionAsync({
             vendor: 'grok',
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: page.url(),

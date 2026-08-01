@@ -301,12 +301,17 @@ describe('web-ai provider integration (source-string contracts)', () => {
 
     it('all three providers resolve session on poll via input.session > findActiveSession', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
-            // Either read is fine; what matters is the precedence. Gemini and
-            // Grok now read ASYNCHRONOUSLY because the blocking `getSession`
-            // waits with `Atomics.wait` and stops the event loop, which put
-            // their poll deadline outside its own bound under store contention.
-            expect(src).toMatch(/input\.session\s*\n?\s*\?\s*(await readSessionAsync\(input\.session\)|getSession\(input\.session\))/);
-            expect(src).toMatch(/findActiveSession\(\{[\s\S]*?vendor[\s\S]*?targetId[\s\S]*?conversationUrl/);
+            // ONE regex spanning both branches of the ternary, so it pins the
+            // ORDER and not merely the presence of each half. Split assertions
+            // also accepted the reverse — `findActiveSession(...) || (input.session
+            // ? read : null)` — which is a different lookup wearing the same parts.
+            //
+            // Either read form is fine. Gemini and Grok read asynchronously
+            // because the blocking one waits under a lock that stops the event
+            // loop, which put their poll deadline outside its own bound.
+            expect(src).toMatch(
+                /input\.session\s*\n?\s*\?\s*(?:await\s+readSessionAsync\(input\.session\)|getSession\(input\.session\))[\s\S]{0,400}?:\s*(?:\/\/[^\n]*\n\s*)*(?:await\s+)?findActiveSession(?:Async)?\(\{[\s\S]{0,200}?vendor[\s\S]{0,200}?targetId[\s\S]{0,200}?conversationUrl/,
+            );
             expect(src).toMatch(/session && sessionToBaseline\(session\)/);
         }
     });

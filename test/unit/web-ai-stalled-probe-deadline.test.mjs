@@ -309,3 +309,41 @@ describe('a run that lost its deadline does not write afterwards', () => {
         expect(after.status).not.toBe('complete');
     }, 20_000);
 });
+
+/**
+ * A stored deadline must still bound the poll when no timeout is passed.
+ *
+ * The Work wrapper cannot read the session before arming its race — that read
+ * is exactly the blocking call being bounded — so it arms on the vendor
+ * default and tightens once the async read lands. Without that hand-back, an
+ * omitted timeout meant a 50ms stored remainder ran to the vendor default.
+ */
+describe('an inherited stored deadline still bounds the work poll', () => {
+    it('returns near the stored remainder, not the vendor default', async () => {
+        const url = 'https://chatgpt.com/c/work-inherited';
+        saveBaseline({ vendor: 'chatgpt', url, assistantCount: 0, envelope: { vendor: 'chatgpt', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-work-inherited',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() + 600).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        const page = stalledPage(url);
+        const started = Date.now();
+
+        const result = await pollWorkSession(
+            { getPage: async () => page, getTargetId: async () => 'target-work-inherited' },
+            // No timeout: the stored deadline is the only bound.
+            { vendor: 'chatgpt', session: session.sessionId },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(Object.keys(page.reached).length).toBeGreaterThan(0);
+        // The vendor default is minutes; anything near it means the hand-back
+        // did not happen.
+        expect(Date.now() - started).toBeLessThan(3_000);
+    }, 30_000);
+});

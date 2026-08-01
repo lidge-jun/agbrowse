@@ -7,6 +7,7 @@ import {
     generateSessionId,
     insertSession,
     listStoredSessions,
+    listStoredSessionsAsync,
     patchSession,
     pruneSessions,
 } from './session-store.mjs';
@@ -337,6 +338,33 @@ export function listSessions(filter = {}) {
 export function findActiveSession({ vendor, targetId, conversationUrl } = {}) {
     if (!vendor) return null;
     const active = listStoredSessions({ vendor, active: true });
+    return pickActiveSession(active, { targetId, conversationUrl });
+}
+
+/**
+ * The same lookup, awaited instead of blocked on.
+ *
+ * The synchronous form reads under a lock whose wait stops the event loop, so
+ * a caller holding a hard deadline stops counting time while it runs. Callers
+ * under a poll deadline must use this one.
+ *
+ * @param {{ vendor?: string, targetId?: string|null, conversationUrl?: string|null }} [query]
+ * @returns {Promise<WebAiSession|null>}
+ */
+export async function findActiveSessionAsync({ vendor, targetId, conversationUrl } = {}) {
+    if (!vendor) return null;
+    const active = await listStoredSessionsAsync({ vendor, active: true });
+    return pickActiveSession(active, { targetId, conversationUrl });
+}
+
+/**
+ * Selection order, shared so the sync and async forms cannot diverge.
+ *
+ * @param {WebAiSession[]} active
+ * @param {{ targetId?: string|null, conversationUrl?: string|null }} query
+ * @returns {WebAiSession|null}
+ */
+function pickActiveSession(active, { targetId, conversationUrl }) {
     if (active.length === 0) return null;
     if (targetId) {
         const byTarget = active.find((s) => s.targetId && s.targetId === targetId);

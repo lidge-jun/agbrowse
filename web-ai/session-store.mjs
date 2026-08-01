@@ -530,6 +530,28 @@ export function listStoredSessions(filter = {}) {
 }
 
 /**
+ * The same listing, awaited instead of blocked on.
+ *
+ * `listStoredSessions` reads under the synchronous lock, whose wait stops the
+ * event loop — so any deadline timer a caller is holding simply does not tick
+ * while it runs. Callers under a hard deadline need this form.
+ *
+ * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
+ * @returns {Promise<WebAiSession[]>}
+ */
+export async function listStoredSessionsAsync(filter = {}) {
+    const store = await withStoreLockAsync(() => readSessionStore());
+    let rows = store.sessions;
+    if (filter.sessionId) rows = rows.filter((s) => s.sessionId === filter.sessionId);
+    if (filter.vendor) rows = rows.filter((s) => s.vendor === filter.vendor);
+    if (filter.status) rows = rows.filter((s) => s.status === filter.status);
+    if (filter.active === true) rows = rows.filter((session) => isSessionActive(session));
+    rows = rows.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    if (typeof filter.limit === 'number' && filter.limit > 0) rows = rows.slice(-filter.limit);
+    return rows;
+}
+
+/**
  * @param {WebAiSession|null|undefined} session
  * @param {number} [now]
  * @returns {boolean}
