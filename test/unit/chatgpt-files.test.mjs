@@ -637,5 +637,36 @@ describe('saveAssistantDownloadableFiles', () => {
             const left = existsSync(dir) ? readdirSync(dir) : [];
             expect(left).toEqual([]);
         });
+
+        it('F12: publishing never replaces an artifact another run just wrote', async () => {
+            // Scope, stated plainly: two synchronous commits cannot interleave
+            // in one process, so this asserts the PRIMITIVE that makes the
+            // cross-process race safe — publishing claims a name only if it is
+            // still free, and never overwrites what is already there. A bare
+            // `rename` replaces the destination silently, which is how the
+            // loser's bytes ended up under the winner's descriptor hash.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { readFileSync, writeFileSync, mkdirSync, existsSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            // Stands in for the file a concurrent run published between this
+            // run choosing the name and reaching the write.
+            writeFileSync(join(dir, 'race.txt'), 'WINNER');
+
+            const staged = stageFileArtifact(session.sessionId, {
+                filename: 'race.txt', buffer: Buffer.from('LOSER'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+            });
+            const result = commitStagedArtifacts(session.sessionId, [staged]);
+
+            expect(result.ok).toBe(true);
+            expect(result.files[0].path).not.toBe('race.txt');
+            expect(readFileSync(join(dir, 'race.txt'), 'utf8')).toBe('WINNER');
+            expect(readFileSync(join(dir, result.files[0].path), 'utf8')).toBe('LOSER');
+        });
     });
 });

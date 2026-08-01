@@ -1062,18 +1062,33 @@ function enforceFileArtifactSupport(command, input, values, argv = []) {
             ...(evidence ? { evidence } : {}),
         });
     };
-    // The STORED vendor wins when `--vendor` was not typed. The parser defaults
-    // that flag to `chatgpt`, so `input.vendor` is truthy even for a Gemini
-    // session and reading it alone let one past this guard entirely.
-    const vendorExplicit = argv.includes('--vendor');
-    const storedVendor = input.session ? getSession(input.session)?.vendor : null;
-    const vendor = (vendorExplicit ? input.vendor : storedVendor) || input.vendor || 'chatgpt';
-    if (vendor !== 'chatgpt') {
-        reject('--require-file-artifacts is only supported for chatgpt', { vendor });
-    }
     // `sessions resume` is a supported surface, but the command here is just
     // `sessions`; the subcommand lives in argv.
     const sessionsSub = command === 'sessions' ? String(argv[1] || '') : '';
+    // Must resolve the SAME id the command will actually use. `sessions resume`
+    // prefers its positional argument over `--session` (cli-sessions.mjs), so
+    // preferring `--session` here let a caller pass both and have the guard
+    // inspect one session while the resume ran the other.
+    const resumePositional = command === 'sessions' && sessionsSub === 'resume' ? argv[2] : null;
+    if (resumePositional && input.session && resumePositional !== input.session) {
+        reject('--require-file-artifacts cannot resolve two different sessions', {
+            positional: resumePositional,
+            flag: input.session,
+        });
+    }
+    const sessionId = resumePositional || input.session;
+    const stored = sessionId ? getSession(sessionId) : null;
+    // The STORED vendor decides whenever there is one. The parser defaults
+    // `--vendor` to `chatgpt`, so reading the input alone let a Gemini session
+    // through; trusting an explicit `--vendor chatgpt` does the same, because
+    // the session's own vendor is restored after the browser is up.
+    const vendor = stored?.vendor || input.vendor || 'chatgpt';
+    if (vendor !== 'chatgpt') {
+        reject('--require-file-artifacts is only supported for chatgpt', { vendor });
+    }
+    if (stored?.researchMode === 'deep') {
+        reject('--require-file-artifacts is not supported with deep research');
+    }
     const supported = FILE_ARTIFACT_COMMANDS.has(command)
         || (command === 'sessions' && sessionsSub === 'resume');
     if (!supported) {

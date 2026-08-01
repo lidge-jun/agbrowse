@@ -134,6 +134,32 @@ count를 줄이려던 것이 아니라 중복 제거였다 — 감싸서 숫자�
 `input.vendor`는 Gemini 세션에서도 truthy다. 저장된 vendor를 보려면 플래그가
 실제로 입력됐는지를 먼저 봐야 했다.
 
+### 2라운드에서 더 나온 것
+
+첫 교정도 충분하지 않았다. 세 건이 더 나왔다.
+
+| # | 결함 | 고친 방식 |
+| --- | --- | --- |
+| 7 | watcher **recovery** 경로가 같은 결함을 그대로 | reattach 후 sessionDeps에도 CDP 재주입, typed 필드 전달 |
+| 8 | preflight와 runtime이 **다른 세션 ID**를 고름 | positional을 우선하고, 둘이 다르면 거부 |
+| 9 | 동시 실행이 같은 final 이름을 집음 | `rename` → `link`+`unlink`. 목적지가 있으면 실패한다 |
+
+8번이 특히 조용했다. `sessions resume <gemini-id> --session <chatgpt-id>`를 주면
+preflight는 ChatGPT를 보고 통과시키는데 실제 resume은 positional을 쓴다
+(`cli-sessions.mjs`). **검사한 세션과 실행한 세션이 달랐다.**
+
+9번은 `existsSync` 후 `rename`이 원자적이지 않기 때문이다. 두 프로세스가 같은
+이름이 비어 있는 것을 보고 둘 다 rename하면 나중 것이 앞의 바이트를 덮는다.
+descriptor의 hash와 디스크 내용이 어긋난다. `link`는 목적지가 있으면
+`EEXIST`로 실패하므로 그 창이 없다.
+
+### F12의 범위
+
+동기 함수 둘은 한 프로세스 안에서 인터리브되지 않는다. 그래서 F12는 경쟁 자체를
+재현하지 않고, **경쟁을 안전하게 만드는 primitive**를 검사한다 — 이미 있는
+파일을 덮지 않는다는 것. 처음에는 두 commit을 나란히 불러 "경쟁을 검사한다"고
+적었는데, mutation에서 통과해 버려서 그 주장이 거짓임이 드러났다.
+
 ### 테스트 하나는 주장을 낮췄다
 
 `Z4`를 "recovery completion을 검사한다"로 적었는데, mutation으로 확인하니

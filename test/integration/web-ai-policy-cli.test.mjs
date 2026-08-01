@@ -164,5 +164,75 @@ describe('web-ai policy CLI', () => {
             ], deps)).rejects.toThrow(/require-file-artifacts/);
             expect(deps.getPage).not.toHaveBeenCalled();
         });
+
+        it('S7: an explicit --vendor cannot override the stored one', async () => {
+            // The session's own vendor is restored once the browser is up, so
+            // trusting `--vendor chatgpt` here would let the guard pass and the
+            // strict policy then be ignored by a Gemini poll.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const session = createSession(
+                { vendor: 'gemini', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-gem2', conversationUrl: 'https://gemini.google.com/app/y' },
+            );
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli([
+                'poll', '--vendor', 'chatgpt', '--session', session.sessionId,
+                '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        });
+
+        it('S8: a positional sessions resume id is still checked', async () => {
+            // `sessions resume <id>` passes the id positionally, so a guard that
+            // only reads `--session` never sees the stored record at all.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const session = createSession(
+                { vendor: 'gemini', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-gem3', conversationUrl: 'https://gemini.google.com/app/z' },
+            );
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli([
+                'sessions', 'resume', session.sessionId, '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        });
+
+        it('S9: a stored deep-research session is rejected too', async () => {
+            const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+            const session = createSession(
+                { vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-dr', conversationUrl: 'https://chatgpt.com/c/dr' },
+            );
+            // Set the way the deep-research path sets it, not via createSession:
+            // that option is not persisted, so seeding it there tests nothing.
+            updateSession(session.sessionId, { researchMode: 'deep' });
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli([
+                'sessions', 'resume', session.sessionId, '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        });
+
+        it('S10: two different session ids are rejected instead of guessing', async () => {
+            // `sessions resume` prefers its positional argument while the guard
+            // preferred `--session`, so passing both let the check inspect one
+            // session and the resume run the other.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const gemini = createSession(
+                { vendor: 'gemini', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-gem4', conversationUrl: 'https://gemini.google.com/app/w' },
+            );
+            const chatgpt = createSession(
+                { vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-cg', conversationUrl: 'https://chatgpt.com/c/w' },
+            );
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli([
+                'sessions', 'resume', gemini.sessionId,
+                '--session', chatgpt.sessionId,
+                '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        });
     });
 });

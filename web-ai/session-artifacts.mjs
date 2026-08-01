@@ -1,6 +1,6 @@
 // @ts-check
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
@@ -259,16 +259,42 @@ export function saveFileArtifact(sessionId, { filename, buffer, mimeType, source
  * @param {string} safeName
  * @returns {string}
  */
-function collisionFreeName(dir, safeName) {
-    if (!existsSync(join(dir, safeName))) return safeName;
+function publishStaged(dir, stagedPath, safeName) {
+    /** @param {string} name */
+    const claim = (name) => {
+        // `link` fails when the destination exists; `rename` would REPLACE it.
+        // Checking with `existsSync` first and then renaming is a race: two
+        // processes can both see the name free and the second overwrites the
+        // first, leaving bytes that no longer match the descriptor's hash.
+        linkSync(stagedPath, join(dir, name));
+        rmSync(stagedPath, { force: true });
+        return name;
+    };
+    try {
+        return claim(safeName);
+    } catch (err) {
+        if (/** @type {any} */ (err)?.code !== 'EEXIST') throw err;
+    }
     const dot = safeName.lastIndexOf('.');
     const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
     const ext = dot > 0 ? safeName.slice(dot) : '';
     for (let n = 2; n < 1_000; n += 1) {
-        const candidate = `${stem}-${n}${ext}`;
-        if (!existsSync(join(dir, candidate))) return candidate;
+        try {
+            return claim(`${stem}-${n}${ext}`);
+        } catch (err) {
+            if (/** @type {any} */ (err)?.code !== 'EEXIST') throw err;
+        }
     }
-    return `${stem}-${Date.now()}${ext}`;
+    return claim(`${stem}-${attemptNonce()}${ext}`);
+}
+
+/**
+ * A suffix unique to ONE staging attempt.
+ *
+ * @returns {string}
+ */
+function attemptNonce() {
+    return `${process.pid.toString(36)}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
@@ -285,11 +311,12 @@ export function stageFileArtifact(sessionId, { filename, buffer, mimeType, sourc
     const dir = resolveArtifactsDir(sessionId);
     ensureDir(dir);
     const safeName = safeFileArtifactName(filename, mimeType);
-    // `slot` disambiguates two candidates that resolve to the SAME filename —
-    // different URLs can both be `data.csv`. Keying the staging path on the name
-    // alone let the second write clobber the first, and the commit then failed
-    // renaming a file that no longer existed.
-    const stagedName = `.staging-${txId}-${slot}-${safeName}`;
+    // Owned by ONE attempt, not just one batch. `slot` separates two candidates
+    // that resolve to the same filename; the nonce separates two runs of the
+    // same batch, since `txId` is derived from the session and turn and a
+    // concurrent poll and watch would otherwise stage over each other — the
+    // loser's commit then renames a file that is already gone.
+    const stagedName = `.staging-${txId}-${attemptNonce()}-${slot}-${safeName}`;
     const stagedPath = join(dir, stagedName);
     writeFileSync(stagedPath, buffer);
     return {
@@ -362,10 +389,8 @@ export function commitStagedArtifacts(sessionId, staged) {
     // and leaving it outside published the files while recording nothing.
     try {
         for (const entry of staged) {
-            const finalName = collisionFreeName(dir, entry.descriptor.path);
-            const finalPath = join(dir, finalName);
-            renameSync(entry.stagedPath, finalPath);
-            publishedPaths.push(finalPath);
+            const finalName = publishStaged(dir, entry.stagedPath, entry.descriptor.path);
+            publishedPaths.push(join(dir, finalName));
             published.push({ ...entry.descriptor, path: finalName });
         }
         const session = getSession(sessionId);
