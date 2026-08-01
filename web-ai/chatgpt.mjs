@@ -17,6 +17,7 @@ import {
     markSessionTimeout,
     resolveDeadlineAt,
     resolveTimeoutBudgetSec,
+    resolveFileArtifactPolicy,
     saveBaseline,
     sessionToBaseline,
     summarizeEnvelope,
@@ -800,6 +801,11 @@ export async function pollWebAi(deps, input = {}) {
         );
         const outcome = await Promise.race([run, expiry]);
         if (outcome !== POLL_EXPIRED) return outcome;
+        // Added to the SHARED ledger before the envelope is built: a warning
+        // pushed by the loser after this point would never reach the caller.
+        if (resolveFileArtifactPolicy(input, input.session ? getSession(input.session) : null) === 'require-all') {
+            observations.add('file-artifact-unverified');
+        }
         return buildHardTimeoutResult(input, observations);
     } finally {
         // Order matters: the loser may still be mid-tick, and this is what makes
@@ -827,6 +833,9 @@ function buildHardTimeoutResult(input, observations) {
         usedFallbacks: [],
         warnings: mergeObservationList(['poll-deadline-exceeded'], observations),
         recoverable: true,
+        // Every other typed failure carries a code; without one here a caller
+        // has to branch on the message string for this envelope alone.
+        errorCode: 'provider.poll-timeout',
         retryHint: 'poll-or-resume',
         error: 'timed out waiting for answer',
     };
@@ -879,6 +888,9 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send or query first.',
     });
+    // Monotonic: a stored require-all is not relaxed by a poll that omits the
+    // flag, since poll/watch/resume never repeat it.
+    const filePolicy = resolveFileArtifactPolicy(input, session);
     const copyTraceCtx = session && input.allowCopyMarkdownFallback === true
         ? createTraceContext(session.sessionId)
         : null;
@@ -1086,6 +1098,11 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             const imageResult = await commitAsyncIfActive(() => collectGeneratedImageAnswer(deps, input, session, baseline));
             if (imageResult) {
                 const imageWarnings = mergeObservationList(imageResult.warnings, observations);
+                const imageFileCapture = await captureFileArtifacts({
+                    deps, input, session, baseline, filePolicy, warnings: imageWarnings,
+                    commitAsyncIfActive, isActiveRun,
+                });
+                if (imageFileCapture?.failed) return imageFileCapture;
                 if (!input.skipFinalize) {
                     await commitAsyncIfActive(() => finalizeProviderTab(deps, {
                         vendor, session: /** @type {any} */ (session), page,
@@ -1097,6 +1114,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                 }
                 return withAnswerArtifact({
                     ok: true, vendor, status: 'complete', url: page.url(), sessionId: session.sessionId,
+                    ...(imageFileCapture?.artifacts ? { artifacts: imageFileCapture.artifacts } : {}),
                     answerText: imageResult.answerText, baseline, usedFallbacks: ['generated-image'],
                     warnings: imageWarnings, responseStableMs: 0,
                 });
@@ -1187,35 +1205,11 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                             await cdp.detach?.().catch(() => undefined);
                         }
                     }
-                    if (session && !input.skipFinalize) {
-                        // Capture generic assistant-turn downloadable files (CSV/PDF/ZIP/...)
-                        // before archive. Separate from code-mode ZIP (code-artifact.mjs,
-                        // not on this path) and generated images (handled above). Never
-                        // throws past its boundary; only adds warnings.
-                        try {
-                            const fileCdp = await deps.getCdpSession?.();
-                            if (fileCdp) {
-                                try {
-                                    const fileResult = await commitAsyncIfActive(() => saveAssistantDownloadableFiles(fileCdp, deps, {
-                                        sessionId: session.sessionId,
-                                        baselineAssistantCount: baseline?.assistantCount || 0,
-                                    }));
-                                    if (fileResult.warnings?.length) warnings.push(...fileResult.warnings);
-                                } finally {
-                                    await fileCdp.detach?.().catch(() => undefined);
-                                }
-                            } else {
-                                // No CDP means no file capture. Unlike an explicit
-                                // `--output-image` this is opportunistic, so it does
-                                // not fail the answer — but it must not be silent
-                                // either: the caller would otherwise see a plain
-                                // success with attachments quietly missing.
-                                warnings.push('file-artifact-cdp-unavailable');
-                            }
-                        } catch (err) {
-                            warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
-                        }
-                    }
+                    const fileCapture = await captureFileArtifacts({
+                        deps, input, session, baseline, filePolicy, warnings,
+                        commitAsyncIfActive, isActiveRun,
+                    });
+                    if (fileCapture?.failed) return mergeObservationWarnings(fileCapture, observations);
                     // Merge BEFORE the finalizer runs: it persists this array to the
                     // session, so merging afterwards would leave the stored warnings
                     // disagreeing with the returned ones.
@@ -1228,6 +1222,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     return withAnswerArtifact({
                         ok: true,
                         vendor,
+                        ...(fileCapture?.artifacts ? { artifacts: fileCapture.artifacts } : {}),
                         status: 'complete',
                         url: page.url(),
                         ...(session ? { sessionId: session.sessionId } : {}),
@@ -1352,12 +1347,18 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             }
             const answerText = recovered.text;
             const warnings = mergeObservationList(['response-recovered-after-timeout'], observations);
+            const recoveryFileCapture = await captureFileArtifacts({
+                deps, input, session, baseline, filePolicy, warnings,
+                commitAsyncIfActive, isActiveRun,
+            });
+            if (recoveryFileCapture?.failed) return recoveryFileCapture;
             if (!input.skipFinalize) {
                 await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,
                 vendor,
+                ...(recoveryFileCapture?.artifacts ? { artifacts: recoveryFileCapture.artifacts } : {}),
                 status: 'complete',
                 url: page.url(),
                 sessionId: session.sessionId,
@@ -1433,12 +1434,18 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
             const warnings = mergeObservationList([], observations);
+            const copyFileCapture = await captureFileArtifacts({
+                deps, input, session, baseline, filePolicy, warnings,
+                commitAsyncIfActive, isActiveRun,
+            });
+            if (copyFileCapture?.failed) return copyFileCapture;
             if (session && !input.skipFinalize) {
                 await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,
                 vendor,
+                ...(copyFileCapture?.artifacts ? { artifacts: copyFileCapture.artifacts } : {}),
                 status: 'complete',
                 url: page.url(),
                 ...(session ? { sessionId: session.sessionId } : {}),
@@ -1617,6 +1624,9 @@ export async function queryWebAi(deps, input = {}) {
         session: sent.sessionId,
         allowCopyMarkdownFallback: input.allowCopyMarkdownFallback === true,
         outputImage: input.outputImage,
+        // Without this the requirement given to `send`/`query` would be dropped
+        // at the poll that actually enforces it.
+        fileArtifactPolicy: input.fileArtifactPolicy,
         archiveFlag: input.archiveFlag,
         skipFinalize: input.skipFinalize,
     });
@@ -2106,6 +2116,91 @@ function buildDeferredPollingResult({ vendor, page, session, baseline, answerTex
         recoverable: true,
         retryHint: 'watch-or-poll',
     };
+}
+
+/**
+ * Retry hints differ by cause; a single hint would send every caller to the
+ * same wrong remedy.
+ *
+ * @type {Record<string, string>}
+ */
+const FILE_ARTIFACT_RETRY_HINTS = {
+    'cdp-unavailable': 'start-headed',
+    'detection-malformed': 'poll-or-resume',
+    'no-candidates': 'retry-without-require',
+    'fetch-timeout': 'poll-or-resume',
+    'fetch-failed': 'poll-or-resume',
+    'save-failed': 'check-artifact-storage',
+    'save-incomplete': 'check-artifact-storage',
+    'rollback-failed': 'check-artifact-storage',
+    'deadline-exceeded': 'poll-or-resume',
+    'no-session': 'poll-or-resume',
+};
+
+/**
+ * Capture downloadable files for a completing poll.
+ *
+ * Shared by every `status:'complete'` return. Wiring only the ordinary one
+ * would let the recovery and copy paths hand back a success that never ran the
+ * contract at all.
+ *
+ * @returns {Promise<any|null>} a typed failure envelope, or null to continue
+ */
+async function captureFileArtifacts({ deps, input, session, baseline, filePolicy, warnings, commitAsyncIfActive, isActiveRun }) {
+    if (!session || input.skipFinalize) return null;
+    const strict = filePolicy === 'require-all';
+    /** @type {any[]} */
+    let captured = [];
+    /** @param {string} reason @param {any[]} [errors] */
+    const failure = (reason, errors) => ({
+        // Distinguishes a failure envelope from the `{ artifacts }` result the
+        // success path returns; callers branch on this, not on truthiness.
+        failed: true,
+        ok: false,
+        vendor: input.vendor || 'chatgpt',
+        status: 'file-artifact-unsatisfied',
+        sessionId: session.sessionId,
+        answerText: '',
+        usedFallbacks: [],
+        warnings,
+        recoverable: true,
+        errorCode: 'provider.file-artifact',
+        stage: 'file-artifact',
+        retryHint: FILE_ARTIFACT_RETRY_HINTS[reason] || 'poll-or-resume',
+        evidence: { reason, ...(errors?.length ? { errors } : {}) },
+        error: `required file artifacts unavailable: ${reason}`,
+    });
+    try {
+        const fileCdp = await deps.getCdpSession?.();
+        if (!fileCdp) {
+            // Opportunistic capture tolerates this; a caller who asked for the
+            // files cannot be told the answer is complete without them.
+            if (strict) return failure('cdp-unavailable');
+            warnings.push('file-artifact-cdp-unavailable');
+            return null;
+        }
+        try {
+            const fileResult = await commitAsyncIfActive(() => saveAssistantDownloadableFiles(fileCdp, deps, {
+                sessionId: session.sessionId,
+                baselineAssistantCount: baseline?.assistantCount || 0,
+                strict,
+                stillActive: isActiveRun,
+            }));
+            if (fileResult.warnings?.length) warnings.push(...fileResult.warnings);
+            if (strict && !fileResult.ok) {
+                return failure(fileResult.errors?.[0]?.reason || 'save-incomplete', fileResult.errors);
+            }
+            // Surfaced on the success envelope: a caller who required the files
+            // has to be told where they landed.
+            if (fileResult.files?.length) captured = fileResult.files;
+        } finally {
+            await fileCdp.detach?.().catch(() => undefined);
+        }
+    } catch (err) {
+        if (strict) return failure('save-failed', [{ reason: 'save-failed', message: /** @type {any} */ (err)?.message }]);
+        warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
+    }
+    return captured.length ? { artifacts: captured } : null;
 }
 
 /**

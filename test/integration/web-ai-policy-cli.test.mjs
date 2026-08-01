@@ -95,4 +95,74 @@ describe('web-ai policy CLI', () => {
             await fs.rm('tmp-deny-chatgpt-policy.json', { force: true });
         }
     });
+
+    /**
+     * `--require-file-artifacts` only has a completion path to enforce on
+     * ChatGPT send/query/poll/watch. Everywhere else the flag would be accepted
+     * and quietly do nothing, which is the same silence the contract removes.
+     * Rejection has to happen before the browser is touched: reporting it after
+     * the prompt was sent would already have mutated provider state.
+     */
+    describe('--require-file-artifacts support matrix', () => {
+        /** @param {string[]} argv */
+        const runRejected = async (argv) => {
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli(argv, deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        };
+
+        it('S1: rejects a non-ChatGPT provider before reaching the browser', async () => {
+            await runRejected([
+                'send', '--vendor', 'gemini', '--inline-only',
+                '--prompt', 'hi', '--require-file-artifacts', '--json',
+            ]);
+        });
+
+        it('S2: rejects a command with no file capture path', async () => {
+            await runRejected([
+                'code', '--vendor', 'chatgpt',
+                '--prompt', 'hi', '--require-file-artifacts', '--json',
+            ]);
+        });
+
+        it('S3: rejects deep research', async () => {
+            await runRejected([
+                'send', '--vendor', 'chatgpt', '--inline-only', '--research', 'deep',
+                '--prompt', 'hi', '--require-file-artifacts', '--json',
+            ]);
+        });
+
+        it('S4: rejects a session-less poll, which has nowhere to save', async () => {
+            await runRejected([
+                'poll', '--vendor', 'chatgpt', '--require-file-artifacts', '--json',
+            ]);
+        });
+
+        it('S5: a supported combination is NOT rejected', async () => {
+            // The paired assertion: over-blocking would be as wrong as silence.
+            // It fails on the unknown session id instead, which is precisely the
+            // point — the support guard let it through.
+            const deps = { getPage: vi.fn(() => { throw new Error('now browser may be reached'); }) };
+            await expect(runWebAiCli([
+                'poll', '--vendor', 'chatgpt', '--session', 'sess-1',
+                '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/Session not found/);
+        });
+
+        it('S6: rejects a non-ChatGPT session even when --vendor is omitted', async () => {
+            // The bypass: with no `--vendor` the input reads as chatgpt, so a
+            // guard that trusts it lets a Gemini session through to browser
+            // startup and only applies the stored vendor afterwards.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const session = createSession(
+                { vendor: 'gemini', prompt: 'p', attachmentPolicy: 'inline-only' },
+                { targetId: 't-gem', conversationUrl: 'https://gemini.google.com/app/x' },
+            );
+            const deps = { getPage: vi.fn(() => { throw new Error('browser should not be touched'); }) };
+            await expect(runWebAiCli([
+                'poll', '--session', session.sessionId, '--require-file-artifacts', '--json',
+            ], deps)).rejects.toThrow(/require-file-artifacts/);
+            expect(deps.getPage).not.toHaveBeenCalled();
+        });
+    });
 });

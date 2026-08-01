@@ -93,6 +93,14 @@ export async function watchSession(deps, input = {}, notifier = null) {
                 await emit({ type: `watch.${tick.status}`, status: tick.status, terminal: true, vendor: tick.vendor });
                 break;
             }
+            // A typed fail-closed result ends the watch. Continuing to poll
+            // would spin on a condition the caller already has to act on, and
+            // the final `ok: true` below would then report success.
+            if (tick.errorCode === 'provider.file-artifact') {
+                final = { ...tick, terminal: true };
+                await emit({ type: 'watch.file-artifact-unsatisfied', status: tick.status, terminal: true, vendor: tick.vendor });
+                break;
+            }
             if (options.once) {
                 final = { ...tick, ok: true, status: 'watch-once', watchStatus: tick.status, terminal: false };
                 break;
@@ -105,7 +113,9 @@ export async function watchSession(deps, input = {}, notifier = null) {
             await sleep(options.intervalMs);
         }
         return {
-            ok: true,
+            // Not unconditionally true: a fail-closed tick has to reach the
+            // caller as a failure.
+            ok: final?.errorCode !== 'provider.file-artifact',
             status: final?.status || 'watch-complete',
             sessionId: options.sessionId,
             final,
@@ -231,6 +241,15 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
             ...deps,
             getPage: async () => page,
             getTargetId: async () => targetId,
+            // Bound to the RESOLVED page like `poll` and `sessions resume` do.
+            // Inheriting the outer `getCdpSession` attaches to whatever page
+            // that closure captured, so artifact detection could read a
+            // different tab's DOM — or report no CDP at all.
+            getCdpSession: async () => {
+                const context = (/** @type {any} */ (page))?.context?.();
+                if (!context?.newCDPSession) return deps.getCdpSession?.();
+                return context.newCDPSession(page);
+            },
         };
 
         const domHashBefore = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
@@ -287,6 +306,15 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
             url: (/** @type {any} */ (page)).url?.() || null,
             answerText,
             warnings: mergeWarnings(reattach.warnings || [], pollResult.warnings || [], watcherWarnings),
+            // Typed failures have to survive this adapter. Dropping the code,
+            // stage, hint and evidence turned a fail-closed poll result into an
+            // ordinary non-terminal tick, which is the silence the contract
+            // exists to remove.
+            ...(pollResult.errorCode ? { errorCode: pollResult.errorCode } : {}),
+            ...(pollResult.stage ? { stage: pollResult.stage } : {}),
+            ...(pollResult.retryHint ? { retryHint: pollResult.retryHint } : {}),
+            ...(pollResult.evidence ? { evidence: pollResult.evidence } : {}),
+            ...(pollResult.artifacts ? { artifacts: pollResult.artifacts } : {}),
             preflight,
             profileLock: profileLockSummary,
         };

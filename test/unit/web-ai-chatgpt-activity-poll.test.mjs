@@ -1660,3 +1660,187 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         expect(elapsedMs).toBeLessThan(3_000);
     }, 20_000);
 });
+
+/**
+ * The require-all contract has to hold on EVERY completing path. Wiring only
+ * the ordinary one would let an answer that arrived through recovery report
+ * success without the files the caller asked for.
+ */
+describe('required file artifacts gate every completion path (B25)', () => {
+    afterEach(() => {
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
+    /** A page that answers immediately and cleanly. */
+    function answeringPage(url) {
+        const snapshot = { text: 'here is the answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        return {
+            url: () => url,
+            waitForTimeout: async (ms) => { await new Promise(r => setTimeout(r, Math.min(Number(ms) || 0, 40))); },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [], count: async () => 0 }),
+            innerText: async () => 'here is the answer',
+        };
+    }
+
+    function pollSession(slug, extraSummary = {}) {
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: `https://chatgpt.com/c/${slug}`,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: `target-${slug}`,
+                conversationUrl: `https://chatgpt.com/c/${slug}`,
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0, ...extraSummary },
+            },
+        );
+    }
+
+    it('Z1: a complete answer fails when the required files cannot be captured', async () => {
+        const session = pollSession('z1');
+        const page = answeringPage('https://chatgpt.com/c/z1');
+
+        const result = await pollWebAi(
+            // No CDP at all: the files cannot even be looked for.
+            { getPage: async () => page, getTargetId: async () => 'target-z1', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+        expect(result.evidence.reason).toBe('cdp-unavailable');
+        // The hint has to name the actual remedy, not a generic retry.
+        expect(result.retryHint).toBe('start-headed');
+    }, 20_000);
+
+    it('Z2: the same answer succeeds when nobody asked for files', async () => {
+        // The paired case. Over-blocking a plain text answer would be as wrong
+        // as the silence this contract removes.
+        const session = pollSession('z2');
+        const page = answeringPage('https://chatgpt.com/c/z2');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z2', getCdpSession: async () => null },
+            // No `skipFinalize`: that flag bypasses capture entirely, so it
+            // would prove nothing about the best-effort path.
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5 },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('file-artifact-cdp-unavailable');
+    }, 20_000);
+
+    it('Z3: the requirement is inherited from the session, not just the flag', async () => {
+        // `poll` never repeats the flag, so this is how a send-time requirement
+        // reaches the poll that enforces it.
+        const session = pollSession('z3', { fileArtifactPolicy: 'require-all' });
+        const page = answeringPage('https://chatgpt.com/c/z3');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z3', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5 },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+    }, 20_000);
+
+    it('Z4: a late-settling answer is gated too', async () => {
+        // Drives an answer that only appears near the end of the budget.
+        //
+        // Honest scope: this still lands on the ORDINARY completion, verified by
+        // mutation — disabling the recovery wiring leaves it green, disabling
+        // the normal wiring turns it red. Recovery and copy are wired from the
+        // same helper and asserted by construction, not by this test.
+        const session = pollSession('z4');
+        const snapshot = { text: 'recovered answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        let elapsed = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/z4',
+            waitForTimeout: async (ms) => {
+                elapsed += Math.max(Number(ms) || 0, 250);
+                await new Promise(r => setTimeout(r, 10));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                // Nothing readable until the loop has given up.
+                // Past the LOOP deadline (budget minus the recovery reserve),
+                // so the loop never sees it and only recovery can.
+                const settled = elapsed >= 1_600;
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    return settled ? { strength: 'none', evidence: '' } : { strength: 'weak', evidence: 'panel-text' };
+                }
+                if (arg?.finishedSelector) {
+                    return settled
+                        ? { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }
+                        : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return settled
+                        ? { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] }
+                        : { ok: true, wrapped: [], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return settled ? [snapshot] : [];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [], count: async () => 0 }),
+            innerText: async () => 'recovered answer',
+        };
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z4', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+        expect(result.usedFallbacks ?? []).not.toContain('copy-markdown');
+    }, 20_000);
+
+    it('Z5: a successful capture reports where the files landed', async () => {
+        // Requiring the files and then not saying where they went is only half
+        // a contract.
+        const session = pollSession('z5');
+        const page = answeringPage('https://chatgpt.com/c/z5');
+        const cdp = {
+            send: async (method) => {
+                if (method === 'Network.getCookies') return { cookies: [{ name: 's', value: '1' }] };
+                return { result: { value: [{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }] } };
+            },
+            detach: async () => undefined,
+        };
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'text/plain' : null) },
+            arrayBuffer: async () => new TextEncoder().encode('file body').buffer,
+        })));
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z5', getCdpSession: async () => cdp },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.artifacts).toHaveLength(1);
+        expect(result.artifacts[0].path).toBe('a.txt');
+        expect(result.artifacts[0].sha256).toBeTruthy();
+    }, 20_000);
+});

@@ -62,6 +62,8 @@ const COMMANDS = new Set([
     'work',
 ]);
 
+/** Commands whose completion path can honour a require-all file artifact contract. */
+const FILE_ARTIFACT_COMMANDS = new Set(['send', 'query', 'poll', 'watch']);
 const BROWSER_REQUIRED_COMMANDS = new Set(['status', 'send', 'poll', 'query', 'stop', 'watch', 'snapshot', 'doctor', 'project-sources', 'code', 'code-extract']);
 const BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach', 'doctor']);
 export const WEB_AI_USAGE = `
@@ -174,6 +176,13 @@ Attachments and context:
   --output-image <path>             Save generated ChatGPT images. If several
                                     images are returned, siblings are written
                                     as out.png, out-2.png, out-3.png.
+  --require-file-artifacts          Fail the command unless at least one
+                                    downloadable file is detected in the answer
+                                    AND every detected file is saved. Without
+                                    it, file capture stays best-effort and a
+                                    failure only adds a warning. ChatGPT only;
+                                    send/query/poll/watch. poll/watch need
+                                    --session.
   --follow-up <text>                Repeatable ChatGPT batch follow-up prompt
                                     in the same command. For a later follow-up
                                     in an existing conversation, use query
@@ -603,6 +612,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'web-search': { type: 'boolean', default: false },
             'auto-tools': { type: 'boolean', default: false },
             'output-image': { type: 'string' },
+            'require-file-artifacts': { type: 'boolean', default: false },
             'output-zip': { type: 'string' },
             'output-dir': { type: 'string' },
             'multi-zip': { type: 'boolean', default: false },
@@ -748,6 +758,9 @@ async function runWebAiCliInner(argv = [], deps) {
         webSearch: values['web-search'] === true,
         autoTools: values['auto-tools'] === true,
         outputImage: values['output-image'],
+        // 'require-all' means the caller asked for the attachments, so a capture
+        // that cannot be proven fails the command instead of adding a warning.
+        fileArtifactPolicy: values['require-file-artifacts'] === true ? 'require-all' : 'best-effort',
         outputZip: values['output-zip'],
         outputDir: values['output-dir'],
         multiZip: values['multi-zip'] === true,
@@ -825,6 +838,7 @@ async function runWebAiCliInner(argv = [], deps) {
         command,
         repomixContextProvider ? { ...input, vendor: repomixContextProvider } : input,
     );
+    enforceFileArtifactSupport(command, input, values, argv);
     if (['send', 'query', 'code'].includes(command) && repomixContextProvider) {
         // Resolve config, run Repomix, and validate its staged artifacts before
         // browser startup or tab selection can mutate provider state.
@@ -1019,6 +1033,65 @@ export function parseSourceAuditRatio(value) {
         });
     }
     return parsed;
+}
+
+/**
+ * Reject `--require-file-artifacts` where it cannot be honoured.
+ *
+ * Called BEFORE `ensureHeadedBrowserForWebAi`, because a flag that silently
+ * does nothing on an unsupported command is the same fail-open this contract
+ * exists to remove — and reporting it after the prompt has been sent would
+ * already have mutated provider state.
+ *
+ * @param {string} command
+ * @param {any} input
+ * @param {Record<string, any>} values
+ * @param {string[]} argv
+ */
+function enforceFileArtifactSupport(command, input, values, argv = []) {
+    if (input.fileArtifactPolicy !== 'require-all') return;
+    /** @param {string} reason @param {Record<string, unknown>} [evidence] */
+    const reject = (reason, evidence) => {
+        throw new WebAiError({
+            errorCode: 'capability.unsupported',
+            stage: 'preflight',
+            vendor: input.vendor || 'chatgpt',
+            retryHint: 'drop-require-file-artifacts',
+            message: reason,
+            mutationAllowed: false,
+            ...(evidence ? { evidence } : {}),
+        });
+    };
+    // The STORED vendor wins when `--vendor` was not typed. The parser defaults
+    // that flag to `chatgpt`, so `input.vendor` is truthy even for a Gemini
+    // session and reading it alone let one past this guard entirely.
+    const vendorExplicit = argv.includes('--vendor');
+    const storedVendor = input.session ? getSession(input.session)?.vendor : null;
+    const vendor = (vendorExplicit ? input.vendor : storedVendor) || input.vendor || 'chatgpt';
+    if (vendor !== 'chatgpt') {
+        reject('--require-file-artifacts is only supported for chatgpt', { vendor });
+    }
+    // `sessions resume` is a supported surface, but the command here is just
+    // `sessions`; the subcommand lives in argv.
+    const sessionsSub = command === 'sessions' ? String(argv[1] || '') : '';
+    const supported = FILE_ARTIFACT_COMMANDS.has(command)
+        || (command === 'sessions' && sessionsSub === 'resume');
+    if (!supported) {
+        reject(`--require-file-artifacts is not supported for "${command}"`, {
+            supportedCommands: [...FILE_ARTIFACT_COMMANDS, 'sessions resume'],
+        });
+    }
+    if (input.research === 'deep' || values?.research === 'deep') {
+        reject('--require-file-artifacts is not supported with deep research');
+    }
+    if (input.followUps?.length) {
+        reject('--require-file-artifacts is not supported with follow-ups');
+    }
+    // poll/watch need a session to read the stored policy from and to own the
+    // artifact directory the files are written into.
+    if (['poll', 'watch'].includes(command) && !input.session) {
+        reject('--require-file-artifacts requires --session on this command');
+    }
 }
 
 /**

@@ -1,6 +1,6 @@
 // @ts-check
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
@@ -28,6 +28,8 @@ function browserAgentHome() {
  * @property {string} [screenshotPath]
  * @property {string} sha256
  * @property {{ type: string, ok: boolean }} [validation]
+ * @property {string} [candidateKey] stable identity of the source candidate
+ * @property {string} [transactionKey] identity of the batch that saved it
  * @property {string} savedAt
  */
 
@@ -243,6 +245,182 @@ export function saveFileArtifact(sessionId, { filename, buffer, mimeType, source
         validation: { type: buffer.length > 0 ? 'generic' : 'empty', ok: buffer.length > 0 },
         savedAt: new Date().toISOString(),
     };
+}
+
+/**
+ * A name inside `dir` that does not collide with an existing file.
+ *
+ * `saveFileArtifact` writes a deterministic basename, so a second capture of
+ * the same filename OVERWRITES the first. That is tolerable when every write is
+ * committed, but a transaction that may roll back cannot use it: deleting the
+ * file it wrote would also delete whatever was there before.
+ *
+ * @param {string} dir
+ * @param {string} safeName
+ * @returns {string}
+ */
+function collisionFreeName(dir, safeName) {
+    if (!existsSync(join(dir, safeName))) return safeName;
+    const dot = safeName.lastIndexOf('.');
+    const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
+    const ext = dot > 0 ? safeName.slice(dot) : '';
+    for (let n = 2; n < 1_000; n += 1) {
+        const candidate = `${stem}-${n}${ext}`;
+        if (!existsSync(join(dir, candidate))) return candidate;
+    }
+    return `${stem}-${Date.now()}${ext}`;
+}
+
+/**
+ * Stage a file artifact WITHOUT publishing it.
+ *
+ * Written under a transaction-owned temporary name, so nothing an earlier run
+ * saved is touched until every file in the batch has succeeded.
+ *
+ * @param {string} sessionId
+ * @param {{ filename: string, buffer: Buffer, mimeType: string, sourceUrl?: string, candidateKey?: string, transactionKey?: string, txId: string, slot: number }} file
+ * @returns {{ stagedPath: string, descriptor: ArtifactDescriptor }}
+ */
+export function stageFileArtifact(sessionId, { filename, buffer, mimeType, sourceUrl, candidateKey, transactionKey, txId, slot = 0 }) {
+    const dir = resolveArtifactsDir(sessionId);
+    ensureDir(dir);
+    const safeName = safeFileArtifactName(filename, mimeType);
+    // `slot` disambiguates two candidates that resolve to the SAME filename —
+    // different URLs can both be `data.csv`. Keying the staging path on the name
+    // alone let the second write clobber the first, and the commit then failed
+    // renaming a file that no longer existed.
+    const stagedName = `.staging-${txId}-${slot}-${safeName}`;
+    const stagedPath = join(dir, stagedName);
+    writeFileSync(stagedPath, buffer);
+    return {
+        stagedPath,
+        descriptor: {
+            kind: 'file',
+            label: filename,
+            // Provisional. `commitStagedArtifacts` rewrites it to the published
+            // name, which is only known once the whole batch has staged.
+            path: safeName,
+            mimeType,
+            sizeBytes: buffer.length,
+            sourceUrl: sourceUrl || undefined,
+            sha256: computeSha256(buffer),
+            validation: { type: buffer.length > 0 ? 'generic' : 'empty', ok: buffer.length > 0 },
+            savedAt: new Date().toISOString(),
+            ...(candidateKey ? { candidateKey } : {}),
+            ...(transactionKey ? { transactionKey } : {}),
+        },
+    };
+}
+
+/**
+ * Remove files this transaction published, and nothing else.
+ *
+ * Reports its own failure instead of swallowing it: a rollback that leaves
+ * files behind is exactly the state a caller must be told about, and every
+ * path is attempted so one bad delete cannot strand the rest.
+ *
+ * @param {string[]} paths
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+function removePublished(paths) {
+    /** @type {string[]} */
+    const failures = [];
+    for (const path of paths) {
+        try {
+            rmSync(path, { force: true });
+        } catch (err) {
+            failures.push(`${basename(path)}:${/** @type {any} */ (err)?.message || 'unknown'}`);
+        }
+    }
+    return failures.length ? { ok: false, reason: failures.join(', ') } : { ok: true };
+}
+
+/**
+ * Publish a staged batch and record it in ONE session update.
+ *
+ * Recording per file (as the previous flow did) leaves the session describing a
+ * partial batch when a later file fails.
+ *
+ * @param {string} sessionId
+ * @param {Array<{ stagedPath: string, descriptor: ArtifactDescriptor }>} staged
+ * @returns {{ ok: true, files: ArtifactDescriptor[] } | { ok: false, reason: string, rollbackFailed?: string }}
+ */
+export function commitStagedArtifacts(sessionId, staged) {
+    const dir = resolveArtifactsDir(sessionId);
+    /** @type {ArtifactDescriptor[]} */
+    const published = [];
+    /** @type {string[]} */
+    const publishedPaths = [];
+    /** @param {string} reason */
+    const undo = (reason) => {
+        const removed = removePublished(publishedPaths);
+        return removed.ok
+            ? { ok: /** @type {const} */ (false), reason }
+            : { ok: /** @type {const} */ (false), reason, rollbackFailed: removed.reason };
+    };
+    // The session write is INSIDE the try: it takes a store lock that can throw,
+    // and leaving it outside published the files while recording nothing.
+    try {
+        for (const entry of staged) {
+            const finalName = collisionFreeName(dir, entry.descriptor.path);
+            const finalPath = join(dir, finalName);
+            renameSync(entry.stagedPath, finalPath);
+            publishedPaths.push(finalPath);
+            published.push({ ...entry.descriptor, path: finalName });
+        }
+        const session = getSession(sessionId);
+        if (!session) return undo('session-missing');
+        const artifacts = /** @type {ArtifactDescriptor[]} */ (session.artifacts || []);
+        const updated = updateSession(sessionId, { artifacts: [...artifacts, ...published] });
+        if (!updated) return undo('session-update-failed');
+    } catch (err) {
+        return undo(`commit-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
+    }
+    return { ok: true, files: published };
+}
+
+/**
+ * Discard staged files that were never published.
+ *
+ * @param {Array<{ stagedPath: string }>} staged
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function discardStagedArtifacts(staged) {
+    /** @type {string[]} */
+    const failures = [];
+    for (const entry of staged) {
+        try {
+            rmSync(entry.stagedPath, { force: true });
+        } catch (err) {
+            // Keep going: returning here would strand the remaining staged
+            // files, which is worse than the failure being reported.
+            failures.push(`${basename(entry.stagedPath)}:${/** @type {any} */ (err)?.message || 'unknown'}`);
+        }
+    }
+    return failures.length ? { ok: false, reason: failures.join(', ') } : { ok: true };
+}
+
+/**
+ * Whether a recorded artifact is still backed by the bytes it claims.
+ *
+ * A session record alone is not evidence: the file may have been deleted or
+ * replaced since, and counting it as saved would let the strict contract pass
+ * with nothing on disk.
+ *
+ * @param {string} sessionId
+ * @param {ArtifactDescriptor} descriptor
+ * @returns {boolean}
+ */
+export function artifactStillOnDisk(sessionId, descriptor) {
+    if (!descriptor || descriptor.validation?.ok !== true) return false;
+    const dir = resolveArtifactsDir(sessionId);
+    const fullPath = join(dir, basename(String(descriptor.path || '')));
+    if (!existsSync(fullPath)) return false;
+    try {
+        return computeSha256(readFileSync(fullPath)) === descriptor.sha256;
+    } catch {
+        return false;
+    }
 }
 
 /**

@@ -146,7 +146,7 @@
             "nonLiteralSend": 1
         },
         "web-ai/session-artifacts.mjs": {
-            "sync": 11,
+            "sync": 22,
             "cdp": 0,
             "nonLiteralSend": 0
         },
@@ -172,7 +172,7 @@
         }
     },
     "totals": {
-        "sync": 286,
+        "sync": 297,
         "cdp": 54
     }
 }

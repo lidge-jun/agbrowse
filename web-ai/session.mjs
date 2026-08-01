@@ -535,11 +535,37 @@ export function resolveTimeoutBudgetSec(
  * @param {{ files?: unknown[], transport?: string, contextTransform?: string, attachments?: unknown[], repomix?: Record<string, unknown> } | null} [contextPack]
  * @returns {Record<string, unknown>}
  */
+/**
+ * The file artifact policy in force for this call.
+ *
+ * Monotonic on purpose: a stored `require-all` is NOT relaxed by a later poll
+ * that omits the flag. Letting one forgetful invocation downgrade the session
+ * would make the requirement advisory rather than a contract.
+ *
+ * @param {{ fileArtifactPolicy?: string }} [input]
+ * @param {{ envelopeSummary?: Record<string, unknown> } | null} [session]
+ * @returns {'best-effort'|'require-all'}
+ */
+export function resolveFileArtifactPolicy(input = {}, session = null) {
+    const stored = session?.envelopeSummary?.fileArtifactPolicy;
+    return input.fileArtifactPolicy === 'require-all' || stored === 'require-all'
+        ? 'require-all'
+        : 'best-effort';
+}
+
+/**
+ * @param {WebAiEnvelope} [input]
+ * @param {{ files?: unknown[], transport?: string, contextTransform?: string, attachments?: unknown[], repomix?: Record<string, unknown> } | null} [contextPack]
+ * @returns {Record<string, unknown>}
+ */
 export function summarizeEnvelope(input = {}, contextPack = null) {
     /** @type {Record<string, unknown>} */
     const summary = {};
     if (input.model) summary.model = input.model;
     if (input.attachmentPolicy) summary.attachmentPolicy = input.attachmentPolicy;
+    // Persisted so a later poll/watch/resume inherits the requirement the send
+    // was given: the flag is not repeated on those commands.
+    if (input.fileArtifactPolicy === 'require-all') summary.fileArtifactPolicy = 'require-all';
     if (input.filePath) summary.filePath = input.filePath;
     if (contextPack?.files?.length) summary.fileCount = contextPack.files.length;
     if (contextPack?.transport) summary.contextTransport = contextPack.transport;

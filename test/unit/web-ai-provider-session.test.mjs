@@ -63,6 +63,30 @@ describe('web-ai summarizeEnvelope', () => {
             contextTransport: 'upload',
         });
     });
+
+    it('persists a require-all file artifact policy so later polls inherit it', async () => {
+        const { summarizeEnvelope } = await import('../../web-ai/session.mjs');
+        expect(summarizeEnvelope({ fileArtifactPolicy: 'require-all' }).fileArtifactPolicy).toBe('require-all');
+        // The default is not stored: absence means best-effort.
+        expect(summarizeEnvelope({ fileArtifactPolicy: 'best-effort' }).fileArtifactPolicy).toBeUndefined();
+    });
+});
+
+describe('web-ai file artifact policy inheritance', () => {
+    it('does not let a poll without the flag relax a stored requirement', async () => {
+        const { resolveFileArtifactPolicy } = await import('../../web-ai/session.mjs');
+        const strictSession = { envelopeSummary: { fileArtifactPolicy: 'require-all' } };
+
+        // poll/watch/resume never repeat the flag, so an input-only reading
+        // would silently downgrade the session the send established.
+        expect(resolveFileArtifactPolicy({}, strictSession)).toBe('require-all');
+        expect(resolveFileArtifactPolicy({ fileArtifactPolicy: 'best-effort' }, strictSession)).toBe('require-all');
+        // Raising it for one call is still allowed.
+        expect(resolveFileArtifactPolicy({ fileArtifactPolicy: 'require-all' }, null)).toBe('require-all');
+        // And the default stays best-effort when nobody asked.
+        expect(resolveFileArtifactPolicy({}, null)).toBe('best-effort');
+        expect(resolveFileArtifactPolicy({}, { envelopeSummary: {} })).toBe('best-effort');
+    });
 });
 
 describe('web-ai durable conversation URL persistence', () => {

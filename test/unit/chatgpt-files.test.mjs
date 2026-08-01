@@ -371,4 +371,271 @@ describe('saveAssistantDownloadableFiles', () => {
         expect(out.files).toEqual([]);
         expect(out.warnings.some((w) => w.startsWith('file-artifact-fetch-failed:'))).toBe(true);
     });
+
+    /**
+     * `strict` is the require-all path. The assertions below are about the
+     * DIFFERENCE from the opportunistic path above: same inputs, different
+     * verdicts, because the caller asked for the files.
+     */
+    describe('strict (require-all)', () => {
+        it('F1: a malformed detection is a failure, not an empty answer', async () => {
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const out = await saveAssistantDownloadableFiles(fakeCdp('not json'), {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('detection-malformed');
+        });
+
+        it('F2: finding no candidates is an unmet request', async () => {
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const out = await saveAssistantDownloadableFiles(fakeCdp([]), {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('no-candidates');
+            // The paired case: the same emptiness is fine without the flag.
+            const lenient = await saveAssistantDownloadableFiles(fakeCdp([]), {}, { sessionId: session.sessionId });
+            expect(lenient.ok).toBe(true);
+        });
+
+        it('F3: one failed download rolls the whole batch back', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => {
+                if (String(url).includes('file_a')) return okResponse('first', { 'content-type': 'text/plain' });
+                return { ok: false, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
+            }));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: 'b.txt', text: '' },
+            ]);
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('fetch-failed');
+            // Nothing published, and no staging leftovers.
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F4: rollback leaves an artifact from an earlier run untouched', async () => {
+            // The failure mode this guards: the deterministic basename means a
+            // second capture of `a.txt` would overwrite the first, so deleting
+            // "the file we wrote" on failure would destroy the earlier one.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { saveFileArtifact, resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            const existing = saveFileArtifact(session.sessionId, {
+                filename: 'a.txt', buffer: Buffer.from('ORIGINAL'), mimeType: 'text/plain',
+            });
+            const existingPath = join(resolveArtifactsDir(session.sessionId), existing.path);
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => {
+                if (String(url).includes('file_a')) return okResponse('REPLACEMENT', { 'content-type': 'text/plain' });
+                return { ok: false, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
+            }));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: 'b.txt', text: '' },
+            ]);
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(readFileSync(existingPath, 'utf8')).toBe('ORIGINAL');
+        });
+
+        it('F5: a second attempt reuses what the first one saved', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            const downloadsAfterFirst = fetchSpy.mock.calls.length;
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            expect(second.savedCount).toBe(1);
+            // No re-download, no duplicate artifact.
+            expect(fetchSpy.mock.calls.length).toBe(downloadsAfterFirst);
+            expect(getSession(session.sessionId).artifacts).toHaveLength(1);
+        });
+
+        it('F6: a recorded artifact whose file is gone is not reused', async () => {
+            // Trusting the session record alone would report success with
+            // nothing on disk — the same fail-open shape in a new place.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { rmSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            rmSync(join(resolveArtifactsDir(session.sessionId), first.files[0].path), { force: true });
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            // Re-downloaded rather than counted from the stale record.
+            expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+        });
+
+        it('F7: a losing run stops before it writes anything', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true, stillActive: () => false,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('deadline-exceeded');
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F8: two candidates that resolve to the same filename both survive', async () => {
+            // Different URLs can both be `data.csv`. Keying the staging path on
+            // the name alone let the second write clobber the first, and the
+            // commit then failed renaming a file that was gone — so an ordinary
+            // two-file request failed.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => okResponse(
+                String(url).includes('file_a') ? 'FIRST' : 'SECOND',
+                { 'content-disposition': 'attachment; filename="same.txt"', 'content-type': 'text/plain' },
+            )));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: '', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: '', text: '' },
+            ]);
+
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(true);
+            expect(out.savedCount).toBe(2);
+            // Published under distinct names, not one overwriting the other.
+            expect(new Set(out.files.map(f => f.path)).size).toBe(2);
+            expect(getSession(session.sessionId).artifacts).toHaveLength(2);
+        });
+
+        it('F9: a fetch still in flight at the deadline writes nothing', async () => {
+            // The contract case: not "already expired at entry" but a download
+            // that is pending WHEN the deadline passes, then resolves.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            let active = true;
+            let release = () => {};
+            const inFlight = new Promise(resolve => { release = resolve; });
+            vi.stubGlobal('fetch', vi.fn(async () => {
+                // The deadline passes while this is outstanding.
+                active = false;
+                await inFlight;
+                return okResponse('late body', { 'content-type': 'text/plain' });
+            }));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const pending = saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true, stillActive: () => active,
+            });
+            release();
+            const out = await pending;
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('deadline-exceeded');
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F10: a tampered file is re-downloaded rather than counted', async () => {
+            // F6 covers a deleted file; this covers one whose bytes changed.
+            // Matching on the record alone would return stale content as fresh.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { writeFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            writeFileSync(join(resolveArtifactsDir(session.sessionId), first.files[0].path), 'TAMPERED');
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+        });
+
+        it('F11: a failed session write leaves no published files behind', async () => {
+            // The session update takes a store lock that can throw. Leaving it
+            // outside the rollback published the files while recording nothing.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const sessionModule = await import('../../web-ai/session.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+            const spy = vi.spyOn(sessionModule, 'updateSession').mockImplementation(() => {
+                throw new Error('store lock unavailable');
+            });
+
+            let out;
+            try {
+                out = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            } finally {
+                spy.mockRestore();
+            }
+
+            expect(out.ok).toBe(false);
+            const dir = resolveArtifactsDir(session.sessionId);
+            const left = existsSync(dir) ? readdirSync(dir) : [];
+            expect(left).toEqual([]);
+        });
+    });
 });

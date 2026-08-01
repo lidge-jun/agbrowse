@@ -1,5 +1,48 @@
 // @ts-check
-import { trySaveFileArtifact, appendArtifactRecord } from './session-artifacts.mjs';
+import { createHash } from 'node:crypto';
+import {
+    artifactStillOnDisk,
+    commitStagedArtifacts,
+    discardStagedArtifacts,
+    stageFileArtifact,
+    trySaveFileArtifact,
+    appendArtifactRecord,
+} from './session-artifacts.mjs';
+import { getSession } from './session.mjs';
+
+/**
+ * Identity of one download candidate within one assistant turn.
+ *
+ * Keyed on the turn as well as the URL: the same sandbox path in a later turn
+ * is a DIFFERENT file, and reusing the earlier artifact for it would return
+ * stale bytes as if they were fresh.
+ *
+ * @param {string} sessionId
+ * @param {number} baselineAssistantCount
+ * @param {string} sourceUrl
+ * @returns {string}
+ */
+export function candidateKeyFor(sessionId, baselineAssistantCount, sourceUrl) {
+    return createHash('sha256')
+        .update(`${sessionId}\u0000${baselineAssistantCount}\u0000${String(sourceUrl || '')}`)
+        .digest('hex')
+        .slice(0, 32);
+}
+
+/**
+ * Identity of a whole capture batch.
+ *
+ * @param {string} sessionId
+ * @param {number} baselineAssistantCount
+ * @param {string[]} candidateKeys
+ * @returns {string}
+ */
+export function transactionKeyFor(sessionId, baselineAssistantCount, candidateKeys) {
+    return createHash('sha256')
+        .update(`${sessionId}\u0000${baselineAssistantCount}\u0000${[...candidateKeys].sort().join(',')}`)
+        .digest('hex')
+        .slice(0, 32);
+}
 
 /**
  * Redact sensitive parts of a URL for safe diagnostic output.
@@ -318,18 +361,41 @@ export function resolveDownloadFilename({ contentDisposition, downloadAttr, sour
  * @returns {Promise<Array<{ sourceUrl: string, download: string, text: string }>>}
  */
 export async function readAssistantDownloadableFiles(cdpSession, { baselineAssistantCount = 0 } = {}) {
-    const { result } = await cdpSession.send('Runtime.evaluate', {
-        expression: buildDownloadableFileDetectionExpression(baselineAssistantCount),
-        returnByValue: true,
-    });
+    const outcome = await probeAssistantDownloadableFiles(cdpSession, { baselineAssistantCount });
+    return outcome.ok ? outcome.candidates : [];
+}
+
+/**
+ * Detection with the read failure kept SEPARATE from "no files".
+ *
+ * `readAssistantDownloadableFiles` collapses both to `[]`, which is fine for
+ * the opportunistic path but cannot support a require-all contract: refusing to
+ * save is indistinguishable from there being nothing to save.
+ *
+ * @param {{ send: Function }} cdpSession
+ * @param {{ baselineAssistantCount?: number }} [opts]
+ * @returns {Promise<{ ok: true, candidates: Array<{ sourceUrl: string, download: string, text: string }> }
+ *   | { ok: false, reason: 'cdp-failed'|'malformed' }>}
+ */
+export async function probeAssistantDownloadableFiles(cdpSession, { baselineAssistantCount = 0 } = {}) {
+    let result;
+    try {
+        ({ result } = await cdpSession.send('Runtime.evaluate', {
+            expression: buildDownloadableFileDetectionExpression(baselineAssistantCount),
+            returnByValue: true,
+        }));
+    } catch {
+        return { ok: false, reason: 'cdp-failed' };
+    }
     const value = result?.value;
     let raw;
     try {
         raw = Array.isArray(value) ? value : JSON.parse(value);
     } catch {
-        return [];
+        return { ok: false, reason: 'malformed' };
     }
-    return dedupeDownloadCandidates(Array.isArray(raw) ? raw : []);
+    if (!Array.isArray(raw)) return { ok: false, reason: 'malformed' };
+    return { ok: true, candidates: dedupeDownloadCandidates(raw) };
 }
 
 /* ── Sequential download + save ──────────────────────────────────────── */
@@ -390,17 +456,30 @@ async function fetchDownload(url, cookieHeader, timeoutMs) {
  * next candidate.
  * @param {{ send: Function }} cdpSession
  * @param {object} _deps  reserved for parity with sibling capture modules
- * @param {{ sessionId?: string|null, baselineAssistantCount?: number, perDownloadTimeoutMs?: number }} [opts]
- * @returns {Promise<{ ok: boolean, files: import('./session-artifacts.mjs').ArtifactDescriptor[], warnings: string[] }>}
+ * When `strict` is set the caller ASKED for these files, so every step reports
+ * a verdict instead of a warning, and a partial batch is rolled back rather
+ * than left half-published.
+ *
+ * @param {{ send: Function }} cdpSession
+ * @param {object} _deps  reserved for parity with sibling capture modules
+ * @param {{ sessionId?: string|null, baselineAssistantCount?: number, perDownloadTimeoutMs?: number, strict?: boolean, stillActive?: () => boolean }} [opts]
+ * @returns {Promise<{ ok: boolean, detectedCount: number, savedCount: number, files: import('./session-artifacts.mjs').ArtifactDescriptor[], errors: Array<{ reason: string, candidate?: string, message?: string }>, warnings: string[] }>}
  */
 export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
     sessionId = null,
     baselineAssistantCount = 0,
     perDownloadTimeoutMs = DEFAULT_PER_DOWNLOAD_TIMEOUT_MS,
+    strict = false,
+    stillActive,
 } = {}) {
+    if (strict) {
+        return saveAssistantDownloadableFilesStrict(cdpSession, {
+            sessionId, baselineAssistantCount, perDownloadTimeoutMs, stillActive,
+        });
+    }
     const candidates = await readAssistantDownloadableFiles(cdpSession, { baselineAssistantCount });
-    if (!candidates.length) return { ok: true, files: [], warnings: [] };
-    if (!sessionId) return { ok: true, files: [], warnings: ['file-artifact-no-session'] };
+    if (!candidates.length) return { ok: true, detectedCount: 0, savedCount: 0, files: [], errors: [], warnings: [] };
+    if (!sessionId) return { ok: true, detectedCount: candidates.length, savedCount: 0, files: [], errors: [], warnings: ['file-artifact-no-session'] };
 
     const cookieHeader = await getChatGptCookieHeader(cdpSession);
     /** @type {import('./session-artifacts.mjs').ArtifactDescriptor[]} */
@@ -443,5 +522,127 @@ export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
         appendArtifactRecord(sessionId, res.descriptor);
         files.push(res.descriptor);
     }
-    return { ok: true, files, warnings };
+    return { ok: true, detectedCount: candidates.length, savedCount: files.length, files, errors: [], warnings };
+}
+
+/**
+ * The require-all path: detect, download, stage, then publish as one batch.
+ *
+ * Every failure is terminal here. The opportunistic path may return a partial
+ * set with warnings because the caller never asked for the files; a caller that
+ * did ask must not be told `complete` when some are missing.
+ *
+ * @param {{ send: Function }} cdpSession
+ * @param {{ sessionId: string|null, baselineAssistantCount: number, perDownloadTimeoutMs: number, stillActive?: () => boolean }} opts
+ */
+async function saveAssistantDownloadableFilesStrict(cdpSession, {
+    sessionId, baselineAssistantCount, perDownloadTimeoutMs, stillActive,
+}) {
+    /** @param {string} reason @param {string} [candidate] @param {string} [message] */
+    const fail = (reason, candidate, message) => ({
+        ok: false, detectedCount: 0, savedCount: 0, files: [], warnings: [],
+        errors: [{ reason, ...(candidate ? { candidate } : {}), ...(message ? { message } : {}) }],
+    });
+    if (!sessionId) return fail('no-session');
+
+    const probe = await probeAssistantDownloadableFiles(cdpSession, { baselineAssistantCount });
+    if (!probe.ok) return fail(probe.reason === 'cdp-failed' ? 'cdp-unavailable' : 'detection-malformed');
+    const candidates = probe.candidates;
+    // Asking for files and finding none is an unmet request, not a clean run.
+    if (!candidates.length) return fail('no-candidates');
+
+    const keys = candidates.map(c => candidateKeyFor(sessionId, baselineAssistantCount, c.sourceUrl));
+    const transactionKey = transactionKeyFor(sessionId, baselineAssistantCount, keys);
+
+    // Reuse anything a previous attempt already saved for these same candidates.
+    // Without this, a batch that committed and then lost the race to the hard
+    // deadline would be downloaded and stored a second time on the next poll.
+    const stored = /** @type {import('./session-artifacts.mjs').ArtifactDescriptor[]} */ (getSession(sessionId)?.artifacts || []);
+    /** @type {Map<string, import('./session-artifacts.mjs').ArtifactDescriptor>} */
+    const reusable = new Map();
+    for (const descriptor of stored) {
+        if (descriptor.kind !== 'file' || !descriptor.candidateKey) continue;
+        if (!keys.includes(descriptor.candidateKey)) continue;
+        // The session record is a claim; the bytes are the evidence.
+        if (artifactStillOnDisk(sessionId, descriptor)) reusable.set(descriptor.candidateKey, descriptor);
+    }
+
+    const txId = transactionKey.slice(0, 12);
+    /** @type {Array<{ stagedPath: string, descriptor: import('./session-artifacts.mjs').ArtifactDescriptor }>} */
+    const staged = [];
+    /** @param {string} reason @param {string} [candidate] @param {string} [message] */
+    const abort = (reason, candidate, message) => {
+        const discarded = discardStagedArtifacts(staged);
+        // A failed rollback leads, because it is the condition that needs
+        // acting on: the original failure is recoverable by retrying, files
+        // left on disk are not.
+        const errors = discarded.ok
+            ? [{ reason, ...(candidate ? { candidate } : {}), ...(message ? { message } : {}) }]
+            : [
+                { reason: 'rollback-failed', message: discarded.reason },
+                { reason, ...(candidate ? { candidate } : {}), ...(message ? { message } : {}) },
+            ];
+        return { ok: false, detectedCount: candidates.length, savedCount: 0, files: [], errors, warnings: [] };
+    };
+
+    for (let i = 0; i < candidates.length; i += 1) {
+        const c = candidates[i];
+        const candidateKey = keys[i];
+        if (reusable.has(candidateKey)) continue;
+        // Re-checked before every download AND before the write below: the
+        // wrapper may have returned while the previous fetch was in flight, and
+        // a losing run must not start new work or publish anything.
+        if (stillActive?.() === false) return abort('deadline-exceeded', safeDiagnosticUrl(c.sourceUrl));
+        const got = await fetchDownload(c.sourceUrl, await getChatGptCookieHeader(cdpSession), perDownloadTimeoutMs);
+        if ('timedOut' in got) return abort('fetch-timeout', safeDiagnosticUrl(c.sourceUrl));
+        if ('failed' in got) return abort('fetch-failed', safeDiagnosticUrl(c.sourceUrl));
+        if (stillActive?.() === false) return abort('deadline-exceeded', safeDiagnosticUrl(c.sourceUrl));
+        const filename = resolveDownloadFilename({
+            contentDisposition: got.contentDisposition,
+            downloadAttr: c.download,
+            sourceUrl: c.sourceUrl,
+            index: i,
+        });
+        try {
+            staged.push(stageFileArtifact(sessionId, {
+                filename, buffer: got.buffer, mimeType: got.mimeType, sourceUrl: c.sourceUrl,
+                candidateKey, transactionKey, txId, slot: i,
+            }));
+        } catch (err) {
+            return abort('save-failed', safeDiagnosticUrl(c.sourceUrl), /** @type {any} */ (err)?.message);
+        }
+    }
+
+    const reused = [...reusable.values()];
+    if (!staged.length) {
+        // Everything was already on disk from an earlier attempt.
+        return { ok: true, detectedCount: candidates.length, savedCount: reused.length, files: reused, errors: [], warnings: [] };
+    }
+    if (stillActive?.() === false) return abort('deadline-exceeded');
+    const committed = commitStagedArtifacts(sessionId, staged);
+    if (!committed.ok) {
+        // The commit already undid its own published files; `abort` clears any
+        // staging leftovers. A rollback failure inside the commit outranks the
+        // commit failure itself.
+        if (committed.rollbackFailed) {
+            discardStagedArtifacts(staged);
+            return {
+                ok: false, detectedCount: candidates.length, savedCount: 0, files: [], warnings: [],
+                errors: [
+                    { reason: 'rollback-failed', message: committed.rollbackFailed },
+                    { reason: 'save-failed', message: committed.reason },
+                ],
+            };
+        }
+        return abort('save-failed', undefined, committed.reason);
+    }
+    const files = [...reused, ...committed.files];
+    return {
+        ok: files.length === candidates.length,
+        detectedCount: candidates.length,
+        savedCount: files.length,
+        files,
+        errors: files.length === candidates.length ? [] : [{ reason: 'save-incomplete' }],
+        warnings: [],
+    };
 }
