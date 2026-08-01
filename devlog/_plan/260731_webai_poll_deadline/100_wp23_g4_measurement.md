@@ -117,6 +117,12 @@ true"였지만 예산이 작동한 게 아니라 **애초에 도달하지 않은
 
 남은 측정을 다음 work-phase가 하려면 이만큼이 필요하다.
 
+- **1번**: validator를 부르는 것만으로는 부족하다. 조건 문언이 "root/null이면
+  reload **금지**"이므로 **집행**까지 봐야 한다 — 실제 진입점에서
+  `extractDurableConversationId`를 태우고, root/null 입력에서 `Page.reload`
+  호출 0회·request 0·loader 변화 0을, valid `/c/<id>`에서 정확히 1회를 관측한다.
+  생산 reload 경로가 아직 없으므로 하네스로는 prototype feasibility까지만
+  기록할 수 있다
 - **2번**: 실제 세션 store의 `sessionId`·`targetId`와 durable conversation ID를
   reload 전후로 비교. title은 관계없다
 - **3번**: `waitForNavigation`처럼 **새 navigation에 결속된** waiter를 써야
@@ -134,9 +140,16 @@ true"였지만 예산이 작동한 게 아니라 **애초에 도달하지 않은
 교체로 중복 send를 대신했다. 셋 다 "관측했다"는 느낌은 주지만 조건이 묻는 것에
 답하지 않는다.
 
-이 세션에서 같은 종류의 실수를 여러 번 했다 — WP16의 fencing 오판, WP20의
-`skipFinalize` 우회, WP21의 F13/F14. **GREEN을 근거로 쓰지 않는다는 규칙이
-측정에도 그대로 적용된다.**
+이 세션에서 같은 종류의 실수를 여러 번 했다.
+
+- **WP16** — `skipFinalize: true` 하네스가 세션 쓰기 경로를 통째로 건너뛰는데도
+  "fencing 충족"으로 읽었다
+- **WP20** — `F13`을 순차 호출로 써서 인터리브를 재현하지 못했고, `F14`는 조건부
+  단언이라 조건이 안 서면 아무것도 검사하지 않았다. 둘 다 mutation에서 통과했다
+- **WP21** — 정규식 comment stripper가 문자열 안의 `"//"`를 주석으로 오인해
+  살아 있는 코드를 지웠다
+
+**GREEN을 근거로 쓰지 않는다는 규칙이 측정에도 그대로 적용된다.**
 
 ## 하네스
 
