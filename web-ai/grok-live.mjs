@@ -274,7 +274,9 @@ export async function grokPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor grok first.',
     });
-    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 600)) * 1000;
+    // Fractional — see gemini-live.mjs. Flooring seconds undid the caller's
+    // clamp; the floor is on milliseconds so sub-second budgets survive.
+    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 600) * 1000);
     const deadline = Date.now() + timeout;
     let stableText = '';
     let stableSince = 0;
@@ -323,7 +325,8 @@ export async function grokPollWebAi(deps, input = {}) {
             stableText = '';
             stableSince = 0;
         }
-        await page.waitForTimeout(500).catch(() => undefined);
+        // Capped by what is left; the loop condition is checked before it.
+        await page.waitForTimeout(Math.max(1, Math.min(500, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
                 if (session) updateSession(session.sessionId, { status: 'crashed' });

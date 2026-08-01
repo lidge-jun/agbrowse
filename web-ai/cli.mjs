@@ -29,7 +29,7 @@ import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/bro
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { listSessions, getSession, resolveTimeoutDefaultSec } from './session.mjs';
+import { listSessions, getSession, resolvePollTimeoutSec, resolveTimeoutDefaultSec } from './session.mjs';
 import { resolveImplicitSessionSelection } from './session-target-guard.mjs';
 import { listLeases } from './tab-lease-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
@@ -1355,7 +1355,18 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
                     getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
                 };
                 return withWebAiActiveCommand(command, sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId }, async () => {
-                    const result = await effectivePollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+                    const result = await effectivePollFn(sessionDeps, {
+                        ...input,
+                        vendor: session.vendor,
+                        session: session.sessionId,
+                        // Bounded like every other resume surface. Forwarding the
+                        // raw input meant an omitted timeout fell through to a
+                        // provider default — 1200s for Gemini, 600s for Grok —
+                        // and an explicit one was never clamped to the stored
+                        // deadline. ChatGPT reads `deadlineAt` itself, but the
+                        // other providers do not.
+                        timeout: resolvePollTimeoutSec(input, session, session.vendor || 'chatgpt'),
+                    });
                     if (isRecoverableTabCrash(result)) {
                         throw new Error(result.error || 'target closed during session-bound web-ai command');
                     }

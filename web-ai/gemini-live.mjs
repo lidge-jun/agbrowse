@@ -643,7 +643,11 @@ export async function geminiPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor gemini first.',
     });
-    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 1200)) * 1000;
+    // Fractional. Flooring at a whole second here undid the caller's clamp: a
+    // resumed session with 400ms of budget left was rounded back up to a full
+    // second. The floor is on MILLISECONDS now, so a positive budget is always
+    // honoured and a zero one still cannot loop forever.
+    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 1200) * 1000);
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
         try {
@@ -683,7 +687,9 @@ export async function geminiPollWebAi(deps, input = {}) {
                 warnings,
             });
         }
-        await page.waitForTimeout(2_000).catch(() => undefined);
+        // Capped by what is left: the loop condition is checked before this
+        // wait, so a fixed tick is itself the overrun near the deadline.
+        await page.waitForTimeout(Math.max(1, Math.min(2_000, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
                 if (session) updateSession(session.sessionId, { status: 'crashed' });
