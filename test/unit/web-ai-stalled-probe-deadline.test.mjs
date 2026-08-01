@@ -11,11 +11,15 @@ import { resumeDeepResearch } from '../../web-ai/chatgpt-deep-research.mjs';
 /**
  * A probe that never settles must not defeat the timeout.
  *
- * This is the last thing standing between #88 and closed. Every one of these
- * loops checked its deadline only BETWEEN awaited browser probes, so a single
- * `page.evaluate` or `locator.all` that never resolves left the caller waiting
- * forever — capping the sleeps did nothing, because the sleep is not where the
- * time went.
+ * Every one of these loops checked its deadline only BETWEEN awaited browser
+ * probes, so a single `page.evaluate` or `locator.all` that never resolves left
+ * the caller waiting forever — capping the sleeps did nothing, because the
+ * sleep is not where the time went.
+ *
+ * NOT the whole bound. A run that passes its expiry check and then blocks
+ * inside a contended synchronous `updateSession` still suspends the timer;
+ * that is the blocking session store one layer down and needs the async write,
+ * so #88 stays open on it.
  *
  * The stalled work is NOT cancelled; Playwright gives no handle for that. What
  * these prove is the weaker, honest property: the CALLER stops waiting.
