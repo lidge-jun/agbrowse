@@ -723,7 +723,7 @@ describe('saveAssistantDownloadableFiles', () => {
             // Two entries: the first publishes cleanly, the second cannot even
             // be linked because its staging file is gone. The commit must roll
             // the first one back, and F14's point is that whatever it cannot
-            // remove is named in `rollbackFailed` rather than left silent.
+            // remove comes back off disk rather than being left behind.
             const good = stageFileArtifact(session.sessionId, {
                 filename: 'kept.txt', buffer: Buffer.from('K'), mimeType: 'text/plain', txId: 'tx', slot: 0,
             });
@@ -731,7 +731,6 @@ describe('saveAssistantDownloadableFiles', () => {
                 filename: 'orphan.txt', buffer: Buffer.from('X'), mimeType: 'text/plain', txId: 'tx', slot: 1,
             });
             removeSync(broken.stagedPath, { force: true });
-            // Occupy the rollback target so removing the published file fails.
             const result = commitStagedArtifacts(session.sessionId, [good, broken]);
 
             expect(result.ok).toBe(false);
@@ -756,7 +755,7 @@ describe('saveAssistantDownloadableFiles', () => {
             const { createSession } = await import('../../web-ai/session.mjs');
             const { commitStagedArtifacts, resolveArtifactsDir } =
                 await import('../../web-ai/session-artifacts.mjs');
-            const { chmodSync, mkdirSync, mkdtempSync, existsSync, writeFileSync: write, readdirSync } =
+            const { chmodSync, mkdirSync, mkdtempSync, existsSync, writeFileSync: write, readdirSync, rmSync: removeSync } =
                 await import('node:fs');
             const { tmpdir } = await import('node:os');
             const { join } = await import('node:path');
@@ -780,6 +779,7 @@ describe('saveAssistantDownloadableFiles', () => {
                 }]);
             } finally {
                 chmodSync(lockedDir, 0o700);
+                removeSync(lockedDir, { recursive: true, force: true });
             }
 
             expect(result.ok).toBe(false);
