@@ -724,6 +724,12 @@ export async function pollWebAi(deps, input = {}) {
             input,
             input.session ? getSession(input.session) : null,
             input.vendor || 'chatgpt',
+            // Measured from `started`, not from after the store read. The
+            // resolver turns a stored deadline into a REMAINDER, so letting it
+            // read the clock itself subtracted the read's duration once there
+            // and again when the remainder was added to the earlier `started`.
+            // A slow store read shortened the caller's budget twice over.
+            started,
         );
     const timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
     /** @type {any} */

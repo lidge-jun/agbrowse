@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSession, getSession, listSessions, saveBaseline, updateSession } from '../../web-ai/session.mjs';
+import { createSession, getSession, listSessions, resolveTimeoutBudgetSec, saveBaseline, updateSession } from '../../web-ai/session.mjs';
 import { pollWebAi } from '../../web-ai/chatgpt.mjs';
 
 // This file drives the REAL session store. Without an isolated home it reads
@@ -1518,6 +1518,40 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         expect(elapsed).toBeGreaterThan(2_600);
         expect(elapsed).toBeLessThan(4_500);
     }, 20_000);
+
+    it('Y12: the inherited budget is anchored at the wrapper, not after the store read', async () => {
+        // The resolver turns a stored deadline into a REMAINDER against the
+        // clock it is handed. The wrapper adds that remainder to a `started`
+        // captured before the store read, so handing the resolver a LATER clock
+        // subtracts the read twice: once from the remainder, once from the
+        // anchor. The session store's lock retries 200 times at 25ms, so a
+        // contended read really can cost seconds.
+        //
+        // Asserted on the resolver's arithmetic. Be clear about the limit:
+        // this pins the CONTRACT (a remainder is only correct against the
+        // anchor it will be added to) and fails if the fourth parameter stops
+        // meaning that. It does NOT catch the wrapper dropping the argument —
+        // reverting `started` at the call site leaves this green, and a
+        // wall-time poll cannot separate a budget short by the read from
+        // ordinary scheduling noise. Catching that needs a store-read delay
+        // long enough to exceed the noise floor, which is a slow test.
+        const startedAt = 1_000_000;
+        const storeReadMs = 900;
+        const session = /** @type {any} */ ({
+            vendor: 'chatgpt',
+            deadlineAt: new Date(startedAt + 5_000).toISOString(),
+        });
+
+        // What the fix does: the resolver sees the wrapper's own anchor, so
+        // anchor + budget lands exactly on the stored deadline.
+        const anchored = resolveTimeoutBudgetSec({}, session, 'chatgpt', startedAt);
+        expect(startedAt + anchored * 1_000).toBe(startedAt + 5_000);
+
+        // What it did: the resolver read the clock after the store read, and
+        // that remainder was still added to the earlier anchor.
+        const afterRead = resolveTimeoutBudgetSec({}, session, 'chatgpt', startedAt + storeReadMs);
+        expect(startedAt + afterRead * 1_000).toBe(startedAt + 5_000 - storeReadMs);
+    });
 
     it('Y11: the recovery reserve scales with the budget instead of one tick', async () => {
         // `Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS)` is always
