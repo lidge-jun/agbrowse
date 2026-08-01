@@ -4,6 +4,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const tabState = vi.hoisted(() => ({ page: null }));
+// Lets a test replace the provider poll without also replacing
+// `callVendorPoll`, which is where the deadline clamp lives.
+const pollState = vi.hoisted(() => ({ impl: null }));
+vi.mock('../../web-ai/chatgpt.mjs', async () => {
+    const actual = await vi.importActual('../../web-ai/chatgpt.mjs');
+    return {
+        ...actual,
+        pollWebAi: async (/** @type {any} */ deps, /** @type {any} */ input) => (
+            pollState.impl
+                ? pollState.impl(deps, input)
+                : /** @type {any} */ (actual).pollWebAi(deps, input)
+        ),
+    };
+});
 vi.mock('../../skills/browser/tab-manager.mjs', () => ({
     isTabAlive: vi.fn(async () => Boolean(tabState.page)),
     // Liveness now has three states; the double must model the one that says
@@ -27,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
     tabState.page = null;
+    pollState.impl = null;
     if (ORIGINAL_HOME === undefined) delete process.env.BROWSER_AGENT_HOME;
     else process.env.BROWSER_AGENT_HOME = ORIGINAL_HOME;
     rmSync(tmpHome, { recursive: true, force: true });
@@ -202,6 +217,58 @@ describe('watchSessionOnce recoverable CDP disconnect', () => {
         const result = await watchSessionOnce(baseDeps(), { session: session.sessionId }, recovery);
         expect(result).toMatchObject({ status: 'polling', answerText: '', terminal: false });
         expect(getSession(session.sessionId).answer).toBeNull();
+    });
+});
+
+/**
+ * A watch tick asks for a fixed slice — 30s by default — and the provider
+ * treats an explicit timeout as the caller's authority. Passing the slice
+ * through unclamped let a session with under a second of budget left keep
+ * polling for another 30 seconds past its own deadline.
+ *
+ * These drive the REAL `callVendorPoll` (no `recoveryDeps.callVendorPoll`
+ * seam) so the clamp is exercised where it lives.
+ */
+describe('watch does not poll past the session deadline', () => {
+    it('clamps the per-poll slice to what the session has left', async () => {
+        const session = createWatcherSession({
+            deadlineAt: new Date(Date.now() + 4_000).toISOString(),
+        });
+        const seen = [];
+        pollState.impl = async (_deps, input) => {
+            seen.push(Number(input.timeout));
+            return { ok: true, status: 'polling', answerText: '' };
+        };
+
+        await watchSessionOnce(baseDeps(), { session: session.sessionId, pollTimeoutSec: 30 }, {
+            probeCdpLiveness: vi.fn(async () => ({ endpointReachable: true, targetFound: true })),
+            reattachSessionPage: vi.fn(),
+        });
+
+        expect(seen).toHaveLength(1);
+        // ~4s left, 30s requested: the slice must follow the deadline.
+        expect(seen[0]).toBeLessThanOrEqual(4);
+        expect(seen[0]).toBeGreaterThan(0);
+    });
+
+    it('still passes the requested slice when the session has plenty of budget', async () => {
+        // The paired assertion: a clamp that always shortened would satisfy the
+        // test above and break every ordinary watch tick.
+        const session = createWatcherSession({
+            deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+        });
+        const seen = [];
+        pollState.impl = async (_deps, input) => {
+            seen.push(Number(input.timeout));
+            return { ok: true, status: 'polling', answerText: '' };
+        };
+
+        await watchSessionOnce(baseDeps(), { session: session.sessionId, pollTimeoutSec: 30 }, {
+            probeCdpLiveness: vi.fn(async () => ({ endpointReachable: true, targetFound: true })),
+            reattachSessionPage: vi.fn(),
+        });
+
+        expect(seen).toEqual([30]);
     });
 });
 

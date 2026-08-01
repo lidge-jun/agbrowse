@@ -131,7 +131,16 @@ export async function runSessionsCommand(args, values, deps, input) {
                 ...pollInput,
                 vendor: refreshed.vendor,
                 session: refreshed.sessionId,
-                timeout: resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt'),
+                // Resolve a timeout here ONLY when the caller gave one. Resolving
+                // it unconditionally floored the stored remainder to a whole
+                // second and handed it down as if the user had typed it, which
+                // is indistinguishable from a real override — so a session with
+                // 400ms left was granted a fresh second past its own deadline.
+                // Omitting it lets the provider read the stored deadline in
+                // milliseconds and refuse outright when it has already passed.
+                ...(Number(input.timeout) > 0
+                    ? { timeout: resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt') }
+                    : {}),
             });
         }));
         return { ...result, status: result.status || 'resumed' };

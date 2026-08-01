@@ -1601,35 +1601,49 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         // rounded up past what the caller was promised. 400ms left used to
         // become a 1000ms deadline.
         const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y14' });
+        // `getPage` is the first thing the poll does once it decides to run, so
+        // it marks the moment the deadline starts being spent. Timing from HERE
+        // rather than from before `createSession` keeps store work and lock
+        // contention out of the measurement — anchoring across setup is exactly
+        // the drift that made an earlier test in this file flake under load.
+        /** @type {number|null} */
+        let pageOpenedAt = null;
         saveBaseline({
             vendor: 'chatgpt',
             url: 'https://chatgpt.com/c/stall-y14',
             assistantCount: 0,
             envelope: { vendor: 'chatgpt', prompt: 'q' },
         });
+        const deadlineAt = Date.now() + 400;
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
             {
                 targetId: 'target-y14',
                 conversationUrl: 'https://chatgpt.com/c/stall-y14',
-                deadlineAt: new Date(Date.now() + 400).toISOString(),
+                deadlineAt: new Date(deadlineAt).toISOString(),
                 envelopeSummary: { assistantCount: 0 },
             },
         );
-        const started = Date.now();
 
         const result = await pollWebAi(
-            { getPage: async () => page, getTargetId: async () => 'target-y14' },
+            {
+                getPage: async () => { pageOpenedAt ??= Date.now(); return page; },
+                getTargetId: async () => 'target-y14',
+            },
             { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
         );
-        const elapsed = Date.now() - started;
+        const finishedAt = Date.now();
 
         expect(result.status).toBe('timeout');
-        // Bracketed on both sides. The upper bound is what the floor broke; the
-        // lower one keeps a "return immediately for everything" regression from
-        // passing, since that is a different bug with the same symptom here.
-        expect(elapsed).toBeGreaterThanOrEqual(300);
-        expect(elapsed).toBeLessThan(900);
+        // The poll actually ran: this is the deterministic half of the lower
+        // bound, and it fails outright if a regression returns early for every
+        // stored deadline — a different bug with the same symptom as the fix.
+        expect(pageOpenedAt).not.toBeNull();
+        // The bound itself: finishing at or before the stored deadline plus a
+        // tick. Compared against the DEADLINE, not against elapsed time, so
+        // slow setup cannot move it. The old floor produced ~1004ms, which
+        // lands well past this.
+        expect(finishedAt).toBeLessThan(deadlineAt + 500);
     }, 20_000);
 
     it('Y15: an already expired stored deadline returns without opening the page', async () => {

@@ -352,11 +352,20 @@ async function runMcpSessionPoll(name, args, deps) {
                     ...args,
                     vendor: session.vendor || provider,
                     session: session.sessionId,
-                    timeout: resolveTimeoutBudgetSec(
-                        args,
-                        session,
-                        session.vendor || provider,
-                    ),
+                    // Only when the caller supplied one. Resolving it here
+                    // unconditionally floored the stored remainder to a whole
+                    // second and passed it down as an explicit override, which
+                    // let an expired session poll for another second. Leaving
+                    // it off lets the provider use the millisecond remainder.
+                    ...(Number(args?.timeout) > 0
+                        ? {
+                            timeout: resolveTimeoutBudgetSec(
+                                args,
+                                session,
+                                session.vendor || provider,
+                            ),
+                        }
+                        : {}),
                 });
             });
         }),

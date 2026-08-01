@@ -740,7 +740,17 @@ export async function pollWebAi(deps, input = {}) {
                 // Already past. Return before touching the browser at all —
                 // opening a page to immediately abandon it is work nobody is
                 // waiting for, and the observation ledger is empty either way.
-                return buildHardTimeoutResult(input, new Set());
+                //
+                // The ledger is empty of BROWSER observations, but the file
+                // policy still applies: `require-all` gates every path that can
+                // report an outcome, and returning early must not be the one
+                // way to escape it.
+                /** @type {Set<string>} */
+                const expiredObservations = new Set();
+                if (resolveFileArtifactPolicy(input, session) === 'require-all') {
+                    expiredObservations.add('file-artifact-unverified');
+                }
+                return buildHardTimeoutResult(input, expiredObservations);
             }
             timeoutMs = remainderMs;
         } else {

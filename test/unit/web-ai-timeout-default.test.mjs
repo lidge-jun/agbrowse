@@ -249,6 +249,33 @@ describe('WP5 shared-file source contracts', () => {
         expect(pollBlock).not.toMatch(/timeout:\s*args\.timeout\s*[,)]/);
     });
 
+    /**
+     * Resolving a budget for a caller who gave no timeout floors the stored
+     * remainder to a whole second and hands it down as `input.timeout`, which
+     * the provider cannot tell apart from a real `--timeout`. That let an
+     * expired session poll for another second, defeating the millisecond
+     * deadline the wrapper enforces.
+     *
+     * These are source contracts because the behaviour lives across a process
+     * boundary; the behavioural cover for the same defect is in
+     * web-ai-watcher.test.mjs, which drives the real `callVendorPoll`.
+     */
+    it('resume only synthesizes a timeout when the caller supplied one', () => {
+        const src = readFileSync(new URL('../../web-ai/cli-sessions.mjs', import.meta.url), 'utf8');
+        expect(src).toMatch(/Number\(input\.timeout\)\s*>\s*0\s*\n?\s*\?\s*\{\s*timeout:\s*resolveTimeoutBudgetSec/);
+    });
+
+    it('MCP only synthesizes a timeout when the caller supplied one', () => {
+        const src = readFileSync(new URL('../../web-ai/mcp-server.mjs', import.meta.url), 'utf8');
+        expect(src).toMatch(/Number\(args\?\.timeout\)\s*>\s*0/);
+    });
+
+    it('watch clamps its per-poll slice to the stored deadline', () => {
+        const src = readFileSync(new URL('../../web-ai/watcher.mjs', import.meta.url), 'utf8');
+        expect(src).toMatch(/timeout:\s*String\(clampToStoredDeadlineSec\(/);
+        expect(src).toMatch(/function clampToStoredDeadlineSec/);
+    });
+
     it('tool schema timeout fields have minimum:1 and descriptions without 40min/2400 literals', () => {
         const src = readFileSync(new URL('../../web-ai/tool-schema.mjs', import.meta.url), 'utf8');
         // Use dynamic import so we get the live schema objects
