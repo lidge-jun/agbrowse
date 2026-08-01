@@ -523,6 +523,46 @@ export function storedDeadlineRemainderMs(session = null, nowMs = Date.now()) {
 }
 
 /**
+ * The timeout envelope for a session whose stored deadline has already passed,
+ * or null when it still has time.
+ *
+ * Re-reads the session by id rather than trusting a snapshot. Every caller
+ * checks this twice: once before taking the session command lock, and again
+ * after — the lock retries 200 times at 25ms, so a session with 150ms left can
+ * expire *while waiting for it*, and the pre-lock check alone let that run open
+ * a tab. Reading a stale snapshot inside the lock would reproduce the same gap.
+ *
+ * Shaped to match the providers' own hard-timeout envelope
+ * (`chatgpt.mjs` buildHardTimeoutResult) so a caller cannot tell the fast path
+ * apart by its fields.
+ *
+ * @param {string} sessionId
+ * @param {string} [fallbackVendor]
+ * @param {number} [nowMs]
+ * @returns {Record<string, unknown>|null}
+ */
+export function expiredSessionTimeoutResult(sessionId, fallbackVendor = 'chatgpt', nowMs = Date.now()) {
+    const session = getSession(sessionId);
+    if (!session) return null;
+    const remainderMs = storedDeadlineRemainderMs(session, nowMs);
+    if (remainderMs === null || remainderMs > 0) return null;
+    return {
+        ok: false,
+        vendor: session.vendor || fallbackVendor,
+        status: 'timeout',
+        sessionId: session.sessionId,
+        conversationUrl: session.conversationUrl || session.originalUrl || undefined,
+        answerText: '',
+        usedFallbacks: [],
+        warnings: ['poll-deadline-exceeded'],
+        recoverable: true,
+        errorCode: 'provider.poll-timeout',
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
+}
+
+/**
  * The timeout to hand a provider poll, in seconds, never outliving the stored
  * deadline.
  *

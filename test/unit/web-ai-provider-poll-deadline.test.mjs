@@ -6,6 +6,7 @@ import { createSession, saveBaseline } from '../../web-ai/session.mjs';
 import { geminiPollWebAi } from '../../web-ai/gemini-live.mjs';
 import { grokPollWebAi } from '../../web-ai/grok-live.mjs';
 import { runSessionsCommand } from '../../web-ai/cli-sessions.mjs';
+import { withSessionCommandLock } from '../../web-ai/session-store.mjs';
 
 /**
  * The boundary clamp is worthless if the provider on the other side rounds it
@@ -158,6 +159,38 @@ describe('gemini honours the deadline while waiting on a Deep Think placeholder'
         // The uncapped branch lands at ~5000ms.
         expect(elapsed).toBeLessThan(900);
     }, 20_000);
+
+    it('spends most of the budget instead of returning immediately', async () => {
+        // The upper bound alone is not enough: a provider that consumed a tiny
+        // fraction of its budget would satisfy it while being just as broken.
+        // Capping the effective deadline at 100ms was demonstrated to leave the
+        // ceiling-only assertion green.
+        const url = 'https://gemini.google.com/app/lowerbound';
+        saveBaseline({ vendor: 'gemini', url, assistantCount: 0, envelope: { vendor: 'gemini', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'gemini', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-gemini-lowerbound',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        const page = stallingProviderPage(url);
+        const started = Date.now();
+
+        const result = await geminiPollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-gemini-lowerbound' },
+            { vendor: 'gemini', session: session.sessionId, timeout: 0.4 },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        // Bracketed: the budget was 400ms, so a correct poll uses nearly all of
+        // it. Generous lower bound so this measures the contract, not the host.
+        expect(elapsed).toBeGreaterThanOrEqual(300);
+        expect(elapsed).toBeLessThan(900);
+    }, 20_000);
 });
 
 /**
@@ -193,4 +226,42 @@ describe('an expired session is refused before its page is opened', () => {
         expect(result.errorCode).toBe('provider.poll-timeout');
         expect(pageRequests).toBe(0);
     });
+
+    it('refuses a session that expires WHILE the command lock is held', async () => {
+        // The pre-lock check alone is a TOCTOU gap: acquiring the session
+        // command lock retries 200 times at 25ms, so a session with a little
+        // time left passes the check and is expired by the time the lock is
+        // granted. Without a second check the run then opens a tab anyway.
+        const url = 'https://chatgpt.com/c/expired-in-lock';
+        saveBaseline({ vendor: 'chatgpt', url, assistantCount: 0, envelope: { vendor: 'chatgpt', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-expired-in-lock',
+                conversationUrl: url,
+                // Alive right now, so the pre-lock check passes.
+                deadlineAt: new Date(Date.now() + 150).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const deps = {
+            getPort: () => 9222,
+            getPage: async () => { pageRequests += 1; throw new Error('resume must not open a page'); },
+            getTargetId: async () => 'target-expired-in-lock',
+        };
+
+        // Hold the lock past the deadline, exactly as contention would.
+        const holding = withSessionCommandLock(session.sessionId, async () => {
+            await new Promise(resolve => setTimeout(resolve, 400));
+        }, { ttlMs: 30_000, heartbeatMs: 0 });
+        // Give the holder time to take the lock before the resume tries.
+        await new Promise(resolve => setTimeout(resolve, 25));
+        const resumed = await runSessionsCommand(['resume', session.sessionId], {}, deps, {});
+        await holding;
+
+        expect(resumed.status).toBe('timeout');
+        expect(resumed.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+    }, 20_000);
 });

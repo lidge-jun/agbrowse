@@ -10,7 +10,7 @@ import { grokPollWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { resumeDeepResearch } from './chatgpt-deep-research.mjs';
 import { WebAiError } from './errors.mjs';
-import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolvePollTimeoutSec, resolveTimeoutBudgetSec, storedDeadlineRemainderMs } from './session.mjs';
+import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolvePollTimeoutSec, resolveTimeoutBudgetSec, expiredSessionTimeoutResult } from './session.mjs';
 import { resolveSessionPage, withSessionPage, openConversationInNewTab } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { buildSessionDoctorReport } from './session-doctor.mjs';
@@ -98,26 +98,19 @@ export async function runSessionsCommand(args, values, deps, input) {
         // Refuse an expired session before resolving its page. The poll clamp
         // keeps a positive minimum so providers cannot read it as "no budget",
         // which means an expired session would otherwise still open a tab and
-        // take at least one probe.
-        const resumeRemainderMs = storedDeadlineRemainderMs(session);
-        if (resumeRemainderMs !== null && resumeRemainderMs <= 0) {
-            return {
-                ok: false,
-                vendor: session.vendor || 'chatgpt',
-                status: 'timeout',
-                sessionId: session.sessionId,
-                answerText: '',
-                warnings: ['poll-deadline-exceeded'],
-                recoverable: true,
-                errorCode: 'provider.poll-timeout',
-                retryHint: 'poll-or-resume',
-                error: 'stored session deadline already passed',
-            };
-        }
+        // take at least one probe. Checked again inside the lock below.
+        const expiredBeforeLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+        if (expiredBeforeLock) return expiredBeforeLock;
         // 35.2: a Deep Research session resumes via the DR capture path (no new
         // prompt), not the generic poller.
         if (session.researchMode === 'deep' && session.vendor === 'chatgpt') {
-            const drResult = await withSessionCommandLock(id, () => withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
+            const drResult = await withSessionCommandLock(id, () => {
+                // Re-checked INSIDE the lock. Acquiring it retries 200 times at
+                // 25ms, so a session with 150ms left can expire while waiting,
+                // and the pre-lock check alone let that run open a tab.
+                const expiredInLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+                if (expiredInLock) return expiredInLock;
+                return withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
                 const sessionDeps = {
                     ...deps,
                     getPage: async () => page,
@@ -129,7 +122,8 @@ export async function runSessionsCommand(args, values, deps, input) {
                 // sub-second remainder run past the session's own deadline.
                 const budgetMs = resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt') * 1000;
                 return resumeDeepResearch(page, sessionDeps, { session: refreshed, timeoutMs: budgetMs });
-            }));
+                });
+            });
             return { ...drResult, status: drResult.status || 'resumed' };
         }
         const pollInput = {
@@ -142,7 +136,11 @@ export async function runSessionsCommand(args, values, deps, input) {
             : session.vendor === 'gemini' ? geminiPollWebAi
             : session.vendor === 'grok' ? grokPollWebAi
             : pollWebAi;
-        const result = await withSessionCommandLock(id, () => withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
+        const result = await withSessionCommandLock(id, () => {
+            // Re-checked inside the lock: see the Deep Research branch above.
+            const expiredInLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+            if (expiredInLock) return expiredInLock;
+            return withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
             const sessionDeps = {
                 ...deps,
                 getPage: async () => page,
@@ -160,7 +158,8 @@ export async function runSessionsCommand(args, values, deps, input) {
                 // fall back to their own 1200s/600s defaults.
                 timeout: resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt'),
             });
-        }));
+            });
+        });
         return { ...result, status: result.status || 'resumed' };
     }
     if (sub === 'reattach') {
