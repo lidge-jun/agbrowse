@@ -24,6 +24,7 @@ import {
     summarizeEnvelope,
     updateSession,
 } from './session.mjs';
+import { readSessionAsync } from './session-store.mjs';
 import { WebAiError } from './errors.mjs';
 import { POLL_EXPIRED, monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
@@ -714,10 +715,24 @@ export async function pollWebAi(deps, input = {}) {
     const explicitTimeoutSec = Number(input.timeout);
     /** @type {number} */
     let timeoutMs;
+    /**
+     * Resolved once, up front, so the expiry callback never has to read the
+     * store. That callback runs at the moment the deadline fires; taking the
+     * synchronous lock there stalls the very timer that just fired — measured
+     * at 6,231ms on a contended lock, during which a 50ms timer did not run.
+     *
+     * @type {'best-effort'|'require-all'}
+     */
+    let filePolicyAtArm = 'best-effort';
     if (explicitTimeoutSec > 0) {
         timeoutMs = explicitTimeoutSec * 1000;
+        // An explicit timeout deliberately avoids the store read; the policy
+        // then comes from the input alone, which is what a caller passing one
+        // has already told us.
+        filePolicyAtArm = resolveFileArtifactPolicy(input, null);
     } else {
         const session = input.session ? getSession(input.session) : null;
+        filePolicyAtArm = resolveFileArtifactPolicy(input, session);
         // A stored deadline is read in MILLISECONDS here. The budget resolver
         // floors its answer at one second, which is right for a polling budget
         // and wrong for a hard bound: 400ms left would become 1000ms, and an
@@ -736,7 +751,7 @@ export async function pollWebAi(deps, input = {}) {
                 // way to escape it.
                 /** @type {Set<string>} */
                 const expiredObservations = new Set();
-                if (resolveFileArtifactPolicy(input, session) === 'require-all') {
+                if (filePolicyAtArm === 'require-all') {
                     expiredObservations.add('file-artifact-unverified');
                 }
                 return buildHardTimeoutResult(input, expiredObservations);
@@ -766,7 +781,9 @@ export async function pollWebAi(deps, input = {}) {
                 // Added to the SHARED ledger before the envelope is built: a
                 // warning pushed by the loser after this point would never
                 // reach the caller.
-                if (resolveFileArtifactPolicy(input, input.session ? getSession(input.session) : null) === 'require-all') {
+                // Captured at arm time. Reading the store here would take the
+                // blocking lock inside the expiry callback itself.
+                if (filePolicyAtArm === 'require-all') {
                     observations.add('file-artifact-unverified');
                 }
                 return buildHardTimeoutResult(input, observations);
@@ -809,17 +826,20 @@ function buildHardTimeoutResult(input, observations) {
  */
 async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_INFINITY, sharedObservations, sharedRun) {
     const vendor = input.vendor || 'chatgpt';
+    // Read through the awaited lock: this runs inside the armed deadline, and
+    // the blocking form suspends the timer enforcing it.
     const timeout = Math.max(1, Number(input.timeout) > 0
         ? Number(input.timeout)
-        : (() => {
-            const session = input.session ? getSession(input.session) : null;
-            return resolveTimeoutBudgetSec(input, session, vendor);
-        })(),
+        : resolveTimeoutBudgetSec(
+            input,
+            input.session ? await readSessionAsync(input.session) : null,
+            vendor,
+        ),
     );
     const page = await requireChatGptPage(deps);
     const url = page.url();
     const session = input.session
-        ? getSession(input.session)
+        ? await readSessionAsync(input.session)
         : findActiveSession({
             vendor,
             targetId: await deps.getTargetId?.().catch(() => null) || null,
@@ -1250,7 +1270,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         });
         if (recovered?.text) {
             if (recovered.streaming === true) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: recovered.text,
                     usedFallbacks: ['recovery'],
@@ -1294,7 +1314,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             }
             const canComplete = recovered.finished === true && orderingOk && identityOk && !imageOutputUnsatisfied;
             if (!canComplete) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: recovered.text,
                     usedFallbacks: ['recovery'],
@@ -1343,7 +1363,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         const responseStableMs = stableSince ? Date.now() - stableSince : 0;
         if (streaming) {
             if (session) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: stableText,
                     usedFallbacks: ['copy-markdown'],
@@ -1368,7 +1388,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         // how substantive the copied text is.
         if (completion.finished !== true || input.outputImage !== undefined) {
             if (session) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: stableText,
                     usedFallbacks: ['copy-markdown'],
@@ -2040,8 +2060,9 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
 /**
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
-function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, commit }) {
-    const current = getSession(session.sessionId) || session;
+async function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, commit }) {
+    // Awaited: this runs inside the poll loop, under the armed deadline.
+    const current = (await readSessionAsync(session.sessionId)) || session;
     // The session write and the returned envelope must carry the SAME warnings.
     // Merging the ledger into the return value afterwards would leave the stored
     // session disagreeing with what the caller sees.

@@ -88,4 +88,48 @@ describe('the session store lock and the event loop (#88 G1)', () => {
         expect(outcome).toBe('outer');
         expect(nested).toBe('refused');
     }, 30_000);
+
+    it('L4: a contended store read does not starve the deadline timer', async () => {
+        // The reason this matters: `getSession` goes through the blocking lock,
+        // and a poll holding a deadline calls it. Measured at 6,231ms contended,
+        // during which a 50ms timer did not run at all — the timer enforcing the
+        // deadline is the one being starved.
+        //
+        // The lock is already held by `beforeEach`, so this read must contend.
+        const { readSessionAsync } = await import('../../web-ai/session-store.mjs');
+
+        let firedAfterMs = null;
+        const armed = Date.now();
+        const timer = setTimeout(() => { firedAfterMs = Date.now() - armed; }, 50);
+
+        const started = Date.now();
+        await readSessionAsync('no-such-session').catch(() => null);
+        const elapsed = Date.now() - started;
+        clearTimeout(timer);
+
+        // The contention has to be real, or the timer had nothing to survive.
+        expect(elapsed).toBeGreaterThan(100);
+        expect(firedAfterMs).not.toBeNull();
+        expect(firedAfterMs).toBeLessThan(elapsed);
+    }, 30_000);
+
+    it('L5: the blocking read is what starves it', async () => {
+        // The ablation. Without this pair, L4 would pass on an implementation
+        // that never contended at all, and the difference it asserts would be
+        // invisible. This is the same read through the synchronous path.
+        const { getSession } = await import('../../web-ai/session.mjs');
+
+        let firedAfterMs = null;
+        const armed = Date.now();
+        const timer = setTimeout(() => { firedAfterMs = Date.now() - armed; }, 50);
+
+        const started = Date.now();
+        try { getSession('no-such-session'); } catch { /* lock exhaustion */ }
+        const elapsed = Date.now() - started;
+        clearTimeout(timer);
+
+        expect(elapsed).toBeGreaterThan(100);
+        // Never ran, despite being due 50ms in.
+        expect(firedAfterMs).toBeNull();
+    }, 30_000);
 });
