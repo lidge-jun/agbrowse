@@ -609,6 +609,73 @@ Gemini, Grok, Deep Research, Work는 여전히 **await 사이에서만** 시간�
 모듈에 똑같이 적용해야 하고, 이건 별도 유닛이다. 리뷰어도 회귀가 아닌 미완으로
 동의했으나 **#88을 닫으려면 필수**라고 못박았다.
 
+## WP24: 네 provider의 outer race — #88 종료 조건
+
+WP23이 "#88 종료 전 필수"로 남긴 항목. 감사 3라운드.
+
+### 무엇이 문제였나
+
+`pollWebAi`만 hard deadline race를 갖고 있었다. 나머지 넷은 **await 사이에서만**
+시계를 본다. 정체된 probe 하나면 루프가 시계를 다시 볼 기회가 없다. sleep을
+캡한 것은 아무 도움이 안 됐다 — 시간이 sleep에서 가는 게 아니었다.
+
+측정: 50ms 예산에 gemini 351ms, grok 353ms, work 152ms, DR 153ms 후에도
+still-pending.
+
+### 한 것
+
+`pollWebAi`의 race를 `web-ai/poll-deadline.mjs`로 추출했다 — 보고된 시계와
+monotonic 이중 ceiling, 양쪽 settlement 정규화, loser token. `chatgpt.mjs`는
+동작 불변으로 리팩터(기존 68건이 그 증거). 네 provider를 얇은 wrapper로 감쌌다.
+
+각 provider는 **자기 timeout 봉투를 유지**한다. 루프와 race가 같은 builder를
+부른다. race용 봉투를 따로 만드는 것이 필드가 어긋나는 경로이고, 이 작업에서
+이미 한 번 겪었다.
+
+### 감사가 잡은 것 — 세 라운드
+
+**R1: 동기 store lock이 bound를 무력화한다.** race는 browser probe만 감쌌지
+session store는 아니었다. lock이 걸린 상태에서 50ms 예산이 6.4초, work는
+"failed to acquire lock"으로 **반환조차 못 했다**. 그 lock의 대기가 이벤트
+루프를 멈추므로 타이머가 못 뛴다 — race를 어떻게 배치해도 동기 읽기가 안에
+있으면 소용없다.
+
+처음 고칠 때 읽기를 race **직전**으로 옮겼다. 3초 늦었다. 옮긴 게 아니라
+없애야 했다. `readSessionAsync`를 race 안에서 쓰는 형태로 바꿨다.
+
+expiry 봉투가 `markSessionTimeout`을 부르던 것도 같은 문제였다. 봉투를
+만드는 일이 블록되거나 throw할 수 있으면 그건 bounded return이 아니다.
+
+**R2: token을 전부 버리고 있었다.** 네 wrapper 모두 `(hardDeadline, token)`을
+받고도 안 썼다. 늦게 settle한 probe가 caller에게 timeout이 나간 뒤에 세션을
+쓴다. 리뷰어 재현 — work probe가 50ms 데드라인 70ms 뒤에 settle하며
+`status: complete, answer: 'late answer'`를 기록했다.
+
+**R3: 세 갈래가 더 남아 있었다.**
+
+- 암묵적 세션 조회(`findActiveSession`)는 여전히 동기. explicit session만
+  고쳤던 것이다. `findActiveSessionAsync` 추가.
+- Work가 **저장 데드라인 상속을 잃었다.** race 전 읽기를 없앤 대가로 vendor
+  기본값에 armed됐다. token에 `tighten`을 추가 — 실제 예산을 나중에 돌려준다.
+  **줄이기만 한다.** 늘릴 수 있으면 bound가 권고가 된다.
+- precedence 계약이 precedence를 고정하지 못했다. 분리된 regex는
+  `findActiveSession(...) || (input.session ? read : null)` — 같은 부품으로 만든
+  **반대 조회** — 도 통과시켰다. 삼항 양쪽을 걸치는 하나의 regex로 바꿨다.
+
+### 테스트가 또 헛돌았다
+
+DR 테스트가 **정체된 probe에 닿지도 못한 채** 통과하고 있었다. 고정 2초 tick이
+예산을 다 먹어서 데드라인이 sleep 중에 발화했다. 이제 page double이 **어떤
+hanging 메서드에 실제로 닿았는지 기록**하고, 네 테스트 모두 그게 비어있지 않음을
+검사한다.
+
+### 남긴 것
+
+check-then-synchronous-write 창: `stillActive()`를 통과한 직후 `updateSession`이
+블록되는 경우. 같은 blocking-lock 문제가 한 층 아래(`tab-finalizer`, provider
+완료 경로)에 있는 것이고, 또 다른 guard가 아니라 **async store write**가 필요하다.
+별도 유닛.
+
 ## 남은 것
 
 single-flight(G2·G4 포함)는 여전히 미해결이다. 이번 변경은 패배한 작업이
