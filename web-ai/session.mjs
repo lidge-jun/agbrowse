@@ -499,6 +499,30 @@ export function resolveTimeoutDefaultSec(input = {}, vendor = 'chatgpt') {
 }
 
 /**
+ * The stored deadline's remaining time in milliseconds, or null when the
+ * session carries no parseable deadline.
+ *
+ * Separate from `resolveTimeoutBudgetSec` because that function answers a
+ * different question. It returns a POLLING BUDGET in whole seconds and floors
+ * it at one, which keeps a nearly-expired session from being handed a budget
+ * too small to do anything with — deliberate, and covered by its own tests.
+ *
+ * A hard deadline is not a budget. Rounding it up means the bound the caller
+ * was promised can be overshot: 500ms left becomes 1000ms, and an already
+ * expired deadline becomes a fresh second. Callers enforcing a strict bound
+ * need the real remainder, including when it is zero or negative.
+ *
+ * @param {WebAiSession|null} [session]
+ * @param {number} [nowMs]
+ * @returns {number|null}
+ */
+export function storedDeadlineRemainderMs(session = null, nowMs = Date.now()) {
+    const storedDeadlineMs = Date.parse(String(session?.deadlineAt || ''));
+    if (!Number.isFinite(storedDeadlineMs)) return null;
+    return storedDeadlineMs - nowMs;
+}
+
+/**
  * Resolve one polling budget in seconds.
  * Priority: explicit timeout -> stored deadline remainder -> tier/vendor default.
  * @param {WebAiEnvelope} [input]

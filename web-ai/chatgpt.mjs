@@ -16,10 +16,11 @@ import {
     getSession,
     markSessionTimeout,
     resolveDeadlineAt,
-    resolveTimeoutBudgetSec,
     resolveFileArtifactPolicy,
+    resolveTimeoutBudgetSec,
     saveBaseline,
     sessionToBaseline,
+    storedDeadlineRemainderMs,
     summarizeEnvelope,
     updateSession,
 } from './session.mjs';
@@ -722,20 +723,35 @@ export async function pollWebAi(deps, input = {}) {
     // An explicit timeout needs no store read at all, so the common path never
     // touches the lock.
     const explicitTimeoutSec = Number(input.timeout);
-    const timeoutSec = explicitTimeoutSec > 0
-        ? explicitTimeoutSec
-        : resolveTimeoutBudgetSec(
-            input,
-            input.session ? getSession(input.session) : null,
-            input.vendor || 'chatgpt',
-            // Measured from `started`, not from after the store read. The
-            // resolver turns a stored deadline into a REMAINDER, so letting it
-            // read the clock itself subtracted the read's duration once there
-            // and again when the remainder was added to the earlier `started`.
-            // A slow store read shortened the caller's budget twice over.
-            started,
-        );
-    const timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
+    /** @type {number} */
+    let timeoutMs;
+    if (explicitTimeoutSec > 0) {
+        timeoutMs = explicitTimeoutSec * 1000;
+    } else {
+        const session = input.session ? getSession(input.session) : null;
+        // A stored deadline is read in MILLISECONDS here. The budget resolver
+        // floors its answer at one second, which is right for a polling budget
+        // and wrong for a hard bound: 400ms left would become 1000ms, and an
+        // already-expired deadline would become a fresh second. The bound the
+        // caller was promised cannot be rounded up.
+        const remainderMs = storedDeadlineRemainderMs(session, started);
+        if (remainderMs !== null) {
+            if (remainderMs <= 0) {
+                // Already past. Return before touching the browser at all —
+                // opening a page to immediately abandon it is work nobody is
+                // waiting for, and the observation ledger is empty either way.
+                return buildHardTimeoutResult(input, new Set());
+            }
+            timeoutMs = remainderMs;
+        } else {
+            // No stored deadline: fall back to the tier/vendor default, which
+            // the resolver owns. Anchored at `started` rather than its own
+            // clock so a slow store read is not charged twice — once inside the
+            // resolver and again by the earlier anchor.
+            const timeoutSec = resolveTimeoutBudgetSec(input, session, input.vendor || 'chatgpt', started);
+            timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
+        }
+    }
     /** @type {any} */
     let expire = () => undefined;
     let timer = null;

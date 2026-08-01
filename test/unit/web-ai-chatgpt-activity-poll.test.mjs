@@ -1594,6 +1594,81 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         }
     });
 
+    it('Y14: a sub-second stored remainder is not rounded up to a full second', async () => {
+        // `resolveTimeoutBudgetSec` floors its answer at one second. That is
+        // right for a polling BUDGET — a session with 200ms left should still
+        // get a usable slice — and wrong for a hard bound, which cannot be
+        // rounded up past what the caller was promised. 400ms left used to
+        // become a 1000ms deadline.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y14' });
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y14',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y14',
+                conversationUrl: 'https://chatgpt.com/c/stall-y14',
+                deadlineAt: new Date(Date.now() + 400).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y14' },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        // Bracketed on both sides. The upper bound is what the floor broke; the
+        // lower one keeps a "return immediately for everything" regression from
+        // passing, since that is a different bug with the same symptom here.
+        expect(elapsed).toBeGreaterThanOrEqual(300);
+        expect(elapsed).toBeLessThan(900);
+    }, 20_000);
+
+    it('Y15: an already expired stored deadline returns without opening the page', async () => {
+        // The floor turned a deadline that had already passed into a fresh
+        // second, so an expired session still drove a full poll. Nothing it
+        // finds can be delivered inside a bound that is already gone, and
+        // opening the page is work nobody is waiting for.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y15',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y15',
+                conversationUrl: 'https://chatgpt.com/c/stall-y15',
+                deadlineAt: new Date(Date.now() - 5_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            {
+                getPage: async () => { pageRequests += 1; throw new Error('the poll must not open a page'); },
+                getTargetId: async () => 'target-y15',
+            },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(result.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+        expect(Date.now() - started).toBeLessThan(500);
+    });
+
     it('Y11: the recovery reserve scales with the budget instead of one tick', async () => {
         // `Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS)` is always
         // exactly PACING_INTERVAL_MS — the remainder is smaller by definition.
