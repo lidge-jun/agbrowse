@@ -709,11 +709,14 @@ export async function pollWebAi(deps, input = {}) {
     // outside the bound the caller was promised.
     const started = Date.now();
     const monotonicStart = monotonicNowMs();
-    // Resolve the SAME budget the inner loop resolves. `poll`, `watch` and
-    // `resume` deliberately pass `timeout: undefined` so the stored session
-    // deadline is inherited (cli.mjs:730-738); falling back to 1s here capped
-    // every one of those calls at a second, and the wrapper's bound wins over
-    // whatever the loop computes.
+    // Resolve the SAME budget the inner loop resolves. The CLI builds its
+    // envelope with `timeout: undefined` (cli.mjs:730-738) so a stored session
+    // deadline can be inherited; falling back to 1s here capped those calls at
+    // a second, and the wrapper's bound wins over whatever the loop computes.
+    //
+    // Only direct `poll` actually arrives here without a timeout
+    // (cli.mjs:1269). `watch` resolves one first (watcher.mjs:635) and so does
+    // `resume` (cli-sessions.mjs:130), so both take the explicit path below.
     //
     // An explicit timeout needs no store read at all, so the common path never
     // touches the lock.

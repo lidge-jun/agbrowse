@@ -1527,14 +1527,11 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         // anchor. The session store's lock retries 200 times at 25ms, so a
         // contended read really can cost seconds.
         //
-        // Asserted on the resolver's arithmetic. Be clear about the limit:
-        // this pins the CONTRACT (a remainder is only correct against the
-        // anchor it will be added to) and fails if the fourth parameter stops
-        // meaning that. It does NOT catch the wrapper dropping the argument —
-        // reverting `started` at the call site leaves this green, and a
-        // wall-time poll cannot separate a budget short by the read from
-        // ordinary scheduling noise. Catching that needs a store-read delay
-        // long enough to exceed the noise floor, which is a slow test.
+        // Asserted on the resolver's arithmetic: this pins the CONTRACT that a
+        // remainder is only correct against the anchor it will be added to.
+        // Y13 covers the wiring — that `pollWebAi` actually passes its own
+        // anchor — because this test alone stays green if the call site drops
+        // the argument.
         const startedAt = 1_000_000;
         const storeReadMs = 900;
         const session = /** @type {any} */ ({
@@ -1551,6 +1548,50 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         // that remainder was still added to the earlier anchor.
         const afterRead = resolveTimeoutBudgetSec({}, session, 'chatgpt', startedAt + storeReadMs);
         expect(startedAt + afterRead * 1_000).toBe(startedAt + 5_000 - storeReadMs);
+    });
+
+    it('Y13: pollWebAi hands the resolver its own start, not a later clock', async () => {
+        // Y12 pins the arithmetic but not the wiring — it calls the resolver
+        // directly, so dropping the argument at the call site leaves it green.
+        // This runs the real `pollWebAi` against a mocked resolver, captures
+        // the clock it was given, and compares it to the wrapper's own start.
+        //
+        // The resolver throws a sentinel so the poll stops before any browser
+        // work: the assertion is about one argument, and nothing after it needs
+        // to run. That keeps this in milliseconds instead of a real store delay.
+        vi.resetModules();
+        const sentinel = new Error('stop-after-budget-resolution');
+        /** @type {number|undefined} */
+        let observedNow;
+        vi.doMock('../../web-ai/session.mjs', async () => {
+            const actual = /** @type {any} */ (await vi.importActual('../../web-ai/session.mjs'));
+            return {
+                ...actual,
+                resolveTimeoutBudgetSec: (/** @type {any} */ _input, /** @type {any} */ _session, /** @type {any} */ _vendor, /** @type {any} */ nowMs) => {
+                    observedNow = nowMs;
+                    throw sentinel;
+                },
+            };
+        });
+        try {
+            const { pollWebAi: freshPoll } = await import('../../web-ai/chatgpt.mjs?y13');
+            const before = Date.now();
+            await expect(freshPoll(
+                { getPage: async () => { throw new Error('the poll must not reach the browser'); } },
+                { vendor: 'chatgpt' },
+            )).rejects.toBe(sentinel);
+            const after = Date.now();
+
+            // The wrapper's `started` is taken as its first instruction, so the
+            // clock it forwards must sit at or before the call, never after the
+            // store read that follows it.
+            expect(observedNow).toBeGreaterThanOrEqual(before);
+            expect(observedNow).toBeLessThanOrEqual(after);
+            expect(observedNow).not.toBeUndefined();
+        } finally {
+            vi.doUnmock('../../web-ai/session.mjs');
+            vi.resetModules();
+        }
     });
 
     it('Y11: the recovery reserve scales with the budget instead of one tick', async () => {

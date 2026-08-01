@@ -171,7 +171,7 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         });
         vi.doMock('../../web-ai/tab-pool.mjs', () => ({ poolTab }));
 
-        const { createSession } = await import('../../web-ai/session.mjs');
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
         const { finalizeProviderTab } = await import('../../web-ai/tab-finalizer.mjs');
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' },
@@ -179,11 +179,14 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         );
 
         // `archiveFlag: 'never'` keeps the archive branch out of the way, so
-        // this test lands squarely on the pooling boundary: alive through the
-        // session write and the artifact record, expired before pooling.
-        // Pooling persists a lease and can close overflow tabs.
-        let checks = 0;
-        const stillActive = () => { checks += 1; return checks <= 3; };
+        // this test lands squarely on the pooling boundary. Pooling persists a
+        // lease and can close overflow tabs.
+        //
+        // Keyed on the phase, not on a call count: a count expires wherever the
+        // Nth check happens to be, so adding a check upstream would move this
+        // test above the boundary it was written for and leave it green. The
+        // artifact record is written in the last phase before pooling.
+        const stillActive = () => (getSession(session.sessionId).artifacts ?? []).length === 0;
 
         const result = await finalizeProviderTab({ getPort: () => 9222 }, {
             vendor: 'chatgpt',
@@ -194,6 +197,9 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
             stillActive,
         });
 
+        // The phase actually ran, so the assertion below is about the pooling
+        // gate rather than about an early exit.
+        expect((getSession(session.sessionId).artifacts ?? []).map(a => a.kind)).toContain('transcript');
         expect(poolTab).not.toHaveBeenCalled();
         expect(result.archiveSkippedReason).toBe('poll-deadline-exceeded');
     });
