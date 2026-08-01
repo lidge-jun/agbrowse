@@ -16,7 +16,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 
 ## 현재 구조 스냅샷
 
-마지막 측정: 2026-07-31.
+마지막 측정: 2026-08-01.
 
 | 경로 | 파일 수 | 라인 수 | 역할 |
 | --- | ---: | ---: | --- |
@@ -31,7 +31,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 14 | 2302 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
-| `test/unit/` | 158 | 25687 | deterministic module tests |
+| `test/unit/` | 158 | 25790 | deterministic module tests |
 | `test/integration/` | 24 | 5188 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
