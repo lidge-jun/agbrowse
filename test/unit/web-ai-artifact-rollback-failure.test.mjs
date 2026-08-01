@@ -63,15 +63,22 @@ describe('a rollback that cannot finish is reported (#88)', () => {
         // Ordering matters. The original failure can be retried; a file left on
         // disk cannot, so it is the condition that needs acting on.
         //
-        // Scope: with every removal failing, the staging sweep in `abort` also
-        // reports a rollback failure, so this pins the ORDER of the public
-        // errors rather than isolating the commit-level branch. R1 covers that
-        // branch directly.
+        // Only the FIRST two removals fail — the staging entry and the undo of
+        // the link, which together produce EROLLBACK. Everything after that
+        // succeeds, so the staging sweep in `abort` reports nothing and the
+        // leading `rollback-failed` can only come from the commit's own result.
+        // Failing every removal instead would let that branch be deleted while
+        // the sweep supplied an identical-looking error.
         const realFs = await vi.importActual('node:fs');
+        let removals = 0;
         vi.doMock('node:fs', () => ({
             ...realFs,
             default: realFs,
-            rmSync: () => { throw new Error('EACCES'); },
+            rmSync: (...args) => {
+                removals += 1;
+                if (removals <= 2) throw new Error('EACCES');
+                return (/** @type {any} */ (realFs)).rmSync(...args);
+            },
         }));
 
         const { createSession } = await import('../../web-ai/session.mjs');
