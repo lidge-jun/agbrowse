@@ -11,7 +11,7 @@ import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiSendWebAi, geminiPollWebAi } from './gemini-live.mjs';
 import { grokSendWebAi, grokPollWebAi } from './grok-live.mjs';
 import { runDoctor } from './doctor.mjs';
-import { getSession, resolvePollTimeoutSec } from './session.mjs';
+import { getSession, resolvePollTimeoutSec, storedDeadlineRemainderMs } from './session.mjs';
 import {
     captureCopiedResponseText,
     CHATGPT_COPY_SELECTORS,
@@ -331,6 +331,24 @@ async function runMcpSessionPoll(name, args, deps) {
     const stored = getSession(sessionId);
     if (!stored) throw new Error(`no session record for ${sessionId}`);
     providerFromArgs({ provider: args.provider || args.vendor || stored.vendor || 'chatgpt' });
+    // Refuse an expired session before resolving its page. The poll clamp keeps
+    // a positive minimum so providers cannot read it as "no budget", so without
+    // this an expired session still opens a tab and takes at least one probe.
+    const storedRemainderMs = storedDeadlineRemainderMs(stored);
+    if (storedRemainderMs !== null && storedRemainderMs <= 0) {
+        return {
+            ok: false,
+            vendor: stored.vendor || args.provider || args.vendor || 'chatgpt',
+            status: 'timeout',
+            sessionId,
+            answerText: '',
+            warnings: ['poll-deadline-exceeded'],
+            recoverable: true,
+            errorCode: 'provider.poll-timeout',
+            retryHint: 'poll-or-resume',
+            error: 'stored session deadline already passed',
+        };
+    }
     return withSessionCommandLock(sessionId, () =>
         withSessionPage(deps, sessionId, async ({ page, targetId, session }) => {
             const provider = providerFromArgs({ provider: session.vendor || stored.vendor || args.provider || args.vendor || 'chatgpt' });

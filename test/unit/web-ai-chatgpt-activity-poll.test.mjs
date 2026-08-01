@@ -1601,11 +1601,6 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
         // rounded up past what the caller was promised. 400ms left used to
         // become a 1000ms deadline.
         const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y14' });
-        // `getPage` is the first thing the poll does once it decides to run, so
-        // it marks the moment the deadline starts being spent. Timing from HERE
-        // rather than from before `createSession` keeps store work and lock
-        // contention out of the measurement — anchoring across setup is exactly
-        // the drift that made an earlier test in this file flake under load.
         /** @type {number|null} */
         let pageOpenedAt = null;
         saveBaseline({
@@ -1614,16 +1609,24 @@ describe('a stalled read cannot outlive --timeout (#88)', () => {
             assistantCount: 0,
             envelope: { vendor: 'chatgpt', prompt: 'q' },
         });
-        const deadlineAt = Date.now() + 400;
         const session = createSession(
             { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
             {
                 targetId: 'target-y14',
                 conversationUrl: 'https://chatgpt.com/c/stall-y14',
-                deadlineAt: new Date(deadlineAt).toISOString(),
+                // Placeholder. The real one is written AFTER setup, below.
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
                 envelopeSummary: { assistantCount: 0 },
             },
         );
+        // Set after all store work is done, so the 400ms window cannot be
+        // consumed by session creation or lock contention before the poll even
+        // starts. Anchoring a short deadline across setup is precisely the
+        // drift that made an earlier test in this file flake under load: with
+        // slow setup the session is legitimately expired on arrival and the
+        // poll correctly returns early, failing a test that demanded it run.
+        const deadlineAt = Date.now() + 400;
+        updateSession(session.sessionId, { deadlineAt: new Date(deadlineAt).toISOString() });
 
         const result = await pollWebAi(
             {

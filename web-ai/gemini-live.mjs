@@ -655,7 +655,11 @@ export async function geminiPollWebAi(deps, input = {}) {
         const next = responses.slice(baseline.assistantCount).at(-1);
         if (next && await hasCompletionSignal(page)) {
             if (isPendingDeepThinkText(next)) {
-                await page.waitForTimeout(5_000).catch(() => undefined);
+                // Capped like the ordinary tick. This branch waits five seconds
+                // for a Deep Think placeholder to resolve, which on its own is
+                // longer than many resumed budgets — an expired session took a
+                // full five seconds before anyone checked the clock again.
+                await page.waitForTimeout(Math.max(1, Math.min(5_000, deadline - Date.now()))).catch(() => undefined);
                 continue;
             }
             let answerText = next;

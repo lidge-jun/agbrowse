@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createSession, saveBaseline } from '../../web-ai/session.mjs';
 import { geminiPollWebAi } from '../../web-ai/gemini-live.mjs';
 import { grokPollWebAi } from '../../web-ai/grok-live.mjs';
+import { runSessionsCommand } from '../../web-ai/cli-sessions.mjs';
 
 /**
  * The boundary clamp is worthless if the provider on the other side rounds it
@@ -89,4 +90,107 @@ describe.each([
         // machine speed.
         expect(elapsed).toBeLessThan(900);
     }, 20_000);
+});
+
+/**
+ * The ordinary loop is not the only place that sleeps. Gemini waits five
+ * seconds when it sees a Deep Think placeholder — longer than many resumed
+ * budgets — and the test above never reaches that branch because it supplies
+ * no responses at all. That is how the defect survived a round of review.
+ */
+describe('gemini honours the deadline while waiting on a Deep Think placeholder', () => {
+    it('does not sleep five seconds inside a sub-second budget', async () => {
+        const url = 'https://gemini.google.com/app/deepthink';
+        saveBaseline({ vendor: 'gemini', url, assistantCount: 0, envelope: { vendor: 'gemini', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'gemini', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-gemini-deepthink',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let waits = 0;
+        // Gemini reads responses through nested `locator().all()` and
+        // `innerText`, not `evaluateAll`. A double that only answers
+        // `evaluateAll` returns no responses at all, which skips the branch
+        // entirely — the first version of this test did exactly that and
+        // stayed green against the uncapped sleep.
+        const pendingText = 'Generating your response...';
+        const textLocator = {
+            innerText: async () => pendingText,
+            isVisible: async () => true,
+        };
+        const responseLocator = {
+            innerText: async () => pendingText,
+            isVisible: async () => true,
+            locator: () => ({ all: async () => [textLocator], first: () => textLocator, count: async () => 1 }),
+        };
+        const page = {
+            url: () => url,
+            waitForTimeout: async (ms) => {
+                waits += 1;
+                await new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+            },
+            evaluate: async () => '',
+            innerText: async () => pendingText,
+            locator: (selector) => ({
+                first: () => responseLocator,
+                all: async () => [responseLocator],
+                // `hasCompletionSignal` needs a completion selector present and
+                // no progressbar, or the poll never looks at the text.
+                count: async () => (String(selector).includes('progressbar') ? 0 : 1),
+                evaluateAll: async () => [pendingText],
+            }),
+        };
+        const started = Date.now();
+
+        const result = await geminiPollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-gemini-deepthink' },
+            { vendor: 'gemini', session: session.sessionId, timeout: 0.4 },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        // The loop really ran rather than short-circuiting on some other check.
+        expect(waits).toBeGreaterThan(0);
+        // The uncapped branch lands at ~5000ms.
+        expect(elapsed).toBeLessThan(900);
+    }, 20_000);
+});
+
+/**
+ * The clamp keeps a positive minimum so providers cannot read it as "no
+ * budget" and floor it back up. That minimum is only safe if the surfaces that
+ * resolve a page first refuse an expired session outright — otherwise an
+ * expired poll still opens a tab and takes at least one probe, and Gemini's
+ * placeholder branch then waits five seconds.
+ */
+describe('an expired session is refused before its page is opened', () => {
+    it('sessions resume returns a timeout without resolving a page', async () => {
+        const url = 'https://chatgpt.com/c/expired-resume';
+        saveBaseline({ vendor: 'chatgpt', url, assistantCount: 0, envelope: { vendor: 'chatgpt', prompt: 'q' } });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-expired-resume',
+                conversationUrl: url,
+                deadlineAt: new Date(Date.now() - 5_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const deps = {
+            getPort: () => 9222,
+            getPage: async () => { pageRequests += 1; throw new Error('resume must not open a page'); },
+            getTargetId: async () => 'target-expired-resume',
+        };
+
+        const result = await runSessionsCommand(['resume', session.sessionId], {}, deps, {});
+
+        expect(result.status).toBe('timeout');
+        expect(result.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+    });
 });

@@ -29,7 +29,7 @@ import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/bro
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { listSessions, getSession, resolvePollTimeoutSec, resolveTimeoutDefaultSec } from './session.mjs';
+import { listSessions, getSession, resolvePollTimeoutSec, resolveTimeoutDefaultSec, storedDeadlineRemainderMs } from './session.mjs';
 import { resolveImplicitSessionSelection } from './session-target-guard.mjs';
 import { listLeases } from './tab-lease-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
@@ -1345,6 +1345,27 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
         return runSessionStopInterrupt(deps, input, stopFn);
     }
     if (command === 'poll' && input.session) {
+        // Refuse an expired session BEFORE resolving its page. The clamp keeps
+        // a positive minimum so providers cannot read it as "no budget", which
+        // means an expired session would otherwise still open a tab and take at
+        // least one probe — and Gemini's placeholder branch waits five seconds.
+        // `pollWebAi` already refuses on its own; this covers every vendor.
+        const boundSession = getSession(input.session);
+        const remainderMs = storedDeadlineRemainderMs(boundSession);
+        if (boundSession && remainderMs !== null && remainderMs <= 0) {
+            return {
+                ok: false,
+                vendor: boundSession.vendor || input.vendor || 'chatgpt',
+                status: 'timeout',
+                sessionId: boundSession.sessionId,
+                answerText: '',
+                warnings: ['poll-deadline-exceeded'],
+                recoverable: true,
+                errorCode: 'provider.poll-timeout',
+                retryHint: 'poll-or-resume',
+                error: 'stored session deadline already passed',
+            };
+        }
         return withSessionCommandLock(input.session, async () => {
             return withCommandSessionPage(command, deps, input, async ({ page, targetId, session }) => {
                 const effectivePollFn = isWorkSession(session) ? pollWorkSession : pollFn;
