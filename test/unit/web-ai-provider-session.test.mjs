@@ -316,6 +316,25 @@ describe('web-ai provider integration (source-string contracts)', () => {
         }
     });
 
+    /**
+     * Gemini and Grok specifically must NOT go back to the blocking reads.
+     * Both take the session-store lock, whose wait stops the event loop, which
+     * is what put their poll deadline outside its own bound: a held lock
+     * turned a 50ms budget into a 6.4s return. The shared precedence contract
+     * above permits either form — deliberately, since ChatGPT still uses the
+     * synchronous one — so it cannot catch that regression on its own.
+     */
+    it('gemini and grok resolve the poll session without blocking the event loop', () => {
+        for (const [vendor, src] of [['gemini', geminiSrc], ['grok', grokSrc]]) {
+            const pollBody = src.slice(src.indexOf(`async function run${vendor === 'gemini' ? 'Gemini' : 'Grok'}PollWebAi`));
+            expect(pollBody).toMatch(/await\s+readSessionAsync\(input\.session\)/);
+            expect(pollBody).toMatch(/await\s+findActiveSessionAsync\(/);
+            // Neither blocking form may reappear on the poll path.
+            expect(pollBody).not.toMatch(/\bgetSession\(/);
+            expect(pollBody).not.toMatch(/\bfindActiveSession\(/);
+        }
+    });
+
     it('all three providers finalize completion and markSessionTimeout on timeout', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
             expect(src).toMatch(/finalizeProviderTab\(deps, \{[\s\S]*?session[\s\S]*?answerText/);

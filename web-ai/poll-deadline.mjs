@@ -34,8 +34,9 @@ export function monotonicNowMs() {
  * @typedef {Object} PollDeadlineToken
  * @property {boolean} expired flipped once the caller has been answered
  * @property {number} hardDeadline reported-clock deadline in ms
- * @property {(timeoutMs: number) => void} [tighten] shorten the bound once the
- *   run has learned its real budget; never lengthens it
+ * @property {(deadlineAt: number) => void} [tighten] shorten the bound once the
+ *   run has learned its real deadline; takes an ABSOLUTE time and never
+ *   lengthens the bound
  */
 
 /**
@@ -63,6 +64,8 @@ export async function withPollDeadline(runFn, { startedAt, monotonicStartMs, tim
     let expire = () => undefined;
     /** @type {any} */
     let timer = null;
+    /** Re-armable from `tighten`, which may move the deadline inward. */
+    let rearm = () => undefined;
     const expiry = new Promise(resolve => {
         expire = resolve;
         // Deferring to the reported clock ALONE is unbounded: a frozen or
@@ -87,20 +90,29 @@ export async function withPollDeadline(runFn, { startedAt, monotonicStartMs, tim
             if (remaining <= 0 || monotonicElapsedMs >= budgetMs + POLL_EXPIRY_CHECK_MS) { resolve(POLL_EXPIRED); return; }
             timer = setTimeout(arm, Math.min(remaining, POLL_EXPIRY_CHECK_MS));
         };
+        rearm = arm;
         arm();
     });
     /** @type {PollDeadlineToken} */
     const token = { expired: false, hardDeadline };
-    // Only ever TIGHTENS. A run that learns its real budget after the race is
+    // Only ever TIGHTENS. A run that learns its real deadline after the race is
     // armed — because reading it would have blocked the event loop, which is
     // the thing being bounded — can hand it back here. Letting it extend would
-    // turn the bound into a suggestion, so a longer budget is ignored.
-    token.tighten = (nextTimeoutMs) => {
-        const candidate = started + nextTimeoutMs;
-        if (!(nextTimeoutMs > 0) || candidate >= hardDeadline) return;
-        hardDeadline = candidate;
-        budgetMs = nextTimeoutMs;
-        token.hardDeadline = candidate;
+    // turn the bound into a suggestion, so a later deadline is ignored.
+    //
+    // ABSOLUTE, not a duration. A remainder computed after a slow read means
+    // "this long from NOW"; anchoring it to `started` charged the read twice
+    // and threw away that much of the caller's budget.
+    token.tighten = (nextDeadlineAt) => {
+        if (!Number.isFinite(nextDeadlineAt) || nextDeadlineAt >= hardDeadline) return;
+        hardDeadline = nextDeadlineAt;
+        budgetMs = Math.max(0, nextDeadlineAt - started);
+        token.hardDeadline = nextDeadlineAt;
+        // Re-arm at once: the pending timer may be sleeping past the new
+        // deadline, and waiting out its old delay is time the caller was not
+        // promised.
+        if (timer) clearTimeout(timer);
+        rearm();
     };
     try {
         const run = runFn(hardDeadline, token).then(

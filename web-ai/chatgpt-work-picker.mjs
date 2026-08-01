@@ -969,9 +969,13 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null, session:
     const deadline = Date.now() + timeoutSec * 1000;
     // The outer race was armed before this session could be read — reading it
     // first is what put a blocking store lock inside the bound. Hand the real
-    // budget back now that it is known; `tighten` only ever shortens, so a
+    // deadline back now that it is known; `tighten` only ever shortens, so a
     // stored deadline cannot be used to extend the caller's own timeout.
-    runToken?.tighten?.(timeoutSec * 1000);
+    //
+    // `deadline` is ABSOLUTE and already measured from after the read. Passing
+    // the duration instead re-anchored it at the wrapper's start and charged
+    // the read twice, discarding that much of the stored budget.
+    runToken?.tighten?.(deadline);
     const startedAt = Date.now();
     let lastHeartbeat = 0;
 

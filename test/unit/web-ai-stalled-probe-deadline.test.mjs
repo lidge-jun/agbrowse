@@ -215,6 +215,29 @@ describe('a held session-store lock cannot outlive the poll deadline', () => {
         }
     }, 20_000);
 
+    it.each([
+        ['gemini', 'https://gemini.google.com/app/implicit', geminiPollWebAi],
+        ['grok', 'https://grok.com/chat/implicit', grokPollWebAi],
+    ])('%s returns at its deadline with an IMPLICIT session while the lock is held', async (vendor, url, poll) => {
+        // No `input.session`, so the poll finds its session by lookup. That
+        // fallback listed sessions under the blocking lock, which stops the
+        // event loop — the explicit-session fix did not cover it, and a held
+        // lock still produced 6.4s returns on a 50ms budget.
+        pollableSession(vendor, url, `${vendor}-implicit`);
+        const release = holdStoreLock(3_000);
+        const started = Date.now();
+        try {
+            const result = await poll(
+                { getPage: async () => stalledPage(url), getTargetId: async () => `target-${vendor}-implicit` },
+                { vendor, timeout: 1 },
+            );
+            expect(result.status).toBe('timeout');
+            expect(Date.now() - started).toBeLessThan(2_500);
+        } finally {
+            release();
+        }
+    }, 20_000);
+
     it('the work poller returns at its deadline while the store lock is held', async () => {
         const url = 'https://chatgpt.com/c/work-locked';
         const session = pollableSession('chatgpt', url, 'work-locked');
