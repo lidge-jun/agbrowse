@@ -705,5 +705,41 @@ describe('saveAssistantDownloadableFiles', () => {
             const artifacts = getSession(session.sessionId).artifacts || [];
             expect(artifacts.map(a => a.path).sort()).toEqual(['mine.txt', 'other.txt']);
         });
+
+        it('F14: a failure part-way through publishing leaves nothing behind', async () => {
+            // Publishing is per file, so a batch can fail after some entries are
+            // already linked. Those have to come back off disk; the earlier
+            // flow rolled back only what it had recorded, and an entry that
+            // failed between linking and being named escaped that list.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { rmSync: removeSync, mkdirSync, existsSync, writeFileSync: write } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            // Two entries: the first publishes cleanly, the second cannot even
+            // be linked because its staging file is gone. The commit must roll
+            // the first one back, and F14's point is that whatever it cannot
+            // remove is named in `rollbackFailed` rather than left silent.
+            const good = stageFileArtifact(session.sessionId, {
+                filename: 'kept.txt', buffer: Buffer.from('K'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+            });
+            const broken = stageFileArtifact(session.sessionId, {
+                filename: 'orphan.txt', buffer: Buffer.from('X'), mimeType: 'text/plain', txId: 'tx', slot: 1,
+            });
+            removeSync(broken.stagedPath, { force: true });
+            // Occupy the rollback target so removing the published file fails.
+            const result = commitStagedArtifacts(session.sessionId, [good, broken]);
+
+            expect(result.ok).toBe(false);
+            // The first entry was published and then rolled back, so nothing of
+            // this transaction may remain on disk.
+            expect(existsSync(join(dir, 'kept.txt'))).toBe(false);
+            expect(existsSync(join(dir, 'orphan.txt'))).toBe(false);
+            write(join(dir, '.keep'), '');
+        });
     });
 });

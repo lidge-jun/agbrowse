@@ -393,12 +393,13 @@ export function commitStagedArtifacts(sessionId, staged) {
     const published = [];
     /** @type {string[]} */
     const publishedPaths = [];
-    /** @param {string} reason */
-    const undo = (reason) => {
+    /** @param {string} reason @param {string} [alreadyFailed] orphan this call could not remove */
+    const undo = (reason, alreadyFailed) => {
         const removed = removePublished(publishedPaths);
-        return removed.ok
-            ? { ok: /** @type {const} */ (false), reason }
-            : { ok: /** @type {const} */ (false), reason, rollbackFailed: removed.reason };
+        const failed = [alreadyFailed, removed.ok ? null : removed.reason].filter(Boolean).join(', ');
+        return failed
+            ? { ok: /** @type {const} */ (false), reason, rollbackFailed: failed }
+            : { ok: /** @type {const} */ (false), reason };
     };
     // The session write is INSIDE the try: it takes a store lock that can throw,
     // and leaving it outside published the files while recording nothing.
@@ -414,7 +415,15 @@ export function commitStagedArtifacts(sessionId, staged) {
         const updated = appendSessionArtifacts(sessionId, published);
         if (!updated) return undo('session-update-failed');
     } catch (err) {
-        return undo(`commit-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
+        // `publishStaged` throws EROLLBACK when it linked a file and then could
+        // neither remove the staging entry nor undo the link. That path returns
+        // before naming the file, so it is not in `publishedPaths` and the sweep
+        // below cannot reach it — it has to be reported explicitly, while the
+        // other published paths are still rolled back.
+        const orphan = /** @type {any} */ (err)?.code === 'EROLLBACK'
+            ? /** @type {any} */ (err).message
+            : undefined;
+        return undo(`commit-failed:${/** @type {any} */ (err)?.message || 'unknown'}`, orphan);
     }
     return { ok: true, files: published };
 }
