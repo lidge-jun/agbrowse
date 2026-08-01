@@ -549,6 +549,66 @@ Y13을 추가했다. 실제 `pollWebAi`를 돌리되 resolver를 mock해서 **�
 wrapper가 실제 잔여를 보존하거나 이미 지난 경우 즉시 timeout해야 한다.
 별도 유닛으로 남긴다.
 
+## WP23: 1초 floor 제거와 감사 7라운드
+
+리뷰어가 "#88 종료 전 필수"로 지정했던 남은 항목이다. 감사가 **7라운드** 돌았고
+매 라운드 실제 결함이 나왔다. 마지막에 PASS.
+
+### 결함의 연쇄
+
+처음 고친 것은 wrapper 하나였다. `resolveTimeoutBudgetSec`가 잔여를 초 단위로
+**올림**하므로(`Math.max(1, ...)`) 400ms 잔여가 1초 데드라인이 됐다. 예산으로는
+맞는 동작이라 resolver는 두고 wrapper가 ms 잔여를 직접 읽게 했다.
+
+그런데 그게 `poll` 하나만 고친 것이었다. 감사가 라운드마다 다음을 찾아냈다.
+
+| 라운드 | 결함 | 왜 놓쳤나 |
+| --- | --- | --- |
+| R1 | resume/MCP/watch가 floored 예산을 **명시적 timeout으로 합성**해 전달 | wrapper만 봤다 |
+| R2 | 그 교정(timeout 생략)이 Gemini/Grok을 **더 악화** — 두 벤더는 저장 데드라인을 안 읽고 1200s/600s 기본값으로 떨어진다 | ChatGPT 기준으로만 생각했다 |
+| R3 | 벤더가 `Math.max(1, sec)`로 **다시 올림**, tick sleep 무제한 | 경계만 고치고 소비자를 안 봤다 |
+| R4 | Gemini Deep Think 분기의 **5초 sleep** | 내 테스트가 그 분기에 닿지 못했다 |
+| R5 | 만료 세션 guard가 **lock 획득 전에만** 검사 (TOCTOU) | lock 대기 시간을 안 셌다 |
+| R6 | 그 교정 안에 **또 TOCTOU** — `Date.now()`를 default parameter로 받아 blocking store read **이전에** 샘플링 | helper에 직접 테스트가 0건이었다 |
+
+R2가 가장 뼈아프다. **고친 것이 이전보다 나빴다.** 400ms 잔여가 1초로 늘어나던
+것을 20분으로 만들었다.
+
+### 최종 형태
+
+`resolvePollTimeoutSec` 하나가 규칙이다 — 호출자 timeout이 있으면 그것, 없으면
+resolver 예산, 그 다음 **저장 잔여로 clamp**. 소수점 유지. 0이 아닌 최소값
+(0.001s)을 두는 이유는 일부 provider가 0을 "예산 없음"으로 읽고 되올리기
+때문이다. 만료 판정은 별도로 `expiredSessionTimeoutResult`가 한다.
+
+적용 지점: `poll --session`, `sessions resume`(DR 분기 포함), MCP, watch,
+Work poller, Deep Research. 그리고 Gemini/Grok의 초 단위 floor를 ms floor로,
+모든 고정 tick sleep을 `deadline - Date.now()`로 캡.
+
+### 테스트가 계속 헛돌았다
+
+이 사이클에서 **테스트가 잘못된 이유로 통과한 사례가 네 번** 나왔다.
+
+- Gemini 하네스가 `evaluateAll`만 응답 → 실제 코드는 `locator().all()` +
+  `innerText`를 쓰므로 응답이 0건, 5초 분기에 진입조차 못 함. 캡을 되돌려도
+  green이었다.
+- 같은 테스트가 상한만 검사 → 리뷰어가 데드라인을 100ms로 깎아도 통과했다.
+- helper TOCTOU 테스트: spin loop 버전은 두 샘플이 모두 늦어 차이를 못 만든다.
+  timer로 lock을 풀어주는 버전은 store retry가 **동기 sleep**이라 타이머가 영영
+  안 돈다. 결국 `acquiredAt`을 backdate해 대기 중에 stale이 되게 만들어야 했다.
+- guard 3곳 중 resume에만 behavioural 테스트가 있어 나머지 두 곳의 결함이
+  green으로 남았다.
+
+공통점은 하나다. **경계에서 값이 전달되는 것만 확인하고 소비자가 그 값을
+지키는지는 묻지 않았다.**
+
+### 남은 것 — #88 종료 조건
+
+Gemini, Grok, Deep Research, Work는 여전히 **await 사이에서만** 시간을 본다.
+정체된 probe 하나면 timeout이 무력화된다. `pollWebAi`가 받은 outer race를 네
+모듈에 똑같이 적용해야 하고, 이건 별도 유닛이다. 리뷰어도 회귀가 아닌 미완으로
+동의했으나 **#88을 닫으려면 필수**라고 못박았다.
+
 ## 남은 것
 
 single-flight(G2·G4 포함)는 여전히 미해결이다. 이번 변경은 패배한 작업이
