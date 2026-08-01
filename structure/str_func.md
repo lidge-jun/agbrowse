@@ -25,7 +25,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 912 | bundled agent workflow skill |
-| `web-ai/` | 119 | 32914 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 119 | 32894 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 10 | 1821 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 238 | mutation and content-boundary guardrails |
@@ -85,7 +85,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/chatgpt.mjs` | 2288 | ChatGPT provider send/poll/query/status with streaming-safe recovery gates |
 | `web-ai/chatgpt-response-dom.mjs` | 549 | shared ChatGPT assistant DOM extraction plus the Node-side composer-scoped stop probe |
 | `web-ai/chatgpt-response-observer.mjs` | 169 | ChatGPT observer wake signal and timeout recovery metadata |
-| `web-ai/gemini-live.mjs` | 1024 | Gemini provider send/poll/query/status |
+| `web-ai/gemini-live.mjs` | 1018 | Gemini provider send/poll/query/status |
 | `web-ai/grok-live.mjs` | 605 | Grok provider send/poll/query/status |
 | `web-ai/mcp-server.mjs` | 483 | stdio JSON-RPC MCP bridge |
 | `web-ai/tool-schema.mjs` | 208 | MCP and AI SDK schema source |
