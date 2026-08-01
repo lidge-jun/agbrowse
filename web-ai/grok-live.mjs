@@ -21,6 +21,7 @@ import {
 } from './session.mjs';
 import { hasContextPackaging, prepareContextForBrowser } from './context-pack/index.mjs';
 import { WebAiError } from './errors.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
@@ -248,7 +249,62 @@ export async function grokSendWebAi(deps, input = {}) {
  * @param {Input} [input]
  */
 export async function grokPollWebAi(deps, input = {}) {
+    // Thin wrapper over a hard deadline — see gemini-live.mjs. The loop checks
+    // the clock only BETWEEN awaited probes, so one never-settling locator or
+    // evaluate defeated `--timeout` (measured at 353ms against a 50ms budget).
+    // A stalled probe cannot be cancelled; the race stops the CALLER waiting.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const timeoutMs = Math.max(1, Number(input.timeout || input.thinkingTime || 600) * 1000);
+    /** @type {{ page: any, session: any, baseline: any }} */
+    const ctx = { page: null, session: null, baseline: null };
+    return withPollDeadline(
+        () => runGrokPollWebAi(deps, input, ctx),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            // The SAME builder the loop's own timeout uses, so the two paths
+            // cannot drift apart in shape.
+            onExpired: () => buildGrokTimeoutResult(ctx),
+        },
+    );
+}
+
+/**
+ * The timeout envelope, from whatever the poll had established when it ran out.
+ *
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+function buildGrokTimeoutResult({ page, session, baseline }) {
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'grok',
+        status: 'timeout',
+        url: page?.url?.() || baseline?.url || '',
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for grok response',
+    };
+}
+
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null }) {
     const page = await deps.getPage();
+    ctx.page = page;
     if (!isGrokUrl(page.url())) throw new WebAiError({
         errorCode: 'cdp.target-mismatch',
         stage: 'connect',
@@ -264,6 +320,7 @@ export async function grokPollWebAi(deps, input = {}) {
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: page.url(),
         });
+    ctx.session = session;
     const baseline = (session && sessionToBaseline(session))
         || getBaseline('grok', page.url())
         || getLatestBaseline('grok');
@@ -274,6 +331,7 @@ export async function grokPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor grok first.',
     });
+    ctx.baseline = baseline;
     // Fractional — see gemini-live.mjs. Flooring seconds undid the caller's
     // clamp; the floor is on milliseconds so sub-second budgets survive.
     const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 600) * 1000);
@@ -342,24 +400,7 @@ export async function grokPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
-        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
-    }) : null;
-    return {
-        ok: false,
-        vendor: 'grok',
-        status: 'timeout',
-        url: page.url(),
-        ...(session ? { sessionId: session.sessionId } : {}),
-        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
-        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
-        baseline,
-        warnings: [],
-        usedFallbacks: [],
-        recoverable: true,
-        retryHint: 'poll-or-resume',
-        error: 'timed out waiting for grok response',
-    };
+    return buildGrokTimeoutResult(ctx);
 }
 
 /**

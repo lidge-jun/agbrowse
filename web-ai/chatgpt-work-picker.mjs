@@ -4,6 +4,7 @@
 // (Chat Intelligence picker) or chatgpt-composer.mjs global fallbacks.
 
 import { WebAiError } from './errors.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import {
     STOP_BUTTON_SELECTOR,
     CONVERSATION_TURN_SELECTOR,
@@ -886,6 +887,62 @@ const WORK_POLL_HEARTBEAT_SEC = 30;
  * @returns {Promise<Record<string, unknown>>}
  */
 export async function pollWorkSession(deps, input = {}) {
+    // Thin wrapper over a hard deadline. The loop below checks the clock only
+    // BETWEEN awaited browser probes, so one never-settling probe defeated
+    // `--timeout` outright — measured still-pending at 152ms against a 50ms
+    // budget. A stalled probe cannot be cancelled; the race is what stops the
+    // CALLER waiting on it.
+    const { getSession: getSessionForBudget, resolvePollTimeoutSec: resolveBudgetSec } = await import('./session.mjs');
+    const startedAt = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const wrapperVendor = input.vendor || 'chatgpt';
+    const wrapperSessionId = input.session || input.sessionId;
+    const wrapperSession = wrapperSessionId ? getSessionForBudget(wrapperSessionId) : null;
+    const wrapperTimeoutMs = resolveBudgetSec(input, wrapperSession, wrapperVendor) * 1000;
+    /** @type {{ page: any }} */
+    const ctx = { page: null };
+    return withPollDeadline(
+        () => runPollWorkSession(deps, input, ctx),
+        {
+            startedAt,
+            monotonicStartMs: monotonicStart,
+            timeoutMs: wrapperTimeoutMs,
+            // The SAME builder the loop's own timeout uses: a second envelope
+            // here is how `surface` and `responseContract` would go missing.
+            onExpired: () => buildWorkTimeoutResult(wrapperVendor, wrapperSessionId, ctx),
+        },
+    );
+}
+
+/**
+ * The Work timeout envelope. Shared by the loop's natural timeout and the
+ * outer race so the two cannot drift apart in shape.
+ *
+ * @param {string} vendor
+ * @param {string|undefined} sessionId
+ * @param {{ page: any }} ctx
+ */
+function buildWorkTimeoutResult(vendor, sessionId, { page }) {
+    return {
+        ok: false,
+        status: 'timeout',
+        vendor,
+        sessionId: sessionId || null,
+        answerText: null,
+        conversationUrl: typeof page?.url === 'function' ? page.url() : null,
+        surface: 'work',
+        responseContract: 'work',
+        warnings: ['work-poll-timeout'],
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {{ page: any }} ctx
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function runPollWorkSession(deps, input = {}, ctx = { page: null }) {
     const { getSession, updateSession, resolvePollTimeoutSec } = await import('./session.mjs');
 
     const vendor = input.vendor || 'chatgpt';
@@ -901,6 +958,7 @@ export async function pollWorkSession(deps, input = {}) {
     let lastHeartbeat = 0;
 
     const page = await deps.getPage();
+    ctx.page = page;
 
     // If the session's original target is gone, fail closed
     // (04 section 6: no auto-reattach for running tasks in v1)
@@ -1005,17 +1063,7 @@ export async function pollWorkSession(deps, input = {}) {
             warning: 'work-poll-timeout',
         });
     }
-    return {
-        ok: false,
-        status: 'timeout',
-        vendor,
-        sessionId: sessionId || null,
-        answerText: null,
-        conversationUrl: typeof page.url === 'function' ? page.url() : null,
-        surface: 'work',
-        responseContract: 'work',
-        warnings: ['work-poll-timeout'],
-    };
+    return buildWorkTimeoutResult(vendor, sessionId, ctx);
 }
 
 /**

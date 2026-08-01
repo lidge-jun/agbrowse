@@ -28,6 +28,7 @@ import { selectGeminiModel, geminiModelCapabilityProbe } from './gemini-model.mj
 import { preflightAttachment } from './chatgpt-attachments.mjs';
 import { resolveAttachmentUploadTimeoutMs } from './chatgpt-upload-surface.mjs';
 import { WebAiError } from './errors.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
@@ -617,7 +618,70 @@ function stripExtension(name) {
  * @param {any} input
  */
 export async function geminiPollWebAi(deps, input = {}) {
+    // Thin wrapper over a hard deadline. The loop below only looks at the clock
+    // BETWEEN awaited probes, so one never-settling `locator.all` or
+    // `page.evaluate` used to defeat `--timeout` outright: measured at 351ms
+    // against a 50ms budget, and unbounded in principle. A stalled probe cannot
+    // be cancelled, so the race does not stop the work — it stops the CALLER
+    // waiting on it.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const timeoutMs = Math.max(1, Number(input.timeout || input.thinkingTime || 1200) * 1000);
+    /** @type {{ page: any, session: any, baseline: any }} */
+    const ctx = { page: null, session: null, baseline: null };
+    return withPollDeadline(
+        () => runGeminiPollWebAi(deps, input, ctx),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            // The SAME builder the loop's own timeout uses, so the two paths
+            // cannot drift apart in shape.
+            onExpired: () => buildGeminiTimeoutResult(ctx),
+        },
+    );
+}
+
+/**
+ * The timeout envelope, from whatever the poll had established when it ran out.
+ *
+ * Shared by the loop's natural timeout and the outer race. Building a second
+ * envelope for the race is how the fields drift — an earlier round of this work
+ * shipped guards missing `usedFallbacks` and `conversationUrl` for exactly that
+ * reason.
+ *
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+function buildGeminiTimeoutResult({ page, session, baseline }) {
+    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'gemini',
+        status: 'timeout',
+        url: page?.url?.() || baseline?.url || '',
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
+        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for gemini response',
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {{ page: any, session: any, baseline: any }} ctx populated as the poll
+ *   learns each piece, so an expiry can describe how far it got
+ */
+async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null }) {
     const page = await deps.getPage();
+    ctx.page = page;
     if (!isGeminiUrl(page.url())) throw new WebAiError({
         errorCode: 'cdp.target-mismatch',
         stage: 'connect',
@@ -633,6 +697,7 @@ export async function geminiPollWebAi(deps, input = {}) {
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: page.url(),
         });
+    ctx.session = session;
     const baseline = (session && sessionToBaseline(session))
         || getBaseline('gemini', page.url())
         || getLatestBaseline('gemini');
@@ -643,6 +708,7 @@ export async function geminiPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor gemini first.',
     });
+    ctx.baseline = baseline;
     // Fractional. Flooring at a whole second here undid the caller's clamp: a
     // resumed session with 400ms of budget left was rounded back up to a full
     // second. The floor is on MILLISECONDS now, so a positive budget is always
@@ -709,24 +775,7 @@ export async function geminiPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
-        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
-    }) : null;
-    return {
-        ok: false,
-        vendor: 'gemini',
-        status: 'timeout',
-        url: page.url(),
-        ...(session ? { sessionId: session.sessionId } : {}),
-        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
-        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
-        baseline,
-        warnings: [],
-        usedFallbacks: [],
-        recoverable: true,
-        retryHint: 'poll-or-resume',
-        error: 'timed out waiting for gemini response',
-    };
+    return buildGeminiTimeoutResult(ctx);
 }
 
 /**

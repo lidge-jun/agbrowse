@@ -25,6 +25,7 @@ import {
     updateSession,
 } from './session.mjs';
 import { WebAiError } from './errors.mjs';
+import { POLL_EXPIRED, monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { saveAssistantDownloadableFiles } from './chatgpt-files.mjs';
@@ -80,8 +81,6 @@ const MAX_RECOVERY_RESERVE_RATIO = 0.25;
 const MIN_LOOP_BUDGET_MS = 500;
 /** One poll tick. */
 const PACING_INTERVAL_MS = 500;
-/** How often the hard-deadline timer re-checks the clock the loop reads. */
-const POLL_EXPIRY_CHECK_MS = 250;
 /**
  * How long the reported clock may sit at ONE value before the hard deadline
  * gives up on it, as a multiple of the budget.
@@ -89,16 +88,6 @@ const POLL_EXPIRY_CHECK_MS = 250;
  * Only reachable when `Date.now` has stopped moving entirely.
  */
 
-/**
- * Real elapsed time, immune to a mocked or frozen `Date.now`.
- *
- * @returns {number} milliseconds from an arbitrary origin
- */
-function monotonicNowMs() {
-    return Number(process.hrtime.bigint() / 1_000_000n);
-}
-/** Thrown by the commit gate so an expired run cannot return a normal envelope. */
-const POLL_EXPIRED = Symbol('poll-expired');
 const ASSISTANT_SELECTORS = CHATGPT_ASSISTANT_SELECTORS;
 const FINISHED_ACTIONS_SELECTOR = [
     'button[data-testid="copy-turn-action-button"]',
@@ -762,84 +751,28 @@ export async function pollWebAi(deps, input = {}) {
             timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
         }
     }
-    /** @type {any} */
-    let expire = () => undefined;
-    let timer = null;
-    const hardDeadline = started + timeoutMs;
-    const expiry = new Promise(resolve => {
-        expire = resolve;
-        // Resolves a plain envelope and nothing else. Recording the timeout in
-        // the session store here would take a SYNCHRONOUS lock inside a timer
-        // callback and stall the event loop — the very failure this is fixing.
-        // Re-check the CLOCK when the timer fires rather than trusting the
-        // delay. Callers (and tests) can advance `Date.now` independently of
-        // real time; expiring on wall time alone would cut short a poll that,
-        // by the clock the loop reads, still has budget. Re-arm until the
-        // clock agrees the deadline has passed.
-        //
-        // Deferring to the reported clock ALONE is unbounded: a frozen or
-        // mocked `Date.now` never reaches the deadline, so the timer re-arms
-        // forever and the poll returns NOTHING — strictly worse than the
-        // overrun this wrapper exists to prevent.
-        //
-        // Two independent ceilings, because `Date.now` is not trustworthy here:
-        // tests step it, and a stalled or rewound system clock would otherwise
-        // leave the deadline unreachable.
-        //
-        //   - the reported clock reaching `hardDeadline`
-        //   - MONOTONIC time exceeding the same budget
-        //
-        // The monotonic one is what makes the promise real: whatever the clock
-        // claims, the caller waits at most one budget plus a check interval.
-        // Tests that step the clock faster than real time still finish on the
-        // first ceiling, so they are not cut short.
-        // Measured from the wrapper's FIRST instruction, not from here: a
-        // blocking store read before this point would otherwise be free time.
-        const monotonicCeilingMs = timeoutMs + POLL_EXPIRY_CHECK_MS;
-        const arm = () => {
-            const remaining = hardDeadline - Date.now();
-            const monotonicElapsedMs = monotonicNowMs() - monotonicStart;
-            if (remaining <= 0 || monotonicElapsedMs >= monotonicCeilingMs) { resolve(POLL_EXPIRED); return; }
-            timer = setTimeout(arm, Math.min(remaining, POLL_EXPIRY_CHECK_MS));
-        };
-        arm();
-    });
     // Shared with the inner run so a hard-deadline return still reports what the
     // poll managed to observe. Losing those warnings would make an expired poll
     // indistinguishable from a clean one.
     /** @type {Set<string>} */
     const observations = new Set();
-    // Shared with the inner run so the loser learns it lost. Without this the
-    // commit gate's flag was never set by anyone and every side effect sailed
-    // through after the deadline.
-    /** @type {{ expired: boolean, hardDeadline: number }} */
-    const runToken = { expired: false, hardDeadline };
-    try {
-        const run = runPollWebAi(deps, input, hardDeadline, observations, runToken).then(
-            // Normalise BOTH settlement paths before the race: a stalled promise
-            // that settles just after the deadline can have its continuation
-            // scheduled ahead of the timer, and would otherwise deliver a normal
-            // result — or a normal error — past the bound.
-            result => (Date.now() >= hardDeadline ? POLL_EXPIRED : result),
-            err => (Date.now() >= hardDeadline || err === POLL_EXPIRED
-                ? POLL_EXPIRED
-                : Promise.reject(err)),
-        );
-        const outcome = await Promise.race([run, expiry]);
-        if (outcome !== POLL_EXPIRED) return outcome;
-        // Added to the SHARED ledger before the envelope is built: a warning
-        // pushed by the loser after this point would never reach the caller.
-        if (resolveFileArtifactPolicy(input, input.session ? getSession(input.session) : null) === 'require-all') {
-            observations.add('file-artifact-unverified');
-        }
-        return buildHardTimeoutResult(input, observations);
-    } finally {
-        // Order matters: the loser may still be mid-tick, and this is what makes
-        // its next commit throw instead of writing.
-        runToken.expired = true;
-        if (timer) clearTimeout(timer);
-        expire(POLL_EXPIRED);
-    }
+    return withPollDeadline(
+        (hardDeadline, runToken) => runPollWebAi(deps, input, hardDeadline, observations, runToken),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            onExpired: () => {
+                // Added to the SHARED ledger before the envelope is built: a
+                // warning pushed by the loser after this point would never
+                // reach the caller.
+                if (resolveFileArtifactPolicy(input, input.session ? getSession(input.session) : null) === 'require-all') {
+                    observations.add('file-artifact-unverified');
+                }
+                return buildHardTimeoutResult(input, observations);
+            },
+        },
+    );
 }
 
 /**

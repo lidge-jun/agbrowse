@@ -4,6 +4,7 @@ import { trySaveReport, appendArtifactRecord } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { chooseDeepResearchReportRead } from './chatgpt-deep-research-report.mjs';
 import { probeStopButton } from './chatgpt-response-dom.mjs';
+import { withPollDeadline } from './poll-deadline.mjs';
 
 /**
  * @typedef {Object} DeepResearchResult
@@ -407,6 +408,39 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
  * @returns {Promise<DeepResearchResult>}
  */
 export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }) {
+    // Thin wrapper over a hard deadline. The loop below checks the clock only
+    // BETWEEN awaited probes, so one never-settling probe defeated `timeoutMs`
+    // — measured still-pending at 153ms against a 50ms budget.
+    //
+    // The expiry envelope deliberately does NOT capture a report. The normal
+    // timeout path calls `extractResearchReport` first, but that is itself a
+    // browser probe: running it here would re-enter the exact stall this is
+    // bounding. An expired resume says so with its own warning instead of
+    // pretending it looked.
+    return withPollDeadline(
+        () => runResumeDeepResearch(page, deps, { session, timeoutMs, stableMs }),
+        {
+            timeoutMs,
+            onExpired: () => ({
+                ok: false,
+                sessionId: session.sessionId,
+                conversationUrl: typeof page?.url === 'function' ? page.url() : null,
+                reportText: null,
+                sources: [],
+                warnings: ['deep-research-resumed', 'deep-research-resume-timeout', 'deep-research-capture-skipped-past-deadline'],
+                status: 'timeout',
+            }),
+        },
+    );
+}
+
+/**
+ * @param {any} page
+ * @param {any} deps
+ * @param {{ session: any, timeoutMs?: number, stableMs?: number }} opts
+ * @returns {Promise<DeepResearchResult>}
+ */
+async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }) {
     const warnings = ['deep-research-resumed'];
     const deadline = Date.now() + timeoutMs;
     let stableText = '';
