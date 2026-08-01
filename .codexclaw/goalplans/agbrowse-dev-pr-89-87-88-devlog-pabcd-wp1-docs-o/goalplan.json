@@ -2,7 +2,7 @@
  "objective": "agbrowse dev에서 열린 PR #89 / 이슈 #87 #88을 정리하고 devlog를 규약대로 남기는 다중 PABCD 루프. 유닛 260731_pr89_issue_triage: WP1 docs-only 로드맵, WP2 #87 잔여갭 2건(probe family 계약 + MCP non-ChatGPT fail-closed), WP3 #88 정체 경계 인벤토리와 후속 유닛 로드맵, WP5 게이트 클로즈아웃. 후속 연쇄 유닛(같은 goal): wp6 #88 DOM deadline 계약, wp7 artifact/finalizer hardening, wp8 devlog 정리. 각 후속 유닛은 docs-only 로드맵 사이클로 시작하고, 그 결과 decade 문서마다 별도 구현 work-phase를 append한다. push/merge/issue close는 범위 밖.",
  "slug": "agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o",
  "createdAt": "2026-07-31T07:28:37.608Z",
- "updatedAt": "2026-07-31T23:10:44.770564Z",
+ "updatedAt": "2026-08-01T00:05:10.522789Z",
  "activeWorkPhaseId": null,
  "workPhases": [
   {
@@ -253,6 +253,24 @@
    "status": "done",
    "title": "WP18 Y8 falsifiability: 부하 의존 flake 진단·교정, mutation 재확인",
    "tasks": []
+  },
+  {
+   "id": "wp19",
+   "status": "done",
+   "title": "WP19 devlog index 정합 + 감사 R1 blocker(finalizer 단계별 재검사)와 import-time home 교정",
+   "tasks": []
+  },
+  {
+   "id": "wp20",
+   "status": "done",
+   "title": "WP20 감사 R2 blocker(transcript 저장 직후 틈) 교정 + baseline 캐시 home 키잉",
+   "tasks": []
+  },
+  {
+   "id": "wp21",
+   "status": "done",
+   "title": "WP21 감사 R3 잔여 3건: 테스트 falsifiability 복구와 home 회귀 테스트",
+   "tasks": []
   }
  ],
  "criteria": [
@@ -281,7 +299,7 @@
    "id": "c4",
    "scenario": "devlog 정리 유닛: _plan 표가 실제 폴더와 양방향 1:1이고, 표에 기재된 모든 _fin 경로가 존재한다",
    "expectedEvidence": "ls devlog/_plan, ls devlog/_fin 출력과 00_index.md 표 대조 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-   "capturedEvidence": "커밋 f0fa15a, 5e5dfd8, 7d39b95. _plan 11→5: 6개 이관 + reorg 유닛 자체 이관. 조건부 4개에 900_closeout.md 작성 — upload_reliability는 전체 스위트 179파일 1946건 0 failure, release_017은 fresh install + 두 bin smoke 재현(면제 대신 실행), search_skill은 5사이클 배포 대조, competitive_research는 질문 5개 disposition. 00_index 검증: _plan 표 ↔ 실제 폴더 양방향 diff 일치, 표 기재 _fin 경로 전부 존재. doc-drift 164, verify-counts 76, typecheck 0.",
+   "capturedEvidence": "커밋 f0fa15a, 5e5dfd8, 7d39b95. _plan 11→5: 6개 이관 + reorg 유닛 자체 이관. 조건부 4개에 900_closeout.md 작성 — upload_reliability는 전체 스위트 179파일 1946건 0 failure, release_017은 fresh install + 두 bin smoke 재현(면제 대신 실행), search_skill은 5사이클 배포 대조, competitive_research는 질문 5개 disposition. 00_index 검증: _plan 표 ↔ 실제 폴더 양방향 diff 일치, 표 기재 _fin 경로 전부 존재. doc-drift 164, verify-counts 76, typecheck 0. || WP19 재검증(2026-08-01): 00_index의 260731_webai_poll_deadline 행을 WP16~18 실제 상태로 갱신. 양방향 대조 스크립트 재실행 — _plan 표 ↔ 실제 폴더 diff 일치(PLAN 1:1 OK), 표 기재 _fin 경로 49개 전부 존재. docs:drift 164, docs:counts 76.",
    "status": "met"
   },
   {
@@ -302,7 +320,7 @@
    "id": "c7",
    "scenario": "#88 DOM deadline 유닛: 021이 유닛 A에 배정한 경계(read/activity/finished/ordering/recovery/copy)가 예산 계약 아래 데드라인을 인지하고, fail-open B03·B06이 fail-closed로 교정된다",
    "expectedEvidence": "경계 ID별 테스트 출력 + timeout 사유 문자열. 배정 경계 전부가 대상이며 일부만으로는 met 아님 — 이 criterion은 해당 docs-only 사이클의 D에서 append되는 구현 work-phase에 연결한다. 로드맵만으로는 met 아님",
-   "capturedEvidence": "부분 충족 — fail-open 절반은 닫혔고 데드라인은 미해결. WP10(6742949/45aa702/21e229c): B03 activity sentinel unknown 분리, B06 ordering 4상태. WP14(52ebed3/9635426/6ad7c44): B01/B02/B07 read-failure를 빈 페이지와 구분 — 실패한 []가 baseline.assistantCount로 흘러가 대화 전체를 새 후보로 재분류하던 경로. 부분 locator 읽기(2개 중 1개만 읽힘 → count 1)도 감사 지적으로 교정. 테스트 출력: 180파일 2046건 passed, gate:all 17/17, typecheck 0, doc-drift 164, verify-counts 76. mutation proof: X4c/X4d/X10/X11b/T1~T15/U1~U17 각각 RED 확인. 미충족分: 배정 경계 15개의 데드라인 인지가 0개다. 예산 계약이 필요하고 G1(withStoreLock 87곳 캐스케이드) unmet, G2/G4 미측정, G3 partial(WP13). WP12가 command lock의 5초 event-loop freeze만 제거했다. B04(anyStopButtonVisible 공유 producer, 소비자 3곳)는 별도 OPEN. || WP16~18(93f21f0/9566cec/4390fb6/6a5a2b2): hard deadline 도입으로 정체된 read가 --timeout을 넘기지 못한다(2s 예산 → elapsedMs 2044, status timeout; 이전 8002ms STILL-HANGING). blocker 4건 교정 — 예산 해석 통일(poll/watch/resume의 undefined가 1초로 잘리던 문제), commitIfActive 배선(호출 0건이던 게이트), frozen-clock 무한 재무장, 죽은 reserve 항. WP17: fencing을 artifact/trace/diagnostics/heartbeat와 finalizer 내부(진입+archive await 이후)까지 확장. WP18: Y8이 43회 중 3회, 깨끗한 트리 5회 중 2회 실패하던 부하 의존 flake였음을 확인 — 기록된 RED가 근거가 아니었다. 원인은 하네스 두 곳(스톨 기준점이 poll 밖, innerText 미게이트). 교정 후 단독 8/8, 파일 3회 59/59. mutation 재확인: 개별 fence 제거는 GREEN(두 게이트가 상호 은폐), 둘 다 제거해야 RED 3/3. 최종: npm test exit 0 (2071 passed), typecheck 0, gate:all 17/17, drift 164, counts 76. 여전히 unmet: single-flight(pending evaluate 선형 누적), 정체 자체의 취소(G4), G1(withStoreLock 200회 blocking retry — 이번 반복 실행 중 실제 락 실패로 관측됨).",
+   "capturedEvidence": "부분 충족 — fail-open 절반은 닫혔고 데드라인은 미해결. WP10(6742949/45aa702/21e229c): B03 activity sentinel unknown 분리, B06 ordering 4상태. WP14(52ebed3/9635426/6ad7c44): B01/B02/B07 read-failure를 빈 페이지와 구분 — 실패한 []가 baseline.assistantCount로 흘러가 대화 전체를 새 후보로 재분류하던 경로. 부분 locator 읽기(2개 중 1개만 읽힘 → count 1)도 감사 지적으로 교정. 테스트 출력: 180파일 2046건 passed, gate:all 17/17, typecheck 0, doc-drift 164, verify-counts 76. mutation proof: X4c/X4d/X10/X11b/T1~T15/U1~U17 각각 RED 확인. 미충족分: 배정 경계 15개의 데드라인 인지가 0개다. 예산 계약이 필요하고 G1(withStoreLock 87곳 캐스케이드) unmet, G2/G4 미측정, G3 partial(WP13). WP12가 command lock의 5초 event-loop freeze만 제거했다. B04(anyStopButtonVisible 공유 producer, 소비자 3곳)는 별도 OPEN. || WP16~18(93f21f0/9566cec/4390fb6/6a5a2b2): hard deadline 도입으로 정체된 read가 --timeout을 넘기지 못한다(2s 예산 → elapsedMs 2044, status timeout; 이전 8002ms STILL-HANGING). blocker 4건 교정 — 예산 해석 통일(poll/watch/resume의 undefined가 1초로 잘리던 문제), commitIfActive 배선(호출 0건이던 게이트), frozen-clock 무한 재무장, 죽은 reserve 항. WP17: fencing을 artifact/trace/diagnostics/heartbeat와 finalizer 내부(진입+archive await 이후)까지 확장. WP18: Y8이 43회 중 3회, 깨끗한 트리 5회 중 2회 실패하던 부하 의존 flake였음을 확인 — 기록된 RED가 근거가 아니었다. 원인은 하네스 두 곳(스톨 기준점이 poll 밖, innerText 미게이트). 교정 후 단독 8/8, 파일 3회 59/59. mutation 재확인: 개별 fence 제거는 GREEN(두 게이트가 상호 은폐), 둘 다 제거해야 RED 3/3. 최종: npm test exit 0 (2071 passed), typecheck 0, gate:all 17/17, drift 164, counts 76. 여전히 unmet: single-flight(pending evaluate 선형 누적), 정체 자체의 취소(G4), G1(withStoreLock 200회 blocking retry — 이번 반복 실행 중 실제 락 실패로 관측됨). || WP19~21 감사 3라운드(sol high): R1 FAIL(blocker: finalizer 진입 검사가 이후 단계 미방어) → R2 FAIL(blocker: transcript 저장 직후 appendArtifactRecord 무방비) → R3 NEAR-PASS blocking_issues 0. 교정 커밋 0b5512d/85db153/68975f6/3be1a35. finalizeProviderTab의 모든 단계 경계(완료 쓰기 전/transcript 전/transcript 후/archive 전/archive 후/pooling 전)에 재검사. import-time home 고정 3건(session-artifacts, session.mjs baseline, context-pack/builder) 호출 시점 해석으로 교정 + baseline 캐시를 loadedFrom 경로로 키잉. 테스트 8+1+1건 각각 mutation RED 확인. 검증은 detached worktree(제3자 미커밋 편집 격리): npm test exit 0, 2079 passed, gate:all 17/17, typecheck 0, drift 164, counts 76. 여전히 unmet: copy 버튼 클릭/CDP 세션 생성 미게이트, 저장된 데드라인 store-read 이중 차감(리뷰어가 #88 종료 전 필수로 지정), Y8이 완전한 side-effect ledger 아님, single-flight/G4/G1.",
    "status": "open"
   },
   {
