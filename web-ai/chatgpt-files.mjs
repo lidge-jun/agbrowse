@@ -8,7 +8,7 @@ import {
     trySaveFileArtifact,
     appendArtifactRecord,
 } from './session-artifacts.mjs';
-import { getSession } from './session.mjs';
+import { readSessionAsync } from './session-store.mjs';
 
 /**
  * Identity of one download candidate within one assistant turn.
@@ -557,7 +557,10 @@ async function saveAssistantDownloadableFilesStrict(cdpSession, {
     // Reuse anything a previous attempt already saved for these same candidates.
     // Without this, a batch that committed and then lost the race to the hard
     // deadline would be downloaded and stored a second time on the next poll.
-    const stored = /** @type {import('./session-artifacts.mjs').ArtifactDescriptor[]} */ (getSession(sessionId)?.artifacts || []);
+    // Read through the awaited lock: `getSession` blocks the event loop, which
+    // would suspend the very deadline timer this path is running under.
+    const storedSession = await readSessionAsync(sessionId);
+    const stored = /** @type {import('./session-artifacts.mjs').ArtifactDescriptor[]} */ (storedSession?.artifacts || []);
     /** @type {Map<string, import('./session-artifacts.mjs').ArtifactDescriptor>} */
     const reusable = new Map();
     for (const descriptor of stored) {
@@ -619,7 +622,7 @@ async function saveAssistantDownloadableFilesStrict(cdpSession, {
         return { ok: true, detectedCount: candidates.length, savedCount: reused.length, files: reused, errors: [], warnings: [] };
     }
     if (stillActive?.() === false) return abort('deadline-exceeded');
-    const committed = commitStagedArtifacts(sessionId, staged);
+    const committed = await commitStagedArtifacts(sessionId, staged, { stillActive });
     if (!committed.ok) {
         // The commit already undid its own published files; `abort` clears any
         // staging leftovers. A rollback failure inside the commit outranks the

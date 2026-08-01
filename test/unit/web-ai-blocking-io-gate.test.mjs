@@ -49,6 +49,47 @@ describe('blocking IO ratchet gate (#88 G3)', () => {
         expect(result.detail).toContain('web-ai/brand-new.mjs');
     });
 
+    it('W2c: a new caller of the blocking store lock is refused', () => {
+        // The lock contains no `Sync` primitive at the call site, so the
+        // patterns above see nothing when a new caller takes it — the case this
+        // gate's own notes list as uncovered. It stops the event loop for the
+        // whole wait, so every new caller is another place a deadline is not
+        // counted.
+        const result = evaluate({
+            'web-ai/a.mjs': 'readFileSync(p);\nwithStoreLock(() => 1);',
+        }, oneCallBaseline);
+        expect(result.ok).toBe(false);
+        expect(result.detail).toContain('blocking withStoreLock 1 > allowed 0');
+        // The message has to name the replacement, or the reader has to guess.
+        expect(result.detail).toContain('withStoreLockAsync');
+    });
+
+    it('W2d: the awaited lock is not counted', () => {
+        // The paired case. Counting the async form too would make the gate
+        // block the very migration it exists to push toward.
+        const result = evaluate({
+            'web-ai/a.mjs': 'readFileSync(p);\nawait withStoreLockAsync(() => 1);',
+        }, oneCallBaseline);
+        expect(result.ok).toBe(true);
+    });
+
+    it.each([
+        ['optional call', 'withStoreLock?.(() => 1);'],
+        ['parenthesised', '(withStoreLock)(() => 1);'],
+        ['value alias', 'const lock = withStoreLock;\nlock(() => 1);'],
+        ['import alias', "import { withStoreLock as lock } from './s.mjs';"],
+        ['computed member', "store['withStoreLock'](() => 1);"],
+    ])('W2e: %s cannot smuggle the blocking lock past the ratchet', (_label, snippet) => {
+        // Counting only `withStoreLock(` left every one of these passing. They
+        // are rejected rather than counted: a manifest cannot ratchet a name it
+        // cannot predict.
+        const result = evaluate({
+            'web-ai/a.mjs': `readFileSync(p);\n${snippet}`,
+        }, oneCallBaseline);
+        expect(result.ok).toBe(false);
+        expect(result.detail).toMatch(/store-lock/);
+    });
+
     it('W3: moving a call between files fails even though the total is unchanged', () => {
         const baseline = {
             files: {

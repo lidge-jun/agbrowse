@@ -45,6 +45,33 @@ const SYNC_CALL = /\b[A-Za-z_$][A-Za-z0-9_$]*Sync\b/g;
  * a call-shaped pattern.
  */
 const OTHER_BLOCKING = /\bAtomics\s*(?:\.\s*wait\b|\[\s*['"`]wait['"`]\s*\])/g;
+/**
+ * The synchronous session-store lock, counted separately.
+ *
+ * It contains no `Sync` primitive of its own at the call site, so the patterns
+ * above see nothing when a new caller takes it — the case this file's own notes
+ * list as uncovered ("new code calling an EXISTING blocking wrapper"). It waits
+ * with `Atomics.wait`, and a contended acquire measured 6,476ms during which a
+ * 50ms timer never fired, so every new caller is another place a deadline stops
+ * being counted. `withStoreLockAsync` is the replacement and is not matched.
+ */
+const BLOCKING_STORE_LOCK = /\bwithStoreLock\s*\(/g;
+/**
+ * Any other REFERENCE to the blocking lock: `withStoreLock?.(…)`,
+ * `(withStoreLock)(…)`, `const lock = withStoreLock`, and
+ * `import { withStoreLock as lock }` all run and all dodge the call-shaped
+ * pattern above. Counting the reference and subtracting direct calls leaves
+ * exactly the indirect uses, which are rejected outright rather than counted —
+ * an alias cannot be ratcheted, because the manifest cannot say which name it
+ * will wear next.
+ *
+ * `withStoreLockAsync` shares the prefix, so the boundary is explicit.
+ */
+const ANY_STORE_LOCK_REF = /\bwithStoreLock\b(?!Async)/g;
+/** `store['withStoreLock'](…)` — a literal computed member dodges both forms. */
+const COMPUTED_STORE_LOCK = /\[\s*['"`]withStoreLock['"`]\s*\]/g;
+/** The one legitimate non-call reference: `export function withStoreLock(`. */
+const STORE_LOCK_DECLARATION = /\bfunction\s+withStoreLock\b(?!Async)/;
 /** A CDP command: `.send('Domain.method'` with a literal. */
 const CDP_LITERAL_SEND = /\.send\(\s*['"`][A-Z][A-Za-z]*\.[A-Za-z]/g;
 /**
@@ -119,11 +146,22 @@ export function scanSource(source) {
     if (countMatches(source, COMPUTED_SEND) > 0) evasions.push('computed-send');
     if (countMatches(source, BOUND_SEND) > 0) evasions.push('bound-send');
     if (countMatches(source, SYNC_VALUE_ALIAS) > 0) evasions.push('sync-value-alias');
+    const storeLockCalls = countMatches(source, BLOCKING_STORE_LOCK);
+    if (countMatches(source, COMPUTED_STORE_LOCK) > 0) evasions.push('computed-store-lock');
+    // Every reference that is not a direct call is an alias or an indirect call
+    // shape, both of which are rejected outright: a manifest cannot ratchet a
+    // name it cannot predict. The file that DECLARES the lock carries one such
+    // reference by definition, so it is allowed exactly that one.
+    const declaresLock = STORE_LOCK_DECLARATION.test(source);
+    STORE_LOCK_DECLARATION.lastIndex = 0;
+    const indirectRefs = countMatches(source, ANY_STORE_LOCK_REF) - storeLockCalls - (declaresLock ? 1 : 0);
+    if (indirectRefs > 0) evasions.push('store-lock-alias');
     for (const alias of findSyncBindingAliases(source)) evasions.push(`sync-binding-alias:${alias}`);
     return {
         sync: countMatches(source, SYNC_CALL) + countMatches(source, OTHER_BLOCKING),
         cdp: literalSend,
         nonLiteralSend: countMatches(source, ANY_SEND) - literalSend,
+        blockingStoreLock: storeLockCalls,
         evasions,
     };
 }
@@ -153,7 +191,7 @@ export function evaluateBlockingIoGate({ sources, baseline }) {
         totalCdp += found.cdp;
         // A file absent from the manifest has a limit of zero, so a brand-new
         // file cannot smuggle blocking IO in.
-        const limit = limits[file] || { sync: 0, cdp: 0, nonLiteralSend: 0 };
+        const limit = limits[file] || { sync: 0, cdp: 0, nonLiteralSend: 0, blockingStoreLock: 0 };
 
         for (const evasion of found.evasions) {
             failures.push(`${file}: ${evasion} cannot be counted; use a direct call or keep it out of the runtime`);
@@ -173,6 +211,13 @@ export function evaluateBlockingIoGate({ sources, baseline }) {
         // renamed to `ws` and slip through.
         if (found.nonLiteralSend > (limit.nonLiteralSend || 0)) {
             failures.push(`${file}: non-literal .send() ${found.nonLiteralSend} > allowed ${limit.nonLiteralSend || 0}`);
+        }
+        // Ratcheted per file so a new caller of the blocking lock has to be a
+        // deliberate, reviewed manifest change rather than an accident.
+        if (found.blockingStoreLock > (limit.blockingStoreLock || 0)) {
+            failures.push(`${file}: blocking withStoreLock ${found.blockingStoreLock} > allowed ${limit.blockingStoreLock || 0}; use withStoreLockAsync`);
+        } else if (found.blockingStoreLock < (limit.blockingStoreLock || 0)) {
+            reductions.push(`${file} withStoreLock ${limit.blockingStoreLock}→${found.blockingStoreLock}`);
         }
     }
 
@@ -256,8 +301,13 @@ export function buildBaseline(sources) {
     let cdp = 0;
     for (const [file, source] of [...sources].sort(([a], [b]) => a.localeCompare(b))) {
         const found = scanSource(source);
-        if (!found.sync && !found.cdp && !found.nonLiteralSend) continue;
-        files[file] = { sync: found.sync, cdp: found.cdp, nonLiteralSend: found.nonLiteralSend };
+        if (!found.sync && !found.cdp && !found.nonLiteralSend && !found.blockingStoreLock) continue;
+        files[file] = {
+            sync: found.sync,
+            cdp: found.cdp,
+            nonLiteralSend: found.nonLiteralSend,
+            ...(found.blockingStoreLock ? { blockingStoreLock: found.blockingStoreLock } : {}),
+        };
         sync += found.sync;
         cdp += found.cdp;
     }

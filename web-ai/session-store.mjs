@@ -118,6 +118,22 @@ function readSessionStoreLocked() {
 }
 
 /**
+ * Read one session without stopping the event loop.
+ *
+ * `getSession` goes through the blocking lock, so calling it inside a poll that
+ * is holding a deadline suspends the timer enforcing that deadline — the same
+ * defect as the write path, reached by a read.
+ *
+ * @param {string} sessionId
+ * @returns {Promise<WebAiSession|null>}
+ */
+export async function readSessionAsync(sessionId) {
+    if (!sessionId) return null;
+    const store = await withStoreLockAsync(() => readSessionStore());
+    return store.sessions.find((s) => s.sessionId === sessionId) || null;
+}
+
+/**
  * @param {WebAiSessionStore} store
  */
 export function writeSessionStore(store) {
@@ -159,6 +175,57 @@ export function withStoreLock(fn) {
                 continue;
             }
             sleepBlockingMs(LOCK_RETRY_MS);
+        }
+    }
+    throw new Error(`web-ai session store: failed to acquire lock at ${path} after ${LOCK_RETRY_LIMIT} attempts`);
+}
+
+/**
+ * The same lock, awaited instead of blocked on.
+ *
+ * `withStoreLock` waits with `Atomics.wait`, which stops the event loop: a
+ * contended acquire measured 6,476ms during which a 50ms timer never fired. Any
+ * deadline a caller is holding is simply not counted while that happens, which
+ * is why the hard poll deadline cannot bound work that goes through the
+ * synchronous lock.
+ *
+ * The protocol is identical — same path, same staleness rule, same retry
+ * budget — so the two can be held by different processes at the same time
+ * without either seeing a lock the other does not.
+ *
+ * @template T
+ * @param {() => T|Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export async function withStoreLockAsync(fn) {
+    const path = lockPath();
+    mkdirSync(dirname(path), { recursive: true });
+    let attempts = 0;
+    while (attempts < LOCK_RETRY_LIMIT) {
+        let fd;
+        try {
+            fd = openSync(path, 'wx');
+        } catch (err) {
+            const e = /** @type {NodeJS.ErrnoException} */ (err);
+            if (e?.code !== 'EEXIST') throw err;
+            attempts += 1;
+            if (isStoreLockStale(path)) {
+                try { unlinkSync(path); } catch { /* races resolve naturally */ }
+                continue;
+            }
+            await delayMs(LOCK_RETRY_MS);
+            continue;
+        }
+        // Acquired. The release is in `finally` so an awaited `fn` that throws
+        // still frees the lock for the next holder.
+        try {
+            writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+        } catch { /* best-effort metadata write */ }
+        try {
+            return await fn();
+        } finally {
+            try { closeSync(fd); } catch { /* already closed */ }
+            try { unlinkSync(path); } catch { /* already gone */ }
         }
     }
     throw new Error(`web-ai session store: failed to acquire lock at ${path} after ${LOCK_RETRY_LIMIT} attempts`);
@@ -378,6 +445,46 @@ export function patchSession(sessionId, patch) {
  */
 export function appendSessionArtifacts(sessionId, descriptors) {
     return withStoreLock(() => {
+        const store = readSessionStore();
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+        if (idx < 0) return null;
+        const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
+        store.sessions[idx] = {
+            ...store.sessions[idx],
+            artifacts: [...current, ...descriptors],
+            updatedAt: new Date().toISOString(),
+        };
+        writeSessionStore(store);
+        return store.sessions[idx];
+    });
+}
+
+/**
+ * Returned when a caller's deadline passed while the lock was being waited for.
+ *
+ * Distinct from `null` (no such session), because the two need different
+ * handling: one is a missing record, the other is a write that must not happen.
+ */
+export const DEADLINE_PASSED = Symbol('store-write-deadline-passed');
+
+/**
+ * The awaited form of {@link appendSessionArtifacts}.
+ *
+ * The artifact commit runs inside a poll that promised the caller a deadline.
+ * Taking the blocking lock there stops the event loop, so the deadline timer
+ * does not run and the bound the caller was given quietly stops applying.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @param {() => boolean} [stillActive] re-checked once the lock is held
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function appendSessionArtifactsAsync(sessionId, descriptors, stillActive) {
+    return withStoreLockAsync(() => {
+        // Checked here rather than before the call: the wait for the lock is
+        // exactly the gap where a deadline can pass, and a check taken before
+        // it says nothing about this moment.
+        if (stillActive?.() === false) return DEADLINE_PASSED;
         const store = readSessionStore();
         const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
         if (idx < 0) return null;

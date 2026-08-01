@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } 
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
-import { appendSessionArtifacts } from './session-store.mjs';
+import { appendSessionArtifactsAsync, DEADLINE_PASSED } from './session-store.mjs';
 
 /**
  * Resolved per call, not at import. A frozen constant took whatever
@@ -385,9 +385,10 @@ function removePublished(paths) {
  *
  * @param {string} sessionId
  * @param {Array<{ stagedPath: string, descriptor: ArtifactDescriptor }>} staged
- * @returns {{ ok: true, files: ArtifactDescriptor[] } | { ok: false, reason: string, rollbackFailed?: string }}
+ * @param {{ stillActive?: () => boolean }} [options] re-checked after the lock wait
+ * @returns {Promise<{ ok: true, files: ArtifactDescriptor[] } | { ok: false, reason: string, rollbackFailed?: string }>}
  */
-export function commitStagedArtifacts(sessionId, staged) {
+export async function commitStagedArtifacts(sessionId, staged, { stillActive } = {}) {
     const dir = resolveArtifactsDir(sessionId);
     /** @type {ArtifactDescriptor[]} */
     const published = [];
@@ -412,7 +413,12 @@ export function commitStagedArtifacts(sessionId, staged) {
         // Appended inside the store lock. Reading `artifacts` here and patching
         // `[...previous, ...published]` would let a concurrent commit that read
         // the same snapshot erase these descriptors when it writes second.
-        const updated = appendSessionArtifacts(sessionId, published);
+        // Re-checked INSIDE the lock, after the wait. Making the wait awaitable
+        // introduced this window: the caller's deadline can pass while this
+        // queues for the lock, and the check before the commit no longer says
+        // anything about the moment the write actually happens.
+        const updated = await appendSessionArtifactsAsync(sessionId, published, stillActive);
+        if (updated === DEADLINE_PASSED) return undo('deadline-exceeded');
         if (!updated) return undo('session-update-failed');
     } catch (err) {
         // `publishStaged` throws EROLLBACK when it linked a file and then could

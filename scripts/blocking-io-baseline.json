@@ -151,9 +151,10 @@
             "nonLiteralSend": 0
         },
         "web-ai/session-store.mjs": {
-            "sync": 33,
+            "sync": 40,
             "cdp": 0,
-            "nonLiteralSend": 0
+            "nonLiteralSend": 0,
+            "blockingStoreLock": 6
         },
         "web-ai/session.mjs": {
             "sync": 8,
@@ -172,7 +173,7 @@
         }
     },
     "totals": {
-        "sync": 298,
+        "sync": 305,
         "cdp": 54
     }
 }

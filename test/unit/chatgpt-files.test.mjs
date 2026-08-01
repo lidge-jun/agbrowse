@@ -621,7 +621,7 @@ describe('saveAssistantDownloadableFiles', () => {
 
             vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
             const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
-            const spy = vi.spyOn(storeModule, 'appendSessionArtifacts').mockImplementation(() => {
+            const spy = vi.spyOn(storeModule, 'appendSessionArtifactsAsync').mockImplementation(() => {
                 throw new Error('store lock unavailable');
             });
 
@@ -661,7 +661,7 @@ describe('saveAssistantDownloadableFiles', () => {
             const staged = stageFileArtifact(session.sessionId, {
                 filename: 'race.txt', buffer: Buffer.from('LOSER'), mimeType: 'text/plain', txId: 'tx', slot: 0,
             });
-            const result = commitStagedArtifacts(session.sessionId, [staged]);
+            const result = await commitStagedArtifacts(session.sessionId, [staged]);
 
             expect(result.ok).toBe(true);
             expect(result.files[0].path).not.toBe('race.txt');
@@ -697,7 +697,7 @@ describe('saveAssistantDownloadableFiles', () => {
                 sessionId: id, vendor: 'chatgpt', artifacts: [],
             }));
             try {
-                expect(commitStagedArtifacts(session.sessionId, [staged]).ok).toBe(true);
+                expect((await commitStagedArtifacts(session.sessionId, [staged])).ok).toBe(true);
             } finally {
                 spy.mockRestore();
             }
@@ -731,7 +731,7 @@ describe('saveAssistantDownloadableFiles', () => {
                 filename: 'orphan.txt', buffer: Buffer.from('X'), mimeType: 'text/plain', txId: 'tx', slot: 1,
             });
             removeSync(broken.stagedPath, { force: true });
-            const result = commitStagedArtifacts(session.sessionId, [good, broken]);
+            const result = await commitStagedArtifacts(session.sessionId, [good, broken]);
 
             expect(result.ok).toBe(false);
             // The first entry was published and then rolled back, so nothing of
@@ -770,7 +770,7 @@ describe('saveAssistantDownloadableFiles', () => {
 
             let result;
             try {
-                result = commitStagedArtifacts(session.sessionId, [{
+                result = await commitStagedArtifacts(session.sessionId, [{
                     stagedPath,
                     descriptor: {
                         kind: 'file', label: 'locked.txt', path: 'locked.txt',

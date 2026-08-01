@@ -51,7 +51,7 @@ describe('a rollback that cannot finish is reported (#88)', () => {
         const staged = stageFileArtifact(session.sessionId, {
             filename: 'stuck.txt', buffer: Buffer.from('BODY'), mimeType: 'text/plain', txId: 'tx', slot: 0,
         });
-        const result = commitStagedArtifacts(session.sessionId, [staged]);
+        const result = await commitStagedArtifacts(session.sessionId, [staged]);
 
         expect(result.ok).toBe(false);
         // The name has to appear: it is the only way anyone learns which file
@@ -106,5 +106,31 @@ describe('a rollback that cannot finish is reported (#88)', () => {
         // The original cause is kept behind it, not replaced by it.
         expect(out.errors.some(e => e.reason !== 'rollback-failed')).toBe(true);
         vi.unstubAllGlobals();
+    });
+
+    it('R3: a deadline that passes while waiting for the lock stops the write', async () => {
+        // Making the lock awaitable created this window. The check before the
+        // commit no longer says anything about the moment the write happens,
+        // because the wait for the lock sits between them.
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+            await import('../../web-ai/session-artifacts.mjs');
+        const { existsSync, readdirSync } = await import('node:fs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+        const staged = stageFileArtifact(session.sessionId, {
+            filename: 'late.txt', buffer: Buffer.from('LATE'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+        });
+        // Expired by the time the lock is held, which is where the re-check is.
+        const result = await commitStagedArtifacts(session.sessionId, [staged], {
+            stillActive: () => false,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('deadline-exceeded');
+        expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+        const dir = resolveArtifactsDir(session.sessionId);
+        const left = existsSync(dir) ? readdirSync(dir).filter(f => !f.startsWith('.')) : [];
+        expect(left).toEqual([]);
     });
 });
