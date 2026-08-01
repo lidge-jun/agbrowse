@@ -103,7 +103,8 @@ Z2를 처음에 `skipFinalize: true`로 썼는데 그 플래그가 수집 자체
 WP13의 `no-new-blocking-io` ratchet이 이 변경을 잡았다. 설계대로 작동한 것이다.
 
 staging·commit·rollback·hash 검증은 전부 동기 FS다. baseline을
-`session-artifacts.mjs` 11 → 22, 총계 286 → 297로 올렸다.
+`session-artifacts.mjs` 11 → 23, 총계 286 → 298로 올렸다(2라운드의 rollback
+`rmSync` 한 건이 추가됐다).
 
 **"기능에 내재적"이라고 쓰면 과장이다.** 이 부채는 기능이 아니라 **동기 구현**에
 내재한다. `fs/promises`로 옮기면 줄어든다. 중복 cleanup 루프를 헬퍼로 합친 것도
@@ -169,6 +170,41 @@ descriptor의 hash와 디스크 내용이 어긋난다. `link`는 목적지가 �
 
 같은 종류의 실수를 이 세션에서 세 번째 했다. WP16의 fencing 오판,
 `skipFinalize`로 검사 대상을 우회한 Z2, 그리고 이것이다.
+
+### 3~4라운드에서 더 나온 것
+
+| # | 결함 | 고친 방식 |
+| --- | --- | --- |
+| 10 | 동시 commit이 서로의 descriptor를 지움 | `appendSessionArtifacts` — store lock **안에서** 읽고 append |
+| 11 | link 성공 후 staging 삭제 실패 시 orphan | link을 되돌리고, 그것도 실패하면 `EROLLBACK` |
+| 12 | `EROLLBACK`이 `rollbackFailed`로 전달되지 않음 | catch에서 해석해 `undo`에 넘김 |
+
+10번이 조용한 종류였다. `getSession` → `updateSession({artifacts: [...prior, ...new]})`는
+lock이 **쓰기만** 보호한다. 두 실행이 같은 스냅샷을 읽으면 나중 쓰기가 앞의
+descriptor를 지운다. 파일은 디스크에 남는데 `sessions show`에서 사라진다 —
+strict의 증명이 "파일 write + 세션 index"인데 후자가 없어진다.
+
+### 테스트에서 두 번 더 틀렸다
+
+`F13`을 처음엔 commit 두 번을 순차로 부르는 형태로 썼다. mutation에서 통과했다 —
+동기 함수는 한 프로세스에서 인터리브되지 않는다. stale 스냅샷을 직접 주입하는
+형태로 바꾸고서야 RED가 됐다.
+
+`F14`도 "orphan이 남았으면 rollbackFailed가 있어야 한다"는 조건부 단언이었다.
+조건이 성립하지 않으면 아무것도 검사하지 않는다. mutation에서 통과했다.
+
+이 세션에서 같은 실수를 다섯 번 했다. **GREEN을 근거로 쓰지 않는다는 규칙이
+매번 필요했다.**
+
+### F15의 범위
+
+`EROLLBACK`은 link 되돌리기까지 실패해야 발생한다. 그러려면 목적지 디렉터리가
+쓰기 불가여야 하는데 그러면 `link` 자체가 안 된다. **실제 파일시스템으로는
+재현할 수 없다.**
+
+그래서 F15는 도달 가능한 절반만 검사한다 — staging 삭제가 실패했을 때 link이
+되돌려지는지. 나머지 절반은 코드 검토로만 확인했다. 문서에 이렇게 적는 이유는
+검사하지 않은 것을 검사했다고 적지 않기 위해서다.
 
 ## 닫은 것과 닫지 못한 것
 

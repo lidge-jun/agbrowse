@@ -741,5 +741,50 @@ describe('saveAssistantDownloadableFiles', () => {
             expect(existsSync(join(dir, 'orphan.txt'))).toBe(false);
             write(join(dir, '.keep'), '');
         });
+
+        it('F15: a link whose staging entry cannot be removed is undone', async () => {
+            // The first half of the orphan path: `link` succeeds, removing the
+            // staging entry fails. The link has to come back off disk, because
+            // the caller never learns its name and no later rollback can reach
+            // it. Staging lives in a read-only directory here, which permits
+            // `link` and refuses `unlink`.
+            //
+            // The far half — that removal ALSO failing, which is what raises
+            // EROLLBACK — needs the destination directory to be read-only too,
+            // and that would block the `link` itself. It is covered by
+            // inspection rather than by this test.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { chmodSync, mkdirSync, mkdtempSync, existsSync, writeFileSync: write, readdirSync } =
+                await import('node:fs');
+            const { tmpdir } = await import('node:os');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            const lockedDir = mkdtempSync(join(tmpdir(), 'agbrowse-locked-'));
+            const stagedPath = join(lockedDir, 'staged.bin');
+            write(stagedPath, 'BODY');
+            chmodSync(lockedDir, 0o500);
+
+            let result;
+            try {
+                result = commitStagedArtifacts(session.sessionId, [{
+                    stagedPath,
+                    descriptor: {
+                        kind: 'file', label: 'locked.txt', path: 'locked.txt',
+                        sha256: 'x', validation: { type: 'generic', ok: true },
+                    },
+                }]);
+            } finally {
+                chmodSync(lockedDir, 0o700);
+            }
+
+            expect(result.ok).toBe(false);
+            // The published link was undone, so the batch left nothing behind.
+            expect(readdirSync(dir).filter(f => !f.startsWith('.'))).toEqual([]);
+        });
     });
 });
