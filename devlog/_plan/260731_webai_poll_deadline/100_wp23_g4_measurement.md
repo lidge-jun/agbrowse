@@ -44,7 +44,7 @@ reload와 무관한 상수를 재고 있었다는 뜻이다. WP23에서 대리 �
 **실제 API를 쓰되 reload와 인과적으로 연결하지 않은 fixture**를 썼다. 형태만
 바뀌고 같은 실수를 반복했다.
 
-### WP24 재측정 — 2·3·7·8 통과
+### WP24 재측정 — 3만 통과, 2·7·8은 미충족
 
 **2번 — 미충족.** 실제 store API를 쓴 것은 맞지만 **fixture가 브라우저와 연결돼
 있지 않았다.** 브라우저는 로컬 `/c/abc123`을 reload하는데 store에는 합성
@@ -146,6 +146,11 @@ fresh loaderId  → ACCEPTED,                  네트워크 request 증가 1
 
 거부되면서 navigation도 일으키지 않는다. 이게 fail-closed다. **primitive는
 로컬에서 측정 가능했고, 내 첫 하네스가 그 시험을 하지 않았을 뿐이다.**
+
+감사가 독립적으로 3회 재현했다 — stale은 protocol error·request delta 0·loader
+불변, fresh는 accepted·request delta 1·loader 변경. CDP 타입 정의도
+`loaderId` 불일치 시 racing navigation을 막으려 error를 던진다고 명시한다
+(`playwright-core/types/protocol.d.ts`). 계약 자체가 그렇게 설계돼 있다.
 
 ## 하네스가 세 번 틀렸다
 
@@ -267,15 +272,19 @@ WP24는 그걸 고친다며 **실제 API를 불렀지만 fixture를 reload와 �
 
 ## 하네스
 
-WP23: `agb-g4-probe.spike.mjs`, `agb-g4b`, `agb-g4c`, `agb-g4d`.
-WP24: `agb-g4e`(조건 2·4·7·8 — **결과 무효**), `agb-g4f`(조건 3, 유효),
-`agb-g4g`(취소 primitive, 유효), `agb-g4e-ablation`(reload 제거 대조).
+하네스마다 유효 범위가 다르다. "전부 무효"로 뭉뚱그리면 조건 5의 근거까지
+버리게 된다.
+
+| 하네스 | 유효 범위 |
+| --- | --- |
+| `agb-g4`, `g4b`, `g4c` | **무효** — 대리 지표 |
+| `agb-g4d` | **유효** — 조건 5(stale/fresh loaderId 대조) |
+| `agb-g4e` | 2·8 **무효**, 4의 부정 증거(race 후에도 navigation 착지)는 **유효**, 7은 CDP 요청 하나의 drain만 관측해 조건 충족에는 불충분 |
+| `agb-g4f` | **유효** — 조건 3 |
+| `agb-g4g` | **유효** — 일반 navigation 취소 후보 증거 |
+| `agb-g4e-ablation` | reload 제거 대조 |
 
 커밋하지 않는다 — 일회성 측정 도구이고, 결과는 위 표가 전부다.
-
-WP23의 것들과 `agb-g4e`는 재사용하지 마라. 전자는 대리 지표를, 후자는 reload와
-연결되지 않은 fixture를 재는 형태라 그대로 돌리면 같은 오판이 나온다. `g4f`와
-`g4g`는 유효하다.
 
 새 하네스를 쓸 때는 **먼저 ablation부터** 돌려라 — 측정 대상 동작을 지웠을 때도
 같은 결과가 나오면 그 하네스는 아무것도 재지 않는다.
