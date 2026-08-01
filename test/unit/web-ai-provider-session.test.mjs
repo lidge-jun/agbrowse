@@ -301,7 +301,11 @@ describe('web-ai provider integration (source-string contracts)', () => {
 
     it('all three providers resolve session on poll via input.session > findActiveSession', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
-            expect(src).toMatch(/input\.session\s*\?\s*getSession\(input\.session\)/);
+            // Either read is fine; what matters is the precedence. Gemini and
+            // Grok now read ASYNCHRONOUSLY because the blocking `getSession`
+            // waits with `Atomics.wait` and stops the event loop, which put
+            // their poll deadline outside its own bound under store contention.
+            expect(src).toMatch(/input\.session\s*\n?\s*\?\s*(await readSessionAsync\(input\.session\)|getSession\(input\.session\))/);
             expect(src).toMatch(/findActiveSession\(\{[\s\S]*?vendor[\s\S]*?targetId[\s\S]*?conversationUrl/);
             expect(src).toMatch(/session && sessionToBaseline\(session\)/);
         }

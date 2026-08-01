@@ -418,20 +418,35 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
     // bounding. An expired resume says so with its own warning instead of
     // pretending it looked.
     return withPollDeadline(
-        () => runResumeDeepResearch(page, deps, { session, timeoutMs, stableMs }),
+        (hardDeadline, token) => runResumeDeepResearch(page, deps, { session, timeoutMs, stableMs }, token),
         {
             timeoutMs,
-            onExpired: () => ({
-                ok: false,
-                sessionId: session.sessionId,
-                conversationUrl: typeof page?.url === 'function' ? page.url() : null,
-                reportText: null,
-                sources: [],
-                warnings: ['deep-research-resumed', 'deep-research-resume-timeout', 'deep-research-capture-skipped-past-deadline'],
-                status: 'timeout',
-            }),
+            onExpired: () => buildResumeTimeoutEnvelope(session, page),
         },
     );
+}
+
+/**
+ * The envelope for a resume that ran out of time, from what is already known.
+ *
+ * Deliberately does NOT persist and does NOT capture: `markSessionTimeout`
+ * takes the synchronous store lock — whose wait stops
+ * the event loop — and `extractResearchReport` is another browser probe, so
+ * either would re-enter the stall this is bounding.
+ *
+ * @param {any} session
+ * @param {any} page
+ */
+function buildResumeTimeoutEnvelope(session, page) {
+    return {
+        ok: false,
+        sessionId: session?.sessionId,
+        conversationUrl: (typeof page?.url === 'function' ? page.url() : null) || session?.conversationUrl || null,
+        reportText: null,
+        sources: [],
+        warnings: ['deep-research-resumed', 'deep-research-resume-timeout', 'deep-research-capture-skipped-past-deadline'],
+        status: 'timeout',
+    };
 }
 
 /**
@@ -440,7 +455,11 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
  * @param {{ session: any, timeoutMs?: number, stableMs?: number }} opts
  * @returns {Promise<DeepResearchResult>}
  */
-async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }) {
+async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }, runToken = null) {
+    // False once the caller has been answered. A stalled probe cannot be
+    // cancelled, so this run may still finish after its resume returned
+    // `timeout`; it must not then write a report nobody is waiting for.
+    const stillActive = () => !(runToken?.expired === true);
     const warnings = ['deep-research-resumed'];
     const deadline = Date.now() + timeoutMs;
     let stableText = '';
@@ -472,6 +491,7 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
             continue;
         }
         if (report.from === 'frame') warnings.push('report-extracted-from-iframe');
+        if (!stillActive()) return buildResumeTimeoutEnvelope(session, page);
         updateSession(session.sessionId, { status: 'complete', answer: report.text, conversationUrl: page.url() });
         const saved = trySaveReport(session.sessionId, { text: report.text, sources: report.sources });
         if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
@@ -489,6 +509,7 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
 
     const finalReport = await extractResearchReport(page, deps);
     const finalText = finalReport?.completed ? finalReport.text : null;
+    if (!stillActive()) return buildResumeTimeoutEnvelope(session, page);
     updateSession(session.sessionId, { status: 'timeout', answer: finalText });
     if (finalText) {
         const saved = trySaveReport(session.sessionId, { text: finalText, sources: finalReport.sources });

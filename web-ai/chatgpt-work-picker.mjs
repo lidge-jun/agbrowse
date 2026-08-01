@@ -892,17 +892,22 @@ export async function pollWorkSession(deps, input = {}) {
     // `--timeout` outright — measured still-pending at 152ms against a 50ms
     // budget. A stalled probe cannot be cancelled; the race is what stops the
     // CALLER waiting on it.
-    const { getSession: getSessionForBudget, resolvePollTimeoutSec: resolveBudgetSec } = await import('./session.mjs');
+    const { resolvePollTimeoutSec: resolveBudgetSec } = await import('./session.mjs');
     const startedAt = Date.now();
     const monotonicStart = monotonicNowMs();
     const wrapperVendor = input.vendor || 'chatgpt';
     const wrapperSessionId = input.session || input.sessionId;
-    const wrapperSession = wrapperSessionId ? getSessionForBudget(wrapperSessionId) : null;
-    const wrapperTimeoutMs = resolveBudgetSec(input, wrapperSession, wrapperVendor) * 1000;
-    /** @type {{ page: any }} */
-    const ctx = { page: null };
+    // No store read before the race is armed. The blocking `getSession` waits
+    // in a way that stops the event loop; even the async read costs
+    // real wall time, and a contended store made the poll seconds late on a 1s
+    // budget — the same unbounded failure the race exists to prevent. The
+    // budget therefore comes from the caller's own timeout when given, and the
+    // stored deadline is consulted inside the run.
+    const wrapperTimeoutMs = resolveBudgetSec(input, null, wrapperVendor) * 1000;
+    /** @type {{ page: any, session: any }} */
+    const ctx = { page: null, session: null };
     return withPollDeadline(
-        () => runPollWorkSession(deps, input, ctx),
+        (hardDeadline, token) => runPollWorkSession(deps, input, ctx, token),
         {
             startedAt,
             monotonicStartMs: monotonicStart,
@@ -922,14 +927,14 @@ export async function pollWorkSession(deps, input = {}) {
  * @param {string|undefined} sessionId
  * @param {{ page: any }} ctx
  */
-function buildWorkTimeoutResult(vendor, sessionId, { page }) {
+function buildWorkTimeoutResult(vendor, sessionId, { page, session }) {
     return {
         ok: false,
         status: 'timeout',
         vendor,
         sessionId: sessionId || null,
         answerText: null,
-        conversationUrl: typeof page?.url === 'function' ? page.url() : null,
+        conversationUrl: typeof page?.url === 'function' ? page.url() : (session?.conversationUrl || null),
         surface: 'work',
         responseContract: 'work',
         warnings: ['work-poll-timeout'],
@@ -942,12 +947,20 @@ function buildWorkTimeoutResult(vendor, sessionId, { page }) {
  * @param {{ page: any }} ctx
  * @returns {Promise<Record<string, unknown>>}
  */
-async function runPollWorkSession(deps, input = {}, ctx = { page: null }) {
+async function runPollWorkSession(deps, input = {}, ctx = { page: null, session: null }, runToken = null) {
+    // False once the caller has been answered — see gemini-live.mjs.
+    const stillActive = () => !(runToken?.expired === true);
     const { getSession, updateSession, resolvePollTimeoutSec } = await import('./session.mjs');
 
     const vendor = input.vendor || 'chatgpt';
     const sessionId = input.session || input.sessionId;
-    const session = sessionId ? getSession(sessionId) : null;
+    // Read ASYNCHRONOUSLY, inside the race. The blocking `getSession` waits
+    // in a way that stops the event loop: the deadline timer
+    // cannot fire while it waits, so a contended store defeated the bound no
+    // matter how the race was set up.
+    const { readSessionAsync } = await import('./session-store.mjs');
+    const session = sessionId ? await readSessionAsync(sessionId).catch(() => null) : null;
+    ctx.session = session;
 
     // Not floored at a whole second: this becomes a hard deadline below, and
     // rounding a sub-second remainder up is how a poll outlives the session it
@@ -993,7 +1006,9 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null }) {
         const state = await readWorkTaskState(page);
 
         if (state.status === 'unknown') {
-            if (sessionId) {
+            // Gated: a run whose caller already got `timeout` must not start a
+            // new session write when its probe finally settles.
+            if (sessionId && stillActive()) {
                 updateSession(sessionId, {
                     status: 'error',
                     lastError: {
@@ -1015,7 +1030,7 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null }) {
         if (state.status === 'complete') {
             const taskUrl = typeof page.url === 'function' ? page.url() : null;
             const taskId = extractTaskId(taskUrl);
-            if (sessionId) {
+            if (sessionId && stillActive()) {
                 updateSession(sessionId, {
                     status: 'complete',
                     answer: state.answerText,
@@ -1058,7 +1073,7 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null }) {
     // Deadline reached — timeout
     if (sessionId) {
         const { markSessionTimeout } = await import('./session.mjs');
-        markSessionTimeout(sessionId, {
+        if (stillActive()) markSessionTimeout(sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'Work poll deadline reached' },
             warning: 'work-poll-timeout',
         });

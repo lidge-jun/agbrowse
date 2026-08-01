@@ -28,6 +28,7 @@ import { selectGeminiModel, geminiModelCapabilityProbe } from './gemini-model.mj
 import { preflightAttachment } from './chatgpt-attachments.mjs';
 import { resolveAttachmentUploadTimeoutMs } from './chatgpt-upload-surface.mjs';
 import { WebAiError } from './errors.mjs';
+import { readSessionAsync } from './session-store.mjs';
 import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
@@ -627,17 +628,23 @@ export async function geminiPollWebAi(deps, input = {}) {
     const started = Date.now();
     const monotonicStart = monotonicNowMs();
     const timeoutMs = Math.max(1, Number(input.timeout || input.thinkingTime || 1200) * 1000);
-    /** @type {{ page: any, session: any, baseline: any }} */
-    const ctx = { page: null, session: null, baseline: null };
+    /** @type {{ page: any, session: any, baseline: any, sessionId: string|null }} */
+    const ctx = { page: null, session: null, baseline: null, sessionId: null };
+    // The id is carried SYNCHRONOUSLY so an expiry can always name the session,
+    // even one that fires before the loop has read anything. The read itself
+    // happens inside the race: doing it here cost real wall time before the
+    // deadline timer was armed — a contended store made the whole poll 3s late
+    // on a 1s budget, which is the same unbounded failure wearing a new hat.
+    ctx.sessionId = input.session || null;
     return withPollDeadline(
-        () => runGeminiPollWebAi(deps, input, ctx),
+        (hardDeadline, token) => runGeminiPollWebAi(deps, input, ctx, token),
         {
             startedAt: started,
             monotonicStartMs: monotonicStart,
             timeoutMs,
             // The SAME builder the loop's own timeout uses, so the two paths
             // cannot drift apart in shape.
-            onExpired: () => buildGeminiTimeoutResult(ctx),
+            onExpired: () => buildGeminiTimeoutResult(ctx, { persist: false }),
         },
     );
 }
@@ -652,18 +659,23 @@ export async function geminiPollWebAi(deps, input = {}) {
  *
  * @param {{ page: any, session: any, baseline: any }} ctx
  */
-function buildGeminiTimeoutResult({ page, session, baseline }) {
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+function buildGeminiTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
+    // `persist` is false on the RACE path. `markSessionTimeout` takes the
+    // synchronous store lock, and that lock's wait
+    // stops the event loop. Calling it here would let the expiry envelope
+    // itself block for seconds, or throw "failed to acquire lock", which is
+    // the opposite of a bounded return.
+    const timedOutSession = (persist && session) ? markSessionTimeout(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
     }) : null;
     return {
         ok: false,
         vendor: 'gemini',
         status: 'timeout',
-        url: page?.url?.() || baseline?.url || '',
-        ...(session ? { sessionId: session.sessionId } : {}),
-        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
-        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
+        url: page?.url?.() || baseline?.url || session?.conversationUrl || '',
+        ...((session?.sessionId || sessionId) ? { sessionId: session?.sessionId || sessionId } : {}),
+        ...((timedOutSession?.deadlineAt || session?.deadlineAt) ? { deadlineAt: timedOutSession?.deadlineAt || session?.deadlineAt } : {}),
+        ...((timedOutSession?.conversationUrl || session?.conversationUrl) ? { conversationUrl: timedOutSession?.conversationUrl || session?.conversationUrl } : {}),
         baseline,
         warnings: [],
         usedFallbacks: [],
@@ -679,7 +691,11 @@ function buildGeminiTimeoutResult({ page, session, baseline }) {
  * @param {{ page: any, session: any, baseline: any }} ctx populated as the poll
  *   learns each piece, so an expiry can describe how far it got
  */
-async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null }) {
+async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null, sessionId: null }, runToken = null) {
+    // False once the caller has been answered. A stalled probe cannot be
+    // cancelled, so this run may still be mid-tick when its poll returns
+    // `timeout`; what it must not do is START a new write after that.
+    const stillActive = () => !(runToken?.expired === true);
     const page = await deps.getPage();
     ctx.page = page;
     if (!isGeminiUrl(page.url())) throw new WebAiError({
@@ -690,8 +706,12 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
         message: `active tab is not gemini.google.com (${page.url()})`,
         evidence: { url: page.url() },
     });
+    // Reuses the ASYNC read the wrapper already did. Calling blocking
+    // `getSession` here put the synchronous store lock back inside the race,
+    // and that lock stops the event loop — the deadline timer cannot fire while
+    // it waits, so a contended store defeated the bound entirely.
     const session = input.session
-        ? getSession(input.session)
+        ? await readSessionAsync(input.session).catch(() => null)
         : findActiveSession({
             vendor: 'gemini',
             targetId: await deps.getTargetId?.().catch(() => null) || null,
@@ -743,7 +763,7 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
                 }
             }
             if (session) {
-                await finalizeProviderTab(deps, { vendor: 'gemini', session: /** @type {any} */ (session), page, answerText, warnings });
+                await finalizeProviderTab(deps, { vendor: 'gemini', session: /** @type {any} */ (session), page, answerText, warnings, stillActive });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -762,7 +782,7 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
         await page.waitForTimeout(Math.max(1, Math.min(2_000, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) updateSession(session.sessionId, { status: 'crashed' });
+                if (session && stillActive()) updateSession(session.sessionId, { status: 'crashed' });
                 return {
                     ok: false, vendor: 'gemini', status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
