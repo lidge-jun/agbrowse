@@ -69,19 +69,6 @@ const BLOCKING_STORE_LOCK = /\bwithStoreLock\s*\(/g;
  */
 const ANY_STORE_LOCK_REF = /\bwithStoreLock\b(?!Async)/g;
 /**
- * Remove comments so prose about a rule is not counted as a use of it.
- *
- * Deliberately NOT applied to the primitive counters: those are reference
- * counts where a mention in a comment is a cheap false positive that costs a
- * rename, and tightening them is out of scope here.
- *
- * @param {string} source
- * @returns {string}
- */
-function stripComments(source) {
-    return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
-}
-/**
  * A computed call on a store-ish receiver: `store['withStoreLock'](…)`,
  * `store[name](…)`, `store['withStore' + 'Lock'](…)`.
  *
@@ -174,9 +161,13 @@ export function scanSource(source) {
     // No allowance for the declaration: `function withStoreLock(` already
     // matches the direct-call pattern, so subtracting it again gave the
     // declaring file a free alias.
-    // Prose is stripped first: a doc comment naming the lock is not a call, and
-    // counting it would make explaining the rule a violation of it.
-    const indirectRefs = countMatches(stripComments(source), ANY_STORE_LOCK_REF) - storeLockCalls;
+    // Counted on the RAW source, like every other rule here. Stripping comments
+    // first needs a real lexer: a regex cannot tell `"//"` in a string from the
+    // start of a comment, and one that guesses deleted live code on the same
+    // line — which let `const marker = "//"; const lock = withStoreLock` back
+    // through. A comment that names the lock is a false positive, and the fix
+    // for that is to write the name differently in prose.
+    const indirectRefs = countMatches(source, ANY_STORE_LOCK_REF) - storeLockCalls;
     if (indirectRefs > 0) evasions.push('store-lock-alias');
     for (const alias of findSyncBindingAliases(source)) evasions.push(`sync-binding-alias:${alias}`);
     return {

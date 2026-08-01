@@ -183,7 +183,7 @@ export function withStoreLock(fn) {
 /**
  * The same lock, awaited instead of blocked on.
  *
- * `withStoreLock` waits with `Atomics.wait`, which stops the event loop: a
+ * The blocking form waits with `Atomics.wait`, which stops the event loop: a
  * contended acquire measured 6,476ms during which a 50ms timer never fired. Any
  * deadline a caller is holding is simply not counted while that happens, which
  * is why the hard poll deadline cannot bound work that goes through the

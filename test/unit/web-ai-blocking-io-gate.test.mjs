@@ -79,6 +79,9 @@ describe('blocking IO ratchet gate (#88 G3)', () => {
         ['value alias', 'const lock = withStoreLock;\nlock(() => 1);'],
         ['import alias', "import { withStoreLock as lock } from './s.mjs';"],
         ['computed member', "store['withStoreLock'](() => 1);"],
+        ['computed variable', 'store[name](() => 1);'],
+        ['string with slashes', 'const marker = "//"; const lock = withStoreLock;\nlock(() => 1);'],
+        ['regex with slashes', 'const marker = /\\/\\//;\nwithStoreLock?.(() => 1);'],
     ])('W2e: %s cannot smuggle the blocking lock past the ratchet', (_label, snippet) => {
         // Counting only `withStoreLock(` left every one of these passing. They
         // are rejected rather than counted: a manifest cannot ratchet a name it
