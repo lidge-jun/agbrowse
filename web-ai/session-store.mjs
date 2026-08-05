@@ -97,19 +97,46 @@ function encodeRandom() {
     return out;
 }
 
+// Whether the LAST store read found a file it could not parse. A corrupt
+// store is collapsed to an empty one so callers keep working, but "empty
+// because broken" must stay distinguishable from "empty because new" — a
+// poll that trusts a borrowed baseline needs to know its session lookup
+// failed rather than genuinely missed.
+let lastReadCorrupt = false;
+
 /** @returns {WebAiSessionStore} */
 export function readSessionStore() {
     const path = storePath();
-    if (!existsSync(path)) return { version: SESSION_STORE_VERSION, sessions: [] };
-    try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
-        if (!parsed || typeof parsed !== 'object') return { version: SESSION_STORE_VERSION, sessions: [] };
-        if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
-        if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
-        return parsed;
-    } catch {
+    if (!existsSync(path)) {
+        lastReadCorrupt = false;
         return { version: SESSION_STORE_VERSION, sessions: [] };
     }
+    try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        if (!parsed || typeof parsed !== 'object') {
+            lastReadCorrupt = true;
+            return { version: SESSION_STORE_VERSION, sessions: [] };
+        }
+        if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
+        if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
+        lastReadCorrupt = false;
+        return parsed;
+    } catch {
+        lastReadCorrupt = true;
+        return { version: SESSION_STORE_VERSION, sessions: [] };
+    }
+}
+
+/**
+ * Whether the most recent {@link readSessionStore} hit a corrupt file.
+ *
+ * Read this immediately after the lookup whose trustworthiness is in
+ * question; a later successful read resets it.
+ *
+ * @returns {boolean}
+ */
+export function sessionStoreReadWasCorrupt() {
+    return lastReadCorrupt;
 }
 
 /** @returns {WebAiSessionStore} */

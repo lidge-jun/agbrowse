@@ -27,7 +27,7 @@ import {
     updateSession,
     updateSessionAsync,
 } from './session.mjs';
-import { mutateSessionAsync, readSessionAsync } from './session-store.mjs';
+import { mutateSessionAsync, readSessionAsync, sessionStoreReadWasCorrupt } from './session-store.mjs';
 import { WebAiError } from './errors.mjs';
 import { POLL_EXPIRED, monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
@@ -848,18 +848,21 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: url,
         });
+    // B23: a corrupt store collapses to an empty one, so a failed read looks
+    // exactly like "no session". The flag is read HERE, right after the lookup,
+    // so the observation is about this read and not some later one.
+    const sessionLookupCorrupt = sessionStoreReadWasCorrupt();
     // Observation ledger: records reads the poll could NOT make. Every result
     // envelope merges it, so a fail-closed sentinel never disappears silently.
     // Declared before baseline resolution because that step can already record.
     /** @type {Set<string>} */
     const observations = sharedObservations || new Set();
+    if (sessionLookupCorrupt && !session) observations.add('session-store-read-failed');
     let baseline = (session && sessionToBaseline(session)) || getBaseline(vendor, url);
     if (!baseline) {
         // Last resort: the newest baseline for this HOST, which may belong to a
-        // different conversation. `session-store.mjs:101` turns a corrupt store
-        // into an empty one, so a read failure looks exactly like "no session"
-        // and lands here. Telling the two apart needs the async store work in the
-        // sibling unit; until then, at least say the baseline was inferred.
+        // different conversation. A corrupt store lands here too, but it is now
+        // reported separately above — this warning is only about the borrow.
         baseline = getLatestBaseline(vendor, { sameHostUrl: url });
         if (baseline) observations.add('baseline-inferred-from-host');
     }

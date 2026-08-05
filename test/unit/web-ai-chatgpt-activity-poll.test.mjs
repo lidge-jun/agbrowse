@@ -925,6 +925,38 @@ describe('degraded reads are reported, not hidden', () => {
         expect(result.warnings || []).not.toContain('baseline-inferred-from-host');
     });
 
+    it('U10c: a corrupt session store is reported even when an exact baseline exists', async () => {
+        // B23 proper: the store file exists but cannot be parsed. The lookup
+        // collapses to "no session" and the exact legacy baseline still
+        // answers — but the failed read must be visible on the envelope,
+        // because the caller cannot otherwise tell a broken store from a
+        // genuinely fresh one.
+        const { writeFileSync: writeRaw } = await import('node:fs');
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        const corruptUrl = `https://chatgpt.com/c/corrupt-${Date.now()}`;
+        page.url = () => corruptUrl;
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: corruptUrl,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), '{ not json', 'utf8');
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings).toContain('session-store-read-failed');
+        // Repair the store so later tests see an empty-but-valid file.
+        writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), '{"version":1,"sessions":[]}\n', 'utf8');
+    });
+
     it('U4: skipped file capture is reported instead of passing silently', async () => {
         // Opportunistic capture, so the answer still completes — but a plain
         // success would hide that attachments were never collected.
