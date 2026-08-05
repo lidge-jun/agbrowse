@@ -117,7 +117,15 @@ export function readSessionStore() {
             lastReadCorrupt = true;
             return { version: SESSION_STORE_VERSION, sessions: [] };
         }
-        if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
+        // A present-but-non-array `sessions` is a broken store, not a fresh
+        // one: rows existed in some shape this reader cannot use. Only an
+        // absent field counts as legitimately empty.
+        if (!Array.isArray(parsed.sessions)) {
+            lastReadCorrupt = parsed.sessions !== undefined && parsed.sessions !== null;
+            parsed.sessions = [];
+            if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
+            return parsed;
+        }
         if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
         lastReadCorrupt = false;
         return parsed;

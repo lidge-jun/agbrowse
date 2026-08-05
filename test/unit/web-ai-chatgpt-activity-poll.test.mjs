@@ -957,6 +957,39 @@ describe('degraded reads are reported, not hidden', () => {
         writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), '{"version":1,"sessions":[]}\n', 'utf8');
     });
 
+    it('U10d: a schema-invalid store shape is reported; a valid empty store is not', async () => {
+        // Valid JSON, broken shape: rows existed in a form the reader cannot
+        // use. This must be reported like a parse failure — silently reading
+        // it as empty was the last silent collapse branch.
+        const { writeFileSync: writeRaw } = await import('node:fs');
+        const makeCase = async (storeBody) => {
+            const { page } = makePage({
+                activity: { strength: 'none', evidence: '' },
+                text: 'answer',
+                finished: true,
+            });
+            const caseUrl = `https://chatgpt.com/c/shape-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            page.url = () => caseUrl;
+            saveBaseline({
+                vendor: 'chatgpt',
+                url: caseUrl,
+                assistantCount: 0,
+                envelope: { vendor: 'chatgpt', prompt: 'q' },
+            });
+            writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), storeBody, 'utf8');
+            return pollWebAi(
+                { getPage: async () => page },
+                { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+            );
+        };
+
+        const broken = await makeCase('{"version":1,"sessions":"invalid"}\n');
+        expect(broken.warnings).toContain('session-store-read-failed');
+
+        const clean = await makeCase('{"version":1,"sessions":[]}\n');
+        expect(clean.warnings || []).not.toContain('session-store-read-failed');
+    });
+
     it('U4: skipped file capture is reported instead of passing silently', async () => {
         // Opportunistic capture, so the answer still completes — but a plain
         // success would hide that attachments were never collected.
