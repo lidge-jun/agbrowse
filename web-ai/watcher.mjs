@@ -12,9 +12,9 @@ import { pollWebAi } from './chatgpt.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
-import { getSession, resolvePollTimeoutSec, updateSession } from './session.mjs';
+import { DEADLINE_PASSED, getSession, resolvePollTimeoutSec, updateSession, updateSessionAsync } from './session.mjs';
 import { isRecoverableCdpDisconnect, probeCdpLiveness } from './cdp-liveness.mjs';
-import { isCdpDisconnectError, reattachSessionPage, withSessionPage, urlsCompatible } from './tab-recovery.mjs';
+import { isCdpDisconnectError, reattachSessionPage, storedDeadlineStillActive, withSessionPage, withSessionPageGuarded, urlsCompatible } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
@@ -163,11 +163,11 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
         await withSessionCommandLock(session.sessionId, async () => {
             const refreshed = getSession(session.sessionId) || session;
             if (refreshed.status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt)) {
-                updateSession(session.sessionId, {
+                const restored = await restorePollingBeforeDeadline(session.sessionId, refreshed.deadlineAt, {
                     status: 'polling',
                     warnings: appendUniqueWarning(refreshed.warnings || [], 'watcher-resumed-transient-timeout'),
                 });
-                session.status = 'polling';
+                session.status = restored === DEADLINE_PASSED ? refreshed.status : (restored?.status || refreshed.status);
             } else {
                 session.status = refreshed.status;
             }
@@ -205,7 +205,9 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
     const pollVendor = recoveryDeps.callVendorPoll || callVendorPoll;
     let consumedDisconnect = null;
     try {
-        const result = await withSessionPage(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
+        // The recovery inside the resolver performs binding writes; under a
+        // stored deadline those writes are refused post-lock once it passes.
+        const result = await withSessionPageGuarded(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
         const profileLockSummary = await readProfileLockSummary()
             .catch(err => ({ state: 'unknown', error: err?.message || String(err) }));
         const reattach = await ensureWatcherAttached(page, resolvedSession || session, options);
@@ -268,14 +270,15 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
         const watcherWarnings = [];
 
         if (status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt || session.deadlineAt)) {
-            status = 'polling';
-            updateSession(session.sessionId, {
-                status,
+            const deadlineAtValue = refreshed.deadlineAt || session.deadlineAt;
+            const restored = await restorePollingBeforeDeadline(session.sessionId, deadlineAtValue, {
+                status: 'polling',
                 warnings: appendUniqueWarning(
                     refreshed.warnings || [],
                     `watcher-transient-poll-timeout:${options.pollTimeoutSec}s`,
                 ),
             });
+            if (restored !== DEADLINE_PASSED) status = restored?.status || status;
         }
         if (status === 'complete' && await hasStreamingIndicator(page, vendor)) {
             const latest = getSession(session.sessionId) || refreshed;
@@ -318,7 +321,7 @@ export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
             preflight,
             profileLock: profileLockSummary,
         };
-        });
+        }, { stillActive: storedDeadlineStillActive(session) });
         if (!consumedDisconnect) return result;
     } catch (err) {
         if (!isCdpDisconnectError(err)) throw err;
@@ -695,14 +698,32 @@ async function callVendorPoll(deps, vendor, session, options) {
     } catch (rawErr) {
         const err = wrapError(rawErr);
         if (err.errorCode === 'provider.poll-timeout' && !isDeadlineExpired(session.deadlineAt)) {
-            updateSession(session.sessionId, {
+            const restored = await restorePollingBeforeDeadline(session.sessionId, session.deadlineAt, {
                 status: 'polling',
                 lastError: err.toJSON ? err.toJSON() : { errorCode: err.errorCode, message: err.message },
             });
-            return { ok: true, status: 'polling', warnings: [`transient-poll-timeout:${options.pollTimeoutSec}s`] };
+            if (restored !== DEADLINE_PASSED) {
+                return { ok: true, status: 'polling', warnings: [`transient-poll-timeout:${options.pollTimeoutSec}s`] };
+            }
+            return { ok: true, status: 'timeout', warnings: ['deadline-reached'] };
         }
         throw err;
     }
+}
+
+/**
+ * Restore a transient timeout only while the stored absolute deadline is live.
+ * The predicate is re-checked after the store lock is acquired.
+ * @param {string} sessionId
+ * @param {string|null|undefined} deadlineAtValue
+ * @param {Record<string, unknown>} patch
+ */
+export function restorePollingBeforeDeadline(sessionId, deadlineAtValue, patch) {
+    return updateSessionAsync(
+        sessionId,
+        patch,
+        () => Date.now() < Date.parse(/** @type {string} */ (deadlineAtValue)),
+    );
 }
 
 /**

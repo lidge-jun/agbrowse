@@ -1,6 +1,6 @@
 // @ts-check
-import { updateSession, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
-import { trySaveReport, appendArtifactRecord } from './session-artifacts.mjs';
+import { DEADLINE_PASSED, updateSession, updateSessionAsync, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
+import { trySaveReport, appendArtifactRecord, appendArtifactRecordAsync } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { chooseDeepResearchReportRead } from './chatgpt-deep-research-report.mjs';
 import { probeStopButton } from './chatgpt-response-dom.mjs';
@@ -213,6 +213,7 @@ export async function extractResearchReport(page, _deps) {
  * @returns {Promise<DeepResearchResult>}
  */
 export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, skipModeActivation = false }) {
+    // Contract 110 residual table: initial send stays synchronous until this path owns a losing-run token.
     const warnings = [];
 
     updateSession(session.sessionId, { researchMode: 'deep' });
@@ -459,7 +460,7 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
     // False once the caller has been answered. A stalled probe cannot be
     // cancelled, so this run may still finish after its resume returned
     // `timeout`; it must not then write a report nobody is waiting for.
-    const stillActive = () => !(runToken?.expired === true);
+    const stillActive = () => isDeepResearchResumeActive(runToken);
     const warnings = ['deep-research-resumed'];
     const deadline = Date.now() + timeoutMs;
     let stableText = '';
@@ -491,10 +492,17 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
             continue;
         }
         if (report.from === 'frame') warnings.push('report-extracted-from-iframe');
-        if (!stillActive()) return buildResumeTimeoutEnvelope(session, page);
-        updateSession(session.sessionId, { status: 'complete', answer: report.text, conversationUrl: page.url() });
+        const updated = await updateSessionAsync(
+            session.sessionId,
+            { status: 'complete', answer: report.text, conversationUrl: page.url() },
+            stillActive,
+        );
+        if (updated === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
         const saved = trySaveReport(session.sessionId, { text: report.text, sources: report.sources });
-        if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
+        if (saved.ok) {
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, stillActive);
+            if (appended === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
+        }
         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
         return {
             ok: true,
@@ -509,11 +517,14 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
 
     const finalReport = await extractResearchReport(page, deps);
     const finalText = finalReport?.completed ? finalReport.text : null;
-    if (!stillActive()) return buildResumeTimeoutEnvelope(session, page);
-    updateSession(session.sessionId, { status: 'timeout', answer: finalText });
+    const updated = await updateSessionAsync(session.sessionId, { status: 'timeout', answer: finalText }, stillActive);
+    if (updated === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
     if (finalText) {
         const saved = trySaveReport(session.sessionId, { text: finalText, sources: finalReport.sources });
-        if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
+        if (saved.ok) {
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, stillActive);
+            if (appended === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
+        }
         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
     }
     return {
@@ -525,4 +536,12 @@ async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEF
         warnings: [...warnings, 'deep-research-resume-timeout'],
         status: 'timeout',
     };
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isDeepResearchResumeActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }

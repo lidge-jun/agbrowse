@@ -949,8 +949,8 @@ function buildWorkTimeoutResult(vendor, sessionId, { page, session }) {
  */
 async function runPollWorkSession(deps, input = {}, ctx = { page: null, session: null }, runToken = null) {
     // False once the caller has been answered — see gemini-live.mjs.
-    const stillActive = () => !(runToken?.expired === true);
-    const { getSession, updateSession, resolvePollTimeoutSec } = await import('./session.mjs');
+    const stillActive = () => isWorkRunActive(runToken);
+    const { updateSessionAsync, resolvePollTimeoutSec } = await import('./session.mjs');
 
     const vendor = input.vendor || 'chatgpt';
     const sessionId = input.session || input.sessionId;
@@ -1017,15 +1017,15 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null, session:
         if (state.status === 'unknown') {
             // Gated: a run whose caller already got `timeout` must not start a
             // new session write when its probe finally settles.
-            if (sessionId && stillActive()) {
-                updateSession(sessionId, {
+            if (sessionId) {
+                await updateSessionAsync(sessionId, {
                     status: 'error',
                     lastError: {
                         errorCode: 'provider.work-state-unknown',
                         message: 'Work task in unrecognized state',
                         evidence: state.evidence,
                     },
-                });
+                }, stillActive);
             }
             throw new WebAiError({
                 errorCode: 'provider.work-state-unknown',
@@ -1039,8 +1039,8 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null, session:
         if (state.status === 'complete') {
             const taskUrl = typeof page.url === 'function' ? page.url() : null;
             const taskId = extractTaskId(taskUrl);
-            if (sessionId && stillActive()) {
-                updateSession(sessionId, {
+            if (sessionId) {
+                await updateSessionAsync(sessionId, {
                     status: 'complete',
                     answer: state.answerText,
                     completedAt: new Date().toISOString(),
@@ -1050,7 +1050,7 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null, session:
                         taskId,
                         taskUrl,
                     },
-                });
+                }, stillActive);
             }
             return {
                 ok: true,
@@ -1081,13 +1081,21 @@ async function runPollWorkSession(deps, input = {}, ctx = { page: null, session:
 
     // Deadline reached — timeout
     if (sessionId) {
-        const { markSessionTimeout } = await import('./session.mjs');
-        if (stillActive()) markSessionTimeout(sessionId, {
+        const { markSessionTimeoutAsync } = await import('./session.mjs');
+        await markSessionTimeoutAsync(sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'Work poll deadline reached' },
             warning: 'work-poll-timeout',
         });
     }
     return buildWorkTimeoutResult(vendor, sessionId, ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isWorkRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**

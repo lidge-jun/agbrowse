@@ -25,7 +25,7 @@ import { enforcePolicy } from './policy/enforce.mjs';
 import { applyProviderDefaults } from './policy/default-policy.mjs';
 import { withActiveCommand } from './active-command-store.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { withSessionPage } from './tab-recovery.mjs';
+import { storedDeadlineStillActive, withSessionPageGuarded } from './tab-recovery.mjs';
 import { requireLatestSnapshot, setLatestSnapshot } from './mcp-state.mjs';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -343,7 +343,7 @@ async function runMcpSessionPoll(name, args, deps) {
         // before the page is ever resolved.
         const expiredInLock = expiredSessionTimeoutResult(sessionId, mcpFallbackVendor);
         if (expiredInLock) return expiredInLock;
-        return withSessionPage(deps, sessionId, async ({ page, targetId, session }) => {
+        return withSessionPageGuarded(deps, sessionId, async ({ page, targetId, session }) => {
             const provider = providerFromArgs({ provider: session.vendor || stored.vendor || args.provider || args.vendor || 'chatgpt' });
             const sessionDeps = {
                 ...deps,
@@ -374,7 +374,7 @@ async function runMcpSessionPoll(name, args, deps) {
                     ),
                 });
             });
-        });
+        }, { stillActive: storedDeadlineStillActive(stored) });
     });
 }
 

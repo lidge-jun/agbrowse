@@ -1,7 +1,7 @@
 // @ts-check
-import { updateSession } from './session.mjs';
+import { updateSessionAsync, DEADLINE_PASSED } from './session.mjs';
 import { poolTab } from './tab-pool.mjs';
-import { trySaveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
+import { trySaveTranscript, appendArtifactRecordAsync } from './session-artifacts.mjs';
 import { resolveArchivePolicy, archiveConversation } from './chatgpt-archive.mjs';
 
 const FINALIZABLE_STATUSES = new Set(['complete', 'completed']);
@@ -75,13 +75,16 @@ export async function finalizeProviderTab(deps, {
     }
     const conversationUrl = page?.url?.() || session.conversationUrl || session.originalUrl || undefined;
     const baseWarnings = Array.isArray(warnings) ? warnings : [];
-    updateSession(session.sessionId, {
+    const completed = await updateSessionAsync(session.sessionId, {
         status: 'complete',
         conversationUrl,
         answer: answerText,
         warnings: baseWarnings,
         completedAt: new Date().toISOString(),
-    });
+    }, () => !expired());
+    if (completed === DEADLINE_PASSED) {
+        return { finalized: false, reason: 'poll-deadline-exceeded' };
+    }
     /** @type {{ required: boolean, ok: boolean, descriptor?: unknown, stage?: string, error?: string }} */
     let artifactStatus = { required: false, ok: true };
     // The store lock sits between the write above and here. Re-checked so a
@@ -98,12 +101,22 @@ export async function finalizeProviderTab(deps, {
             return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
         }
         if (saved.ok) {
-            appendArtifactRecord(session.sessionId, saved.descriptor);
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, () => !expired());
+            if (appended === DEADLINE_PASSED) {
+                return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
+            }
         } else {
-            updateSession(session.sessionId, {
+            const warned = await updateSessionAsync(session.sessionId, {
                 warnings: [...baseWarnings, `artifact-save-failed:${saved.stage}:${saved.error}`],
-            });
+            }, () => !expired());
+            if (warned === DEADLINE_PASSED) {
+                return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
+            }
         }
+    }
+
+    if (expired()) {
+        return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
     }
 
     const { shouldArchive } = resolveArchivePolicy({
@@ -125,8 +138,11 @@ export async function finalizeProviderTab(deps, {
             // returned while the archive was in flight; writing then would move
             // a session nobody is waiting on. Checking only at entry is not
             // enough for work that spans an await.
-            if (archiveResult.ok && !expired()) {
-                updateSession(session.sessionId, { archived: true });
+            if (archiveResult.ok) {
+                const archived = await updateSessionAsync(session.sessionId, { archived: true }, () => !expired());
+                if (archived === DEADLINE_PASSED) {
+                    return { finalized: true, pool: null, archiveSkippedReason: 'poll-deadline-exceeded' };
+                }
                 return { finalized: true, pool: null, archived: true };
             }
         } catch { /* archive is best-effort, fall through to pool */ }

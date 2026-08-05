@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } 
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { updateSession, getSession } from './session.mjs';
-import { appendSessionArtifactsLocked, withStoreLockAsync, DEADLINE_PASSED } from './session-store.mjs';
+import { appendSessionArtifactsLocked, withStoreLockAsync, mutateSessionAsync, DEADLINE_PASSED } from './session-store.mjs';
 
 /**
  * Resolved per call, not at import. A frozen constant took whatever
@@ -564,4 +564,19 @@ export function appendArtifactRecord(sessionId, descriptor) {
     const artifacts = /** @type {ArtifactDescriptor[]} */ (session.artifacts || []);
     const withoutDuplicate = artifacts.filter((artifact) => !(artifact.kind === descriptor.kind && artifact.path === descriptor.path));
     return updateSession(sessionId, { artifacts: [...withoutDuplicate, descriptor] });
+}
+
+/**
+ * Awaited, deadline-aware form of {@link appendArtifactRecord}.
+ * @param {string} sessionId
+ * @param {ArtifactDescriptor} descriptor
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<import('./session-store.mjs').WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function appendArtifactRecordAsync(sessionId, descriptor, stillActive) {
+    return mutateSessionAsync(sessionId, (current) => {
+        const artifacts = /** @type {ArtifactDescriptor[]} */ (current.artifacts || []);
+        const withoutDuplicate = artifacts.filter((artifact) => !(artifact.kind === descriptor.kind && artifact.path === descriptor.path));
+        return { artifacts: [...withoutDuplicate, descriptor], updatedAt: new Date().toISOString() };
+    }, stillActive);
 }

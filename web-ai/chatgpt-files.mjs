@@ -6,9 +6,9 @@ import {
     discardStagedArtifacts,
     stageFileArtifact,
     trySaveFileArtifact,
-    appendArtifactRecord,
+    appendArtifactRecordAsync,
 } from './session-artifacts.mjs';
-import { readSessionAsync } from './session-store.mjs';
+import { readSessionAsync, DEADLINE_PASSED } from './session-store.mjs';
 
 /**
  * Identity of one download candidate within one assistant turn.
@@ -519,7 +519,11 @@ export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
             warnings.push(`file-artifact-save-failed:${res.stage}`);
             continue;
         }
-        appendArtifactRecord(sessionId, res.descriptor);
+        const appended = await appendArtifactRecordAsync(sessionId, res.descriptor, stillActive);
+        if (appended === DEADLINE_PASSED) {
+            warnings.push('file-artifact-deadline-exceeded');
+            continue;
+        }
         files.push(res.descriptor);
     }
     return { ok: true, detectedCount: candidates.length, savedCount: files.length, files, errors: [], warnings };

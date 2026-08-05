@@ -338,11 +338,14 @@ describe('web-ai provider integration (source-string contracts)', () => {
     it('all three providers finalize completion and markSessionTimeout on timeout', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
             expect(src).toMatch(/finalizeProviderTab\(deps, \{[\s\S]*?session[\s\S]*?answerText/);
-            expect(src).toMatch(/markSessionTimeout\(session\.sessionId/);
+            // The awaited form is the contract now: the sync call took the
+            // blocking store lock inside the poll deadline.
+            expect(src).toMatch(/await\s+markSessionTimeoutAsync\(session\.sessionId/);
+            expect(src).not.toMatch(/[^cn]\bmarkSessionTimeout\(session\.sessionId/);
             expect(src).toContain("retryHint: 'poll-or-resume'");
             expect(src).toContain('recoverable: true');
         }
-        expect(finalizerSrc).toMatch(/updateSession\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
+        expect(finalizerSrc).toMatch(/updateSessionAsync\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
         expect(finalizerSrc).toMatch(/completedAt: new Date\(\)\.toISOString\(\)/);
     });
 
@@ -409,11 +412,15 @@ describe('web-ai cli session flags', () => {
     it('wraps MCP wait/resume in session command lock, session page recovery, and MCP active command', () => {
         const mcpSrc = readFileSync(join(process.cwd(), 'web-ai/mcp-server.mjs'), 'utf8');
         expect(mcpSrc).toContain("import { withSessionCommandLock } from './session-store.mjs'");
-        expect(mcpSrc).toContain("import { withSessionPage } from './tab-recovery.mjs'");
+        // The guarded form threads the stored-deadline predicate into the
+        // recovery writes; the plain form would let a binding write land after
+        // the session's own deadline passed while the store lock was waited on.
+        expect(mcpSrc).toContain("import { storedDeadlineStillActive, withSessionPageGuarded } from './tab-recovery.mjs'");
         expect(mcpSrc).toMatch(/if \(name === 'web_ai_wait_response' \|\| name === 'web_ai_session_resume'\) \{[\s\S]*?return runMcpSessionPoll\(name, args, deps\)/);
         expect(mcpSrc).toMatch(/async function runMcpSessionPoll\(name, args, deps\)/);
         expect(mcpSrc).toMatch(/withSessionCommandLock\(sessionId/);
-        expect(mcpSrc).toMatch(/withSessionPage\(deps, sessionId/);
+        expect(mcpSrc).toMatch(/withSessionPageGuarded\(deps, sessionId/);
+        expect(mcpSrc).toMatch(/stillActive: storedDeadlineStillActive\(stored\)/);
         expect(mcpSrc).toMatch(/withMcpActiveCommand\(name, provider, sessionDeps, sessionArgs/);
     });
 

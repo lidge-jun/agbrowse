@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -100,6 +100,9 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
 
         // Alive for the entry check, expired from then on — the shape of a
         // deadline that passes while the first write waits on the store lock.
+        // The write itself is refused now: the post-lock re-check sees the
+        // expired predicate and returns DEADLINE_PASSED instead of landing a
+        // losing `complete` row.
         let checks = 0;
         const stillActive = () => { checks += 1; return checks <= 1; };
 
@@ -112,15 +115,17 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
             stillActive,
         });
 
-        // The entry write is allowed: it is the phase the caller's own gate
-        // cleared. Everything after it is not.
+        // Nothing after the refused write may happen — and the write itself
+        // must not have landed.
+        expect(getSession(session.sessionId).status).not.toBe('complete');
         expect(getSession(session.sessionId).artifacts ?? []).toEqual([]);
         // Checked on disk too. The session record and the file are separate
         // effects, so asserting only the record would miss a file-only leak.
         expect(existsSync(join(resolveArtifactsDir(session.sessionId), 'transcript.md'))).toBe(false);
         expect(archiveConversation).not.toHaveBeenCalled();
         expect(poolTab).not.toHaveBeenCalled();
-        expect(result.archiveSkippedReason).toBe('poll-deadline-exceeded');
+        expect(result.finalized).toBe(false);
+        expect(result.reason).toBe('poll-deadline-exceeded');
         expect(getSession(session.sessionId).archived ?? false).toBe(false);
     });
 
@@ -186,7 +191,17 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         // Nth check happens to be, so adding a check upstream would move this
         // test above the boundary it was written for and leave it green. The
         // artifact record is written in the last phase before pooling.
-        const stillActive = () => (getSession(session.sessionId).artifacts ?? []).length === 0;
+        //
+        // Read the store FILE, not `getSession`: the predicate now runs while
+        // the awaited store lock is held, and the sync read would deadlock
+        // against it.
+        const readArtifacts = () => {
+            try {
+                const store = JSON.parse(readFileSync(join(tmpHome, 'web-ai-sessions.json'), 'utf8'));
+                return store.sessions?.find((s) => s.sessionId === session.sessionId)?.artifacts ?? [];
+            } catch { return []; }
+        };
+        const stillActive = () => readArtifacts().length === 0;
 
         const result = await finalizeProviderTab({ getPort: () => 9222 }, {
             vendor: 'chatgpt',
@@ -226,7 +241,17 @@ describe('a finalizer whose caller already timed out stops at the next phase', (
         // above the gate it was written for, and it kept passing while proving
         // nothing. The artifact record is written in the phase immediately
         // before the archive, so its presence marks that boundary.
-        const stillActive = () => (getSession(session.sessionId).artifacts ?? []).length === 0;
+        //
+        // Read the store FILE, not `getSession`: the predicate now runs while
+        // the awaited store lock is held, and the sync read would deadlock
+        // against it.
+        const readArtifacts = () => {
+            try {
+                const store = JSON.parse(readFileSync(join(tmpHome, 'web-ai-sessions.json'), 'utf8'));
+                return store.sessions?.find((s) => s.sessionId === session.sessionId)?.artifacts ?? [];
+            } catch { return []; }
+        };
+        const stillActive = () => readArtifacts().length === 0;
 
         const result = await finalizeProviderTab({ getPort: () => 9222 }, {
             vendor: 'chatgpt',

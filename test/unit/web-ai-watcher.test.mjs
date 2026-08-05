@@ -83,7 +83,7 @@ describe('web-ai watcher transient-timeout promotion (source-string contract)', 
 describe('web-ai watcher self-heals drifted conversation URL (source-string contract)', () => {
     it('destructures the resolver-healed session from the withSessionPage callback', () => {
         expect(watcherSrc).toMatch(
-            /withSessionPage\(deps, options\.sessionId, async \(\{ page, targetId, session: resolvedSession \}\)/,
+            /withSessionPageGuarded\(deps, options\.sessionId, async \(\{ page, targetId, session: resolvedSession \}\)/,
         );
     });
 
@@ -92,7 +92,7 @@ describe('web-ai watcher self-heals drifted conversation URL (source-string cont
     });
 
     it('uses the canonical tolerant urlsCompatible predicate imported from tab-recovery', () => {
-        expect(watcherSrc).toMatch(/import \{[^}]*withSessionPage[^}]*urlsCompatible[^}]*\} from '\.\/tab-recovery\.mjs'/);
+        expect(watcherSrc).toMatch(/import \{[^}]*withSessionPageGuarded[^}]*urlsCompatible[^}]*\} from '\.\/tab-recovery\.mjs'/);
         expect(watcherSrc).toContain('if (urlsCompatible(targetUrl, currentUrl))');
     });
 

@@ -1,8 +1,9 @@
 // @ts-check
-import { updateSession } from './session.mjs';
-import { trySaveTranscript, appendArtifactRecord } from './session-artifacts.mjs';
+import { DEADLINE_PASSED, updateSessionAsync } from './session.mjs';
+import { trySaveTranscript, appendArtifactRecordAsync } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { probeStopButton } from './chatgpt-response-dom.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 
 /**
  * @typedef {Object} TurnResult
@@ -99,7 +100,7 @@ async function pollTurn(page, { baselineAssistantCount, timeoutMs = 120_000 }) {
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, Math.max(1, Math.min(500, deadline - Date.now()))));
 
         const count = await countAssistants(page);
         if (count <= baselineAssistantCount) continue;
@@ -138,17 +139,53 @@ async function pollTurn(page, { baselineAssistantCount, timeoutMs = 120_000 }) {
  * @returns {Promise<MultiTurnResult>}
  */
 export async function sendMultiTurn(page, deps, { followUps, session, timeoutPerTurn = 120_000 }) {
+    // One outer budget covers the accumulated per-turn polling budgets. The
+    // race bounds browser probes that a single turn's clock checks cannot.
+    const timeoutMs = Math.max(1, Number(timeoutPerTurn) * Math.max(1, followUps.length));
+    const startedAt = Date.now();
+    const monotonicStartMs = monotonicNowMs();
+    const ctx = {
+        turns: /** @type {TurnResult[]} */ ([]),
+        finalAnswer: session.answer || null,
+        warnings: /** @type {string[]} */ ([]),
+    };
+    return withPollDeadline(
+        (hardDeadline, token) => runMultiTurn(page, deps, { followUps, session, timeoutPerTurn }, ctx, token),
+        {
+            startedAt,
+            monotonicStartMs,
+            timeoutMs,
+            onExpired: () => buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']),
+        },
+    );
+}
+
+/**
+ * @param {any} page
+ * @param {any} deps
+ * @param {{ followUps: string[], session: any, timeoutPerTurn: number }} opts
+ * @param {{ turns: TurnResult[], finalAnswer: string|null, warnings: string[] }} ctx
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} runToken
+ * @returns {Promise<MultiTurnResult>}
+ */
+async function runMultiTurn(page, deps, { followUps, session, timeoutPerTurn }, ctx, runToken) {
+    const stillActive = () => isMultiTurnRunActive(runToken);
     /** @type {TurnResult[]} */
-    const turns = [];
-    const allWarnings = [];
-    let finalAnswer = session.answer || null;
+    const turns = ctx.turns;
+    const allWarnings = ctx.warnings;
 
     const existingTurns = session.turns || [];
     let turnIndex = existingTurns.length;
 
     for (const prompt of followUps) {
+        if (!stillActive()) {
+            return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+        }
         const sentAt = new Date().toISOString();
         const baselineAssistantCount = await countAssistants(page);
+        if (!stillActive()) {
+            return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+        }
 
         try {
             await submitTurn(page, deps, { prompt });
@@ -171,15 +208,21 @@ export async function sendMultiTurn(page, deps, { followUps, session, timeoutPer
             turnIndex++;
 
             const allTurns = [...existingTurns, ...turns];
-            if (result.answerText) finalAnswer = result.answerText;
-            updateSession(session.sessionId, {
+            if (result.answerText) ctx.finalAnswer = result.answerText;
+            const progressWrite = await updateSessionAsync(session.sessionId, {
                 turns: allTurns,
-                answer: result.answerText || finalAnswer,
+                answer: result.answerText || ctx.finalAnswer,
                 followUpCount: allTurns.length,
-            });
+            }, stillActive);
+            if (progressWrite === DEADLINE_PASSED) {
+                return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+            }
 
             if (!result.ok) {
-                updateSession(session.sessionId, { status: 'partial' });
+                const partialWrite = await updateSessionAsync(session.sessionId, { status: 'partial' }, stillActive);
+                if (partialWrite === DEADLINE_PASSED) {
+                    return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+                }
                 allWarnings.push(`turn-${turnIndex - 1}-failed`);
                 break;
             }
@@ -196,11 +239,14 @@ export async function sendMultiTurn(page, deps, { followUps, session, timeoutPer
             turnIndex++;
 
             const allTurns = [...existingTurns, ...turns];
-            updateSession(session.sessionId, {
+            const partialWrite = await updateSessionAsync(session.sessionId, {
                 turns: allTurns,
                 status: 'partial',
                 followUpCount: allTurns.length,
-            });
+            }, stillActive);
+            if (partialWrite === DEADLINE_PASSED) {
+                return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+            }
 
             allWarnings.push(`turn-${turnIndex - 1}-error`);
             break;
@@ -209,30 +255,70 @@ export async function sendMultiTurn(page, deps, { followUps, session, timeoutPer
     const allTurns = [...existingTurns, ...turns];
     const transcriptMarkdown = renderMultiTurnTranscript(allTurns);
     const ok = turns.length === followUps.length && turns.every(t => t.status === 'complete');
-    if (!ok && transcriptMarkdown) {
+    if (!ok && transcriptMarkdown && stillActive()) {
         const saved = trySaveTranscript(session.sessionId, transcriptMarkdown);
-        if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
+        if (saved.ok) {
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, stillActive);
+            if (appended === DEADLINE_PASSED) {
+                return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+            }
+        }
         else allWarnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
     }
-    updateSession(session.sessionId, {
+    const finalWrite = await updateSessionAsync(session.sessionId, {
         status: ok ? 'complete' : 'partial',
         conversationUrl: page.url(),
-        answer: finalAnswer,
+        answer: ctx.finalAnswer,
         followUpCount: allTurns.length,
         turns: allTurns,
         ...(ok ? { completedAt: new Date().toISOString() } : {}),
-    });
+    }, stillActive);
+    if (finalWrite === DEADLINE_PASSED) {
+        return buildMultiTurnResult(page, session, followUps, ctx, ['multi-turn-deadline-expired']);
+    }
 
     return {
         ok,
         sessionId: session.sessionId,
         conversationUrl: page.url(),
         turns,
-        finalAnswer,
+        finalAnswer: ctx.finalAnswer,
         warnings: allWarnings,
         finalStatus: ok ? 'complete' : 'partial',
         transcriptMarkdown,
     };
+}
+
+/**
+ * Build a write-free result for an outer deadline loss.
+ * @param {any} page
+ * @param {any} session
+ * @param {string[]} followUps
+ * @param {{ turns: TurnResult[], finalAnswer: string|null, warnings: string[] }} ctx
+ * @param {string[]} extraWarnings
+ * @returns {MultiTurnResult}
+ */
+function buildMultiTurnResult(page, session, followUps, ctx, extraWarnings = []) {
+    const allTurns = [...(session.turns || []), ...ctx.turns];
+    const ok = ctx.turns.length === followUps.length && ctx.turns.every(turn => turn.status === 'complete');
+    return {
+        ok,
+        sessionId: session.sessionId,
+        conversationUrl: (typeof page?.url === 'function' ? page.url() : null) || session.conversationUrl,
+        turns: ctx.turns,
+        finalAnswer: ctx.finalAnswer,
+        warnings: [...ctx.warnings, ...extraWarnings],
+        finalStatus: ok ? 'complete' : 'partial',
+        transcriptMarkdown: renderMultiTurnTranscript(allTurns),
+    };
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isMultiTurnRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**

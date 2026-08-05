@@ -1,5 +1,6 @@
 // @ts-check
 import { getSession, updateSession } from './session.mjs';
+import { mutateSessionAsync, DEADLINE_PASSED } from './session-store.mjs';
 import { MAX_TRACE_STEPS, MAX_TRACE_BYTES } from './constants.mjs';
 
 const REDACTION_PATTERNS = [
@@ -59,4 +60,26 @@ export function appendTraceToSession(sessionId, steps) {
     }
 
     updateSession(sessionId, { trace });
+}
+
+/**
+ * @param {string} sessionId
+ * @param {unknown[]|null|undefined} steps
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<import('./session-store.mjs').WebAiSession|null|typeof DEADLINE_PASSED|undefined>}
+ */
+export function appendTraceToSessionAsync(sessionId, steps, stillActive) {
+    if (!steps?.length) return Promise.resolve(undefined);
+    const redacted = /** @type {unknown[]} */ (redactSensitive(steps));
+
+    return mutateSessionAsync(sessionId, (current) => {
+        const trace = [...(current.trace || []), ...redacted];
+        while (trace.length > MAX_TRACE_STEPS) {
+            trace.shift();
+        }
+        while (JSON.stringify(trace).length > MAX_TRACE_BYTES && trace.length > 0) {
+            trace.shift();
+        }
+        return { trace, updatedAt: new Date().toISOString() };
+    }, stillActive);
 }

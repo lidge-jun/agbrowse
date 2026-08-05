@@ -12,12 +12,13 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
-    markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
 import { hasContextPackaging, prepareContextForBrowser } from './context-pack/index.mjs';
 import { WebAiError } from './errors.mjs';
@@ -283,11 +284,11 @@ export async function grokPollWebAi(deps, input = {}) {
  *
  * @param {{ page: any, session: any, baseline: any }} ctx
  */
-function buildGrokTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
-    // `persist` is false on the RACE path: `markSessionTimeout` takes the
-    // synchronous store lock, whose wait stops the
-    // event loop. Building the expiry envelope must not be able to block.
-    const timedOutSession = (persist && session) ? markSessionTimeout(session.sessionId, {
+async function buildGrokTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
+    // `persist` is false on the RACE path so the expiry envelope remains
+    // write-free. The natural timeout owns its outcome and awaits the async
+    // store lock without a loser predicate.
+    const timedOutSession = (persist && session) ? await markSessionTimeoutAsync(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
     }) : null;
     return {
@@ -314,7 +315,7 @@ function buildGrokTimeoutResult({ page, session, baseline, sessionId = null }, {
  */
 async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null, sessionId: null }, runToken = null) {
     // False once the caller has been answered — see gemini-live.mjs.
-    const stillActive = () => !(runToken?.expired === true);
+    const stillActive = () => isGrokRunActive(runToken);
     const page = await deps.getPage();
     ctx.page = page;
     if (!isGrokUrl(page.url())) throw new WebAiError({
@@ -406,7 +407,7 @@ async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: n
         await page.waitForTimeout(Math.max(1, Math.min(500, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session && stillActive()) updateSession(session.sessionId, { status: 'crashed' });
+                if (session) await updateSessionAsync(session.sessionId, { status: 'crashed' }, stillActive);
                 return {
                     ok: false, vendor: 'grok', status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -419,7 +420,15 @@ async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: n
             throw pollErr;
         }
     }
-    return buildGrokTimeoutResult(ctx);
+    return await buildGrokTimeoutResult(ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isGrokRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**

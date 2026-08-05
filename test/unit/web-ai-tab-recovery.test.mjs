@@ -27,7 +27,7 @@ describe('web-ai tab-recovery resolveSessionPage surface (source-string contract
     });
 
     it('withSessionPage layers on top of resolveSessionPage with retry-on-page-death', () => {
-        expect(recoverySrc).toMatch(/await resolveSessionPage\(deps, sessionId, \{ allowNavigate: true \}\)/);
+        expect(recoverySrc).toMatch(/await resolveSessionPage\(deps, sessionId, \{ allowNavigate: true, stillActive \}\)/);
         expect(recoverySrc).toMatch(/forceRecover:\s*true/);
         expect(recoverySrc).toContain('isPageDeathError');
     });

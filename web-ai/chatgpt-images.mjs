@@ -1,7 +1,8 @@
 // @ts-check
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
-import { resolveArtifactsDir, saveImageArtifact, appendArtifactRecord } from './session-artifacts.mjs';
+import { resolveArtifactsDir, saveImageArtifact, appendArtifactRecord, appendArtifactRecordAsync } from './session-artifacts.mjs';
+import { DEADLINE_PASSED } from './session-store.mjs';
 
 const ESTUARY_PATTERN = /backend-api\/estuary\/content\?id=(file_[A-Za-z0-9_-]+)/;
 const ALLOWED_HOST = 'chatgpt.com';
@@ -217,10 +218,10 @@ export function isImageOnlyGeneratedImageChromeText(text) {
  * Download detected images using ChatGPT cookies.
  * @param {any} cdpSession
  * @param {DetectedImage[]} images
- * @param {{ outputPath?: string|null, sessionId?: string|null }} [opts]
+ * @param {{ outputPath?: string|null, sessionId?: string|null, stillActive?: () => boolean }} [opts]
  * @returns {Promise<DownloadedImage[]>}
  */
-export async function downloadGeneratedImages(cdpSession, images, { outputPath, sessionId } = {}) {
+export async function downloadGeneratedImages(cdpSession, images, { outputPath, sessionId, stillActive } = {}) {
     if (!images.length) return [];
 
     const { cookies } = await cdpSession.send('Network.getCookies', {
@@ -269,7 +270,12 @@ export async function downloadGeneratedImages(cdpSession, images, { outputPath, 
                     mimeType: contentType,
                     sourceUrl: img.url,
                 });
-                appendArtifactRecord(sessionId, desc);
+                if (stillActive) {
+                    const appended = await appendArtifactRecordAsync(sessionId, desc, stillActive);
+                    if (appended === DEADLINE_PASSED) continue;
+                } else {
+                    appendArtifactRecord(sessionId, desc);
+                }
                 savePath = join(resolveArtifactsDir(sessionId), desc.path);
             } else {
                 continue;
@@ -292,7 +298,7 @@ export async function downloadGeneratedImages(cdpSession, images, { outputPath, 
 /**
  * Collect generated images from a ChatGPT response.
  * @param {any} cdpSession
- * @param {{ baselineAssistantCount?: number, outputPath?: string|null, sessionId?: string|null, waitTimeoutMs?: number }} [opts]
+ * @param {{ baselineAssistantCount?: number, outputPath?: string|null, sessionId?: string|null, waitTimeoutMs?: number, stillActive?: () => boolean }} [opts]
  * @returns {Promise<{ images: DetectedImage[], savedPaths: string[], markdownSuffix: string, warnings: string[], errors: string[], explicitOutputRequested: boolean }>}
  */
 export async function collectImages(cdpSession, {
@@ -300,6 +306,7 @@ export async function collectImages(cdpSession, {
     outputPath = null,
     sessionId = null,
     waitTimeoutMs = DEFAULT_IMAGE_WAIT_TIMEOUT_MS,
+    stillActive,
 } = {}) {
     const explicitOutputRequested = outputPath !== null && outputPath !== undefined;
     let images = await detectGeneratedImages(cdpSession, { baselineAssistantCount });
@@ -324,7 +331,7 @@ export async function collectImages(cdpSession, {
         };
     }
 
-    const downloaded = await downloadGeneratedImages(cdpSession, images, { outputPath, sessionId });
+    const downloaded = await downloadGeneratedImages(cdpSession, images, { outputPath, sessionId, stillActive });
     const savedPaths = downloaded.map(d => d.path);
     const errors = explicitOutputRequested && savedPaths.length === 0
         ? ['generated images were detected but no image file could be saved']

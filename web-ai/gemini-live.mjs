@@ -14,12 +14,13 @@ import {
     getBaseline,
     getLatestBaseline,
     getSession,
-    markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
 import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, GEMINI_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
@@ -659,13 +660,11 @@ export async function geminiPollWebAi(deps, input = {}) {
  *
  * @param {{ page: any, session: any, baseline: any }} ctx
  */
-function buildGeminiTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
-    // `persist` is false on the RACE path. `markSessionTimeout` takes the
-    // synchronous store lock, and that lock's wait
-    // stops the event loop. Calling it here would let the expiry envelope
-    // itself block for seconds, or throw "failed to acquire lock", which is
-    // the opposite of a bounded return.
-    const timedOutSession = (persist && session) ? markSessionTimeout(session.sessionId, {
+async function buildGeminiTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
+    // `persist` is false on the RACE path so the expiry envelope remains
+    // write-free. The natural timeout owns its outcome and awaits the async
+    // store lock without a loser predicate.
+    const timedOutSession = (persist && session) ? await markSessionTimeoutAsync(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
     }) : null;
     return {
@@ -695,7 +694,7 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
     // False once the caller has been answered. A stalled probe cannot be
     // cancelled, so this run may still be mid-tick when its poll returns
     // `timeout`; what it must not do is START a new write after that.
-    const stillActive = () => !(runToken?.expired === true);
+    const stillActive = () => isGeminiRunActive(runToken);
     const page = await deps.getPage();
     ctx.page = page;
     if (!isGeminiUrl(page.url())) throw new WebAiError({
@@ -785,7 +784,7 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
         await page.waitForTimeout(Math.max(1, Math.min(2_000, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session && stillActive()) updateSession(session.sessionId, { status: 'crashed' });
+                if (session) await updateSessionAsync(session.sessionId, { status: 'crashed' }, stillActive);
                 return {
                     ok: false, vendor: 'gemini', status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -798,7 +797,15 @@ async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session:
             throw pollErr;
         }
     }
-    return buildGeminiTimeoutResult(ctx);
+    return await buildGeminiTimeoutResult(ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isGeminiRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**

@@ -1,6 +1,7 @@
 // @ts-check
 import { createTab, probeTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
-import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
+import { DEADLINE_PASSED, updateSession, updateSessionAsync, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
+import { mutateSessionAsync } from './session-store.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
 import { isDurableConversationUrl } from './conversation-url.mjs';
@@ -27,12 +28,14 @@ import { WebAiError } from './errors.mjs';
  * Recover a session's tab
  * @param {RecoverDeps} deps
  * @param {WebAiSession} session
+ * @param {{ stillActive?: () => boolean }} [options]
  * @returns {Promise<RecoverResult>}
  */
-export async function recoverSessionTab(deps, session) {
+export async function recoverSessionTab(deps, session, options = {}) {
     if (!session) throw new Error('recoverSessionTab: session required');
 
     const port = deps.getPort();
+    const stillActive = options.stillActive;
     const targetUrl = session.conversationUrl || session.originalUrl || 'about:blank';
     const isRunningWork = _isWorkSession(session) && session.status !== 'complete';
 
@@ -80,7 +83,8 @@ export async function recoverSessionTab(deps, session) {
                 }
 
                 if (shouldPreferCurrentProviderUrl(targetUrl, currentUrl)) {
-                    await updateSession(session.sessionId, { conversationUrl: currentUrl });
+                    const binding = await updateRecoveryBinding(session.sessionId, { conversationUrl: currentUrl }, stillActive);
+                    if (binding === DEADLINE_PASSED) return deadlineRecoveryFailure('existing-tab', session.targetId);
                     return {
                         recovered: true,
                         strategy: 'existing-tab',
@@ -93,7 +97,8 @@ export async function recoverSessionTab(deps, session) {
                 const finalUrl = page.url();
                 await waitForConversationReady(page, finalUrl);
                 if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
-                    await updateSession(session.sessionId, { conversationUrl: finalUrl });
+                    const binding = await updateRecoveryBinding(session.sessionId, { conversationUrl: finalUrl }, stillActive);
+                    if (binding === DEADLINE_PASSED) return deadlineRecoveryFailure('existing-tab', session.targetId);
                 }
                 return {
                     recovered: true,
@@ -124,15 +129,35 @@ export async function recoverSessionTab(deps, session) {
         }
 
         // 3. Update session binding
-        await updateSession(session.sessionId, {
-            targetId: newTab.targetId,
-            conversationUrl: recoveredConversationUrl,
-            tabState: {
-                ...session.tabState,
-                recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
-                lastActiveAt: new Date().toISOString(),
-            }
-        });
+        const binding = stillActive
+            ? await mutateSessionAsync(session.sessionId, current => {
+                const patch = {
+                    targetId: newTab.targetId,
+                    tabState: {
+                        ...current.tabState,
+                        recoveryCount: (current.tabState?.recoveryCount || 0) + 1,
+                        lastActiveAt: new Date().toISOString(),
+                    },
+                    updatedAt: new Date().toISOString(),
+                };
+                if (current.vendor !== 'chatgpt' || isDurableConversationUrl(recoveredConversationUrl)) {
+                    (/** @type {Record<string, unknown>} */ (patch)).conversationUrl = recoveredConversationUrl;
+                }
+                return patch;
+            }, stillActive)
+            : await updateSession(session.sessionId, {
+                targetId: newTab.targetId,
+                conversationUrl: recoveredConversationUrl,
+                tabState: {
+                    ...session.tabState,
+                    recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
+                    lastActiveAt: new Date().toISOString(),
+                }
+            });
+        if (binding === DEADLINE_PASSED) {
+            await closeTab(port, newTab.targetId).catch(() => undefined);
+            return deadlineRecoveryFailure('new-tab', newTab.targetId);
+        }
 
         return {
             recovered: true,
@@ -144,6 +169,33 @@ export async function recoverSessionTab(deps, session) {
         await closeTab(port, newTab.targetId).catch(() => undefined);
         throw err;
     }
+}
+
+/**
+ * Preserve the legacy synchronous binding write unless a deadline predicate is
+ * explicitly supplied by a poll/recovery caller.
+ * @param {string} sessionId
+ * @param {Record<string, unknown>} patch
+ * @param {(() => boolean)|undefined} stillActive
+ */
+function updateRecoveryBinding(sessionId, patch, stillActive) {
+    return stillActive
+        ? updateSessionAsync(sessionId, patch, stillActive)
+        : updateSession(sessionId, patch);
+}
+
+/**
+ * @param {'existing-tab'|'new-tab'} strategy
+ * @param {string|null|undefined} targetId
+ * @returns {RecoverResult}
+ */
+function deadlineRecoveryFailure(strategy, targetId) {
+    return {
+        recovered: false,
+        strategy,
+        targetId: targetId || null,
+        reason: 'deadline-passed',
+    };
 }
 
 /**
@@ -394,6 +446,25 @@ export function isWorkSessionWithBareOrigin(session) {
 /** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch | ResolveSessionPageUnverified} ResolveSessionPageResult */
 
 /**
+ * @param {WebAiSession} session
+ * @param {'existing-tab'|'new-tab'} strategy
+ * @returns {ResolveSessionPageMismatch}
+ */
+function deadlineResolveFailure(session, strategy) {
+    return {
+        mismatch: true,
+        page: null,
+        targetId: session.targetId || null,
+        session,
+        recovered: false,
+        strategy,
+        warnings: [`session ${session.sessionId} deadline passed during tab recovery`],
+        url: null,
+        conversationUrl: session.conversationUrl || null,
+    };
+}
+
+/**
  * Fail-closed guard for ChatGPT later-session / new-tab recovery targets
  * (32.3). A safe target is an HTTPS ChatGPT URL that references a CONCRETE
  * conversation (`/c/<id>`, incl. under a GPT prefix) — never the provider root,
@@ -472,12 +543,13 @@ export function urlsCompatible(storedUrl, liveUrl) {
  *
  * @param {RecoverDeps} deps
  * @param {string} sessionId
- * @param {{ allowNavigate?: boolean, forceRecover?: boolean }} [options]
+ * @param {{ allowNavigate?: boolean, forceRecover?: boolean, stillActive?: () => boolean }} [options]
  * @returns {Promise<ResolveSessionPageResult>}
  */
 export async function resolveSessionPage(deps, sessionId, options = {}) {
     const allowNavigate = options.allowNavigate !== false;
     const forceRecover = options.forceRecover === true;
+    const stillActive = options.stillActive;
 
     const session = getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
@@ -522,7 +594,7 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
         }
         const recoveryTargetUrl = storedUrl;
         if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
-            const recovery = await recoverSessionTab(deps, current);
+            const recovery = await recoverSessionTab(deps, current, { stillActive });
             // `unverified` means the probe failed, not that recovery failed.
             // Collapsing it into the generic throw loses the one detail that
             // tells the caller to retry rather than replace the tab.
@@ -541,6 +613,7 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
                 };
             }
             if (!recovery.recovered) {
+                if (recovery.reason === 'deadline-passed') return deadlineResolveFailure(current, recovery.strategy);
                 throw new Error(`Session ${sessionId} tab recovery failed`);
             }
             const recovered = /** @type {WebAiSession} */ (getSession(sessionId));
@@ -567,7 +640,8 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
     if (current.conversationUrl && page.url() !== current.conversationUrl) {
         const liveUrl = page.url();
         if (shouldPreferCurrentProviderUrl(current.conversationUrl, liveUrl)) {
-            updateSession(sessionId, { conversationUrl: liveUrl });
+            const binding = await updateRecoveryBinding(sessionId, { conversationUrl: liveUrl }, stillActive);
+            if (binding === DEADLINE_PASSED) return deadlineResolveFailure(current, 'existing-tab');
             const updated = /** @type {WebAiSession} */ (getSession(sessionId));
             return {
                 mismatch: false,
@@ -632,7 +706,8 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
             const finalUrl = page.url();
             await waitForConversationReady(page, finalUrl);
             if (finalUrl !== current.conversationUrl && isProviderUrl(finalUrl)) {
-                updateSession(sessionId, { conversationUrl: finalUrl });
+                const binding = await updateRecoveryBinding(sessionId, { conversationUrl: finalUrl }, stillActive);
+                if (binding === DEADLINE_PASSED) return deadlineResolveFailure(current, 'existing-tab');
                 const updated = /** @type {WebAiSession} */ (getSession(sessionId));
                 return {
                     mismatch: false,
@@ -689,18 +764,54 @@ export async function reattachSessionPage(deps, sessionId) {
  * @returns {Promise<T>}
  */
 export async function withSessionPage(deps, sessionId, fn) {
-    const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true });
+    return withSessionPageGuarded(deps, sessionId, fn, {});
+}
+
+/**
+ * The deadline-aware form: watch, resume and MCP poll run under a stored
+ * deadline, and the recovery inside the resolver performs binding writes.
+ * `stillActive` is threaded down so those writes are refused under the store
+ * lock once the deadline has passed — the resolver's own pre-checks say
+ * nothing about the moment a contended write lands.
+ *
+ * @template T
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @param {(ctx: ResolvedPage<T>) => Promise<T> | T} fn
+ * @param {{ stillActive?: () => boolean }} [options]
+ * @returns {Promise<T>}
+ */
+export async function withSessionPageGuarded(deps, sessionId, fn, options = {}) {
+    const stillActive = options.stillActive;
+    const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true, stillActive });
     if (/** @type {any} */ (first).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, first);
     if (first.mismatch) throw new Error(`Session ${sessionId} resolver returned mismatch with allowNavigate=true`);
     try {
         return await fn(/** @type {ResolvedPage<T>} */ ({ page: first.page, targetId: first.targetId, session: first.session }));
     } catch (err) {
         if (!isPageDeathError(err)) throw err;
-        const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true });
+        const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true, stillActive });
         if (/** @type {any} */ (recovered).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, recovered);
         if (recovered.mismatch) throw new Error(`Session ${sessionId} recovery resolver returned mismatch with allowNavigate=true`);
         return fn(/** @type {ResolvedPage<T>} */ ({ page: recovered.page, targetId: recovered.targetId, session: recovered.session }));
     }
+}
+
+/**
+ * The recovery predicate for a session bounded by a STORED deadline.
+ *
+ * Watch, resume and MCP poll do not hold a poller run token while the tab is
+ * being recovered — the authority there is the absolute `deadlineAt` on the
+ * session row. No deadline means always active (a session that never promised
+ * a bound cannot lose one).
+ *
+ * @param {{ deadlineAt?: string|null }|null|undefined} session
+ * @returns {() => boolean}
+ */
+export function storedDeadlineStillActive(session) {
+    const parsed = Date.parse(session?.deadlineAt || '');
+    if (!Number.isFinite(parsed)) return () => true;
+    return () => Date.now() < parsed;
 }
 
 /**

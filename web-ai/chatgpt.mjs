@@ -10,11 +10,13 @@ import { INPUT_SELECTORS as CHATGPT_COMPOSER_SELECTORS } from './chatgpt-compose
 import {
     bindSessionToTab,
     createSession,
+    DEADLINE_PASSED,
     findActiveSession,
     getBaseline,
     getLatestBaseline,
     getSession,
     markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
     resolveFileArtifactPolicy,
     resolveTimeoutBudgetSec,
@@ -23,6 +25,7 @@ import {
     storedDeadlineRemainderMs,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
 import { readSessionAsync } from './session-store.mjs';
 import { WebAiError } from './errors.mjs';
@@ -49,7 +52,7 @@ import { captureCopiedResponseText, CHATGPT_COPY_SELECTORS, preferCopiedText } f
 import { withAnswerArtifact } from './answer-artifact.mjs';
 import { resolveTargetForIntent } from './target-resolver.mjs';
 import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTraceSteps } from './action-trace.mjs';
-import { appendTraceToSession } from './trace-persistence.mjs';
+import { appendTraceToSession, appendTraceToSessionAsync } from './trace-persistence.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
 import { waitForConversationReady, isProviderUrl, shouldNavigateToRequestedProviderUrl, waitForPageUrl } from './navigation-ready.mjs';
 import { collectImages, isImageOnlyGeneratedImageChromeText } from './chatgpt-images.mjs';
@@ -1134,7 +1137,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
                             copyTarget: /** @type {any} */ (copyResolution?.target || null),
                         });
-                        traceSummary = commitIfActive(() => persistResolverTraceForSession(session, copyTraceCtx));
+                        traceSummary = await persistResolverTraceForSessionAsync(session, copyTraceCtx, isActiveRun);
                         const copiedText = preferCopiedText(latest, copied);
                         if (copiedText) {
                             answerText = cleanAssistantText(copiedText);
@@ -1231,7 +1234,14 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         if (!await paceTick(wake)) break;
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) commitIfActive(() => updateSession(session.sessionId, { status: 'crashed' }));
+                if (session) {
+                    // Awaited form: the sync write took the blocking lock, so a
+                    // contended acquire froze the deadline timer, and the gate
+                    // taken BEFORE the wait said nothing about the moment the
+                    // write landed. The predicate is re-checked under the lock.
+                    const crashed = await updateSessionAsync(session.sessionId, { status: 'crashed' }, isActiveRun);
+                    if (crashed === DEADLINE_PASSED) throw POLL_EXPIRED;
+                }
                 return mergeObservationWarnings({
                     ok: false, vendor, status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -1277,7 +1287,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'recovery-deferred-streaming',
                     streamingState: 'streaming',
                     observations,
-                    commit: commitIfActive,
+                    stillActive: isActiveRun,
                 });
             }
             // This path does not collect images. When the caller asked for a
@@ -1321,7 +1331,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'recovery-deferred-unverified',
                     streamingState: 'unknown',
                     observations,
-                    commit: commitIfActive,
+                    stillActive: isActiveRun,
                 });
             }
             const answerText = recovered.text;
@@ -1370,7 +1380,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'copy-markdown-deferred-streaming',
                     streamingState: 'streaming',
                     observations,
-                    commit: commitIfActive,
+                    stillActive: isActiveRun,
                 });
             }
             stableText = '';
@@ -1395,7 +1405,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                     warning: 'copy-markdown-deferred-unverified',
                     streamingState: 'unknown',
                     observations,
-                    commit: commitIfActive,
+                    stillActive: isActiveRun,
                 });
             }
             stableText = '';
@@ -1408,7 +1418,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
             copyTarget: /** @type {any} */ (copyResolution?.target || null),
         });
-        const traceSummary = commitIfActive(() => persistResolverTraceForSession(session, copyTraceCtx));
+        const traceSummary = await persistResolverTraceForSessionAsync(session, copyTraceCtx, isActiveRun);
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
@@ -1436,9 +1446,14 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                 responseStableMs: Date.now() - stableSince,
             });
         }
-        const timedOutSession = session ? commitIfActive(() => markSessionTimeout(session.sessionId, {
+        // Awaited + post-lock gated: the sync form decided before the blocking
+        // lock, so a loser could still record a timeout after its caller
+        // returned. DEADLINE_PASSED keeps the throw semantics of the old gate.
+        const timedOutRow = session ? await markSessionTimeoutAsync(session.sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-        })) : null;
+        }, isActiveRun) : null;
+        if (timedOutRow === DEADLINE_PASSED) throw POLL_EXPIRED;
+        const timedOutSession = timedOutRow === DEADLINE_PASSED ? null : timedOutRow;
         return mergeObservationWarnings({
             ok: false,
             vendor,
@@ -1456,9 +1471,12 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
             error: 'timed out waiting for answer',
         }, observations);
     }
-    const timedOutSession = session ? commitIfActive(() => markSessionTimeout(session.sessionId, {
+    // Same contract as the copy-markdown branch above: gate under the lock.
+    const timedOutRow = session ? await markSessionTimeoutAsync(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-    })) : null;
+    }, isActiveRun) : null;
+    if (timedOutRow === DEADLINE_PASSED) throw POLL_EXPIRED;
+    const timedOutSession = timedOutRow === DEADLINE_PASSED ? null : timedOutRow;
     return mergeObservationWarnings({
         ok: false,
         vendor,
@@ -1861,12 +1879,41 @@ function persistResolverTrace(sessionId, traceCtx) {
 }
 
 /**
+ * The awaited form, for the poll path: the sync form's store read and write
+ * both take the blocking lock, which freezes the deadline timer while it is
+ * contended. `stillActive` is re-checked under the lock; a losing run gets no
+ * trace write and a summary built from its own steps only.
+ *
+ * @param {any} sessionId
+ * @param {any} traceCtx
+ * @param {() => boolean} [stillActive]
+ */
+async function persistResolverTraceAsync(sessionId, traceCtx, stillActive) {
+    const steps = getSessionTrace(traceCtx);
+    if (!steps.length) return null;
+    const row = await appendTraceToSessionAsync(sessionId, steps, stillActive);
+    if (row === DEADLINE_PASSED) throw POLL_EXPIRED;
+    const trace = /** @type {any} */ (row && typeof row === 'object' ? row.trace : null);
+    return summarizeTraceSteps(sessionId, /** @type {any} */ (trace?.length ? trace : steps));
+}
+
+/**
  * @param {any} session
  * @param {any} traceCtx
  */
 function persistResolverTraceForSession(session, traceCtx) {
     if (!session?.sessionId || !traceCtx) return null;
     return persistResolverTrace(session.sessionId, traceCtx);
+}
+
+/**
+ * @param {any} session
+ * @param {any} traceCtx
+ * @param {() => boolean} [stillActive]
+ */
+async function persistResolverTraceForSessionAsync(session, traceCtx, stillActive) {
+    if (!session?.sessionId || !traceCtx) return null;
+    return persistResolverTraceAsync(session.sessionId, traceCtx, stillActive);
 }
 
 /**
@@ -2060,7 +2107,7 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
 /**
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
-async function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, commit }) {
+async function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, stillActive }) {
     // Awaited: this runs inside the poll loop, under the armed deadline.
     const current = (await readSessionAsync(session.sessionId)) || session;
     // The session write and the returned envelope must carry the SAME warnings.
@@ -2073,16 +2120,17 @@ async function buildDeferredPollingResult({ vendor, page, session, baseline, ans
     for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
     // Gated like every other post-deadline write: a loser reaching this path
     // after the wrapper returned would otherwise move the session back to
-    // `polling` under a caller who was already told the poll timed out.
-    const write = () => updateSession(session.sessionId, {
+    // `polling` under a caller who was already told the poll timed out. The
+    // gate runs INSIDE the awaited lock — a pre-acquire check said nothing
+    // about the moment the write landed.
+    const written = await updateSessionAsync(session.sessionId, {
         status: 'polling',
         answer: null,
         completedAt: null,
         lastStreamingState: streamingState,
         warnings: storedWarnings,
-    });
-    if (commit) commit(write);
-    else write();
+    }, stillActive);
+    if (written === DEADLINE_PASSED) throw POLL_EXPIRED;
     return {
         ok: true,
         vendor,
