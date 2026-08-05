@@ -8,6 +8,8 @@ import {
     insertSession,
     listStoredSessions,
     listStoredSessionsAsync,
+    mutateSessionAsync,
+    DEADLINE_PASSED,
     patchSession,
     pruneSessions,
 } from './session-store.mjs';
@@ -268,6 +270,48 @@ export function updateSession(sessionId, patch = {}) {
 }
 
 /**
+ * Compute the effective patch for a session update against the CURRENT row.
+ *
+ * Shared by the sync and async forms so the ChatGPT conversation-URL filter
+ * cannot drift between them: a non-durable URL is dropped from the patch no
+ * matter which lock the write goes through.
+ *
+ * @param {WebAiSession} current
+ * @param {Partial<WebAiSession> & Record<string, unknown>} patch
+ * @returns {Partial<WebAiSession> & Record<string, unknown>}
+ */
+function buildSessionPatch(current, patch) {
+    const nextPatch = { ...patch };
+    if (
+        current.vendor === 'chatgpt' &&
+        Object.hasOwn(nextPatch, 'conversationUrl') &&
+        !isDurableConversationUrl(/** @type {string|null|undefined} */ (nextPatch.conversationUrl))
+    ) {
+        delete nextPatch.conversationUrl;
+    }
+    return { ...nextPatch, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * The awaited, deadline-aware form of {@link updateSession}.
+ *
+ * The sync form reads, decides, then takes the blocking lock — so its decision
+ * is made against a row that can change while the lock is waited for, and the
+ * wait itself stops the event loop. Here both the decision and the write
+ * happen inside the awaited lock, and `stillActive` is re-checked once the
+ * lock is held: a caller whose deadline passed during the wait gets
+ * `DEADLINE_PASSED` back and nothing is written.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & Record<string, unknown>} [patch]
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function updateSessionAsync(sessionId, patch = {}, stillActive) {
+    return mutateSessionAsync(sessionId, (current) => buildSessionPatch(current, patch), stillActive);
+}
+
+/**
  * Mark an incomplete session as timed out without downgrading completed work.
  *
  * @param {string} sessionId
@@ -277,6 +321,20 @@ export function updateSession(sessionId, patch = {}) {
 export function markSessionTimeout(sessionId, patch = {}) {
     const session = getSession(sessionId);
     if (!session) return null;
+    return updateSession(sessionId, buildTimeoutPatch(session, patch));
+}
+
+/**
+ * Decide what a timeout write should actually record, given the current row.
+ *
+ * Kept separate so the sync and async timeout paths share one rule: completed
+ * evidence is never downgraded to `timeout`, only annotated.
+ *
+ * @param {WebAiSession} session
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} patch
+ * @returns {Partial<WebAiSession> & Record<string, unknown>}
+ */
+function buildTimeoutPatch(session, patch) {
     const { warning, warnings: patchWarnings, ...sessionPatch } = patch;
     const warnings = mergeWarnings(session.warnings || [], patchWarnings || [], warning);
     const hasCompletedEvidence = session.status === 'complete' ||
@@ -284,17 +342,40 @@ export function markSessionTimeout(sessionId, patch = {}) {
         Boolean(session.completedAt) ||
         Boolean(session.answer);
     if (hasCompletedEvidence) {
-        return updateSession(sessionId, {
+        return {
             warnings: mergeWarnings(warnings, ['timeout-after-complete-ignored']),
             status: session.status === 'completed' ? 'completed' : 'complete',
-        });
+        };
     }
-    return updateSession(sessionId, {
-        ...sessionPatch,
-        status: 'timeout',
-        warnings,
-    });
+    return { ...sessionPatch, status: 'timeout', warnings };
 }
+
+/**
+ * The awaited, deadline-aware form of {@link markSessionTimeout}.
+ *
+ * The completed-evidence decision is made against the row read INSIDE the
+ * lock — the sync form decides before acquiring, so a run that completed while
+ * the lock was waited for could still be downgraded. `stillActive` follows the
+ * same post-lock contract as {@link updateSessionAsync}. Note the predicate
+ * semantics for timeout bookkeeping: the write that RECORDS an expiry is
+ * usually made by the run that owns the outcome, so callers pass a predicate
+ * only when this write belongs to a run that can lose a race (a detached
+ * loser must not write), not for the authoritative timeout record itself.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} [patch]
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function markSessionTimeoutAsync(sessionId, patch = {}, stillActive) {
+    return mutateSessionAsync(
+        sessionId,
+        (current) => buildSessionPatch(current, buildTimeoutPatch(current, patch)),
+        stillActive,
+    );
+}
+
+export { DEADLINE_PASSED };
 
 /**
  * @param {unknown[]} base

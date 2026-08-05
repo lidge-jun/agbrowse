@@ -514,6 +514,40 @@ export function appendSessionArtifactsLocked(sessionId, descriptors) {
 }
 
 /**
+ * The deadline-aware read-mutate-write primitive.
+ *
+ * The awaited lock closed the event-loop stall, but it opened a window of its
+ * own: a `stillActive` check taken before the acquire says nothing about the
+ * moment the write starts, because the wait itself is where a deadline passes.
+ * So the predicate runs AFTER the lock is held, and the mutation decision is
+ * made against the row read inside that same lock — not against whatever the
+ * caller saw earlier.
+ *
+ * `mutate` receives the current row and returns the patch to apply, or `null`
+ * to leave the row untouched (still returns the current row). Returning the
+ * patch rather than a whole row keeps the primitive append-safe: two racers
+ * each patch what they read under the lock, so neither erases the other.
+ *
+ * @param {string} sessionId
+ * @param {(current: WebAiSession) => (Partial<WebAiSession> & Record<string, unknown>)|null} mutate
+ * @param {() => boolean} [stillActive] re-checked once the lock is held
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function mutateSessionAsync(sessionId, mutate, stillActive) {
+    return withStoreLockAsync(() => {
+        if (stillActive?.() === false) return DEADLINE_PASSED;
+        const store = readSessionStore();
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+        if (idx < 0) return null;
+        const patch = mutate(store.sessions[idx]);
+        if (!patch) return store.sessions[idx];
+        store.sessions[idx] = { ...store.sessions[idx], ...patch };
+        writeSessionStore(store);
+        return store.sessions[idx];
+    });
+}
+
+/**
  * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
  * @returns {WebAiSession[]}
  */
