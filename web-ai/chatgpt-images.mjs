@@ -1,5 +1,6 @@
 // @ts-check
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import { resolveArtifactsDir, saveImageArtifact, appendArtifactRecord, appendArtifactRecordAsync } from './session-artifacts.mjs';
 import { DEADLINE_PASSED } from './session-store.mjs';
@@ -264,6 +265,10 @@ export async function downloadGeneratedImages(cdpSession, images, { outputPath, 
                 writeFileSync(outputPaths[i], buffer);
                 savePath = outputPaths[i];
             } else if (sessionId) {
+                // Checked BEFORE the file is written: a run that already lost
+                // must not leave an artifact on disk that no record will ever
+                // point at.
+                if (stillActive?.() === false) continue;
                 const desc = saveImageArtifact(sessionId, {
                     filename: `image-${i + 1}${ext}`,
                     buffer,
@@ -272,7 +277,14 @@ export async function downloadGeneratedImages(cdpSession, images, { outputPath, 
                 });
                 if (stillActive) {
                     const appended = await appendArtifactRecordAsync(sessionId, desc, stillActive);
-                    if (appended === DEADLINE_PASSED) continue;
+                    if (appended === DEADLINE_PASSED) {
+                        // The deadline passed between the save and the locked
+                        // append. The record was refused, so the file must go
+                        // too — a caller told "timeout" must not find a
+                        // completed-looking artifact on disk.
+                        await rm(join(resolveArtifactsDir(sessionId), desc.path), { force: true }).catch(() => undefined);
+                        continue;
+                    }
                 } else {
                     appendArtifactRecord(sessionId, desc);
                 }

@@ -27,7 +27,7 @@ import {
     updateSession,
     updateSessionAsync,
 } from './session.mjs';
-import { readSessionAsync } from './session-store.mjs';
+import { mutateSessionAsync, readSessionAsync } from './session-store.mjs';
 import { WebAiError } from './errors.mjs';
 import { POLL_EXPIRED, monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
@@ -1077,7 +1077,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
         // evidence, so it requires true quiet: weak activity is still activity.
         if (activity.strength === 'none' && latestSnapshot && session && input.outputImage !== undefined
             && isImageOnlyGeneratedImageChromeText(latest)) {
-            const imageResult = await commitAsyncIfActive(() => collectGeneratedImageAnswer(deps, input, session, baseline));
+            const imageResult = await commitAsyncIfActive(() => collectGeneratedImageAnswer(deps, input, session, baseline, isActiveRun));
             if (imageResult) {
                 const imageWarnings = mergeObservationList(imageResult.warnings, observations);
                 const imageFileCapture = await captureFileArtifacts({
@@ -1163,6 +1163,7 @@ async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_I
                                 outputPath: input.outputImage || null,
                                 sessionId: input.outputImage ? null : session.sessionId,
                                 waitTimeoutMs: 60_000,
+                                stillActive: isActiveRun,
                             }));
                             warnings.push(...(imgResult.warnings || []));
                             if (imgResult.errors?.length) {
@@ -2070,7 +2071,7 @@ async function readAssistantSnapshotsSplit(page) {
  * @param {any} baseline
  * @returns {Promise<{ answerText: string, warnings: string[] } | null>}
  */
-async function collectGeneratedImageAnswer(deps, input, session, baseline) {
+async function collectGeneratedImageAnswer(deps, input, session, baseline, stillActive) {
     const cdp = await deps.getCdpSession?.();
     if (!cdp) throw new WebAiError({
         errorCode: 'provider.image-output',
@@ -2085,6 +2086,7 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
             outputPath: input.outputImage || null,
             sessionId: input.outputImage ? null : session.sessionId,
             waitTimeoutMs: 60_000,
+            stillActive,
         });
         if (result.errors?.length) throw new WebAiError({
             errorCode: 'provider.image-output',
@@ -2108,27 +2110,27 @@ async function collectGeneratedImageAnswer(deps, input, session, baseline) {
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
 async function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, stillActive }) {
-    // Awaited: this runs inside the poll loop, under the armed deadline.
-    const current = (await readSessionAsync(session.sessionId)) || session;
-    // The session write and the returned envelope must carry the SAME warnings.
-    // Merging the ledger into the return value afterwards would leave the stored
-    // session disagreeing with what the caller sees.
     const warnings = observations
         ? mergeObservationList([warning], observations)
         : [warning];
-    let storedWarnings = current.warnings || [];
-    for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
     // Gated like every other post-deadline write: a loser reaching this path
     // after the wrapper returned would otherwise move the session back to
     // `polling` under a caller who was already told the poll timed out. The
     // gate runs INSIDE the awaited lock — a pre-acquire check said nothing
-    // about the moment the write landed.
-    const written = await updateSessionAsync(session.sessionId, {
-        status: 'polling',
-        answer: null,
-        completedAt: null,
-        lastStreamingState: streamingState,
-        warnings: storedWarnings,
+    // about the moment the write landed. The warning merge is made against the
+    // row read INSIDE that same lock — a pre-lock read let a warning appended
+    // between the two locks be erased by this write.
+    const written = await mutateSessionAsync(session.sessionId, (current) => {
+        let storedWarnings = current.warnings || [];
+        for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
+        return {
+            status: 'polling',
+            answer: null,
+            completedAt: null,
+            lastStreamingState: streamingState,
+            warnings: storedWarnings,
+            updatedAt: new Date().toISOString(),
+        };
     }, stillActive);
     if (written === DEADLINE_PASSED) throw POLL_EXPIRED;
     return {

@@ -1,9 +1,12 @@
 // @ts-check
 import { createHash } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
     artifactStillOnDisk,
     commitStagedArtifacts,
     discardStagedArtifacts,
+    resolveArtifactsDir,
     stageFileArtifact,
     trySaveFileArtifact,
     appendArtifactRecordAsync,
@@ -509,6 +512,12 @@ export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
             sourceUrl: c.sourceUrl,
             index: i,
         });
+        // Checked BEFORE the save: a run that already lost must not write a
+        // file that no record will point at.
+        if (stillActive?.() === false) {
+            warnings.push('file-artifact-deadline-exceeded');
+            continue;
+        }
         const res = trySaveFileArtifact(sessionId, {
             filename,
             buffer: got.buffer,
@@ -522,6 +531,9 @@ export async function saveAssistantDownloadableFiles(cdpSession, _deps, {
         const appended = await appendArtifactRecordAsync(sessionId, res.descriptor, stillActive);
         if (appended === DEADLINE_PASSED) {
             warnings.push('file-artifact-deadline-exceeded');
+            // The record was refused, so the file must go too: a caller told
+            // "timeout" must not find a completed-looking artifact on disk.
+            await rm(join(resolveArtifactsDir(sessionId), res.descriptor.path), { force: true }).catch(() => undefined);
             continue;
         }
         files.push(res.descriptor);

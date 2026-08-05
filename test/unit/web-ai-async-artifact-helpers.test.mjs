@@ -103,3 +103,88 @@ describe('deadline-aware artifact helpers', () => {
         expect(getSession(session.sessionId)).toEqual(before);
     });
 });
+
+describe('refused appends leave no artifact on disk', () => {
+    it('removes the image file when the deadline passes between save and append', async () => {
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+        const { downloadGeneratedImages } = await import('../../web-ai/chatgpt-images.mjs');
+        const { existsSync, readdirSync } = await import('node:fs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' });
+
+        // Alive until the save has happened, expired at the locked append: the
+        // save-side pre-check passes, the post-lock re-check refuses. The undo
+        // must then remove the file the save just wrote.
+        let checks = 0;
+        const stillActive = () => { checks += 1; return checks <= 1; };
+
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = /** @type {any} */ (async () => new Response(Buffer.from('png-bytes'), {
+            status: 200, headers: { 'content-type': 'image/png' },
+        }));
+        try {
+            const results = await downloadGeneratedImages(
+                /** @type {any} */ ({ send: async () => ({ cookies: [] }) }),
+                // A URL the allowlist accepts — a rejected one is skipped
+                // before the save and would keep this test green with the
+                // cleanup deleted.
+                [{ url: 'https://chatgpt.com/backend-api/estuary/content?id=file_deadline1', fileId: 'file_deadline1' }],
+                { sessionId: session.sessionId, stillActive },
+            );
+            expect(results).toEqual([]);
+            // The predicate must have been consulted twice: once before the
+            // save (passed) and once inside the locked append (refused).
+            // One check would mean the candidate never reached the save.
+            expect(checks).toBeGreaterThanOrEqual(2);
+            const dir = resolveArtifactsDir(session.sessionId);
+            const leftover = existsSync(dir) ? readdirSync(dir).filter((name) => name.startsWith('image-')) : [];
+            expect(leftover).toEqual([]);
+            expect(getSession(session.sessionId).artifacts ?? []).toEqual([]);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    it('removes the downloaded file when the non-strict append is refused', async () => {
+        const { createSession, getSession } = await import('../../web-ai/session.mjs');
+        const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+        const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+        const { existsSync, readdirSync } = await import('node:fs');
+        const session = createSession({ vendor: 'chatgpt', prompt: 'hello', attachmentPolicy: 'inline-only' });
+
+        // Alive before the save, expired inside the locked append — the
+        // PRODUCTION path must undo the file it just saved. Doing the rm in
+        // the test would keep it green with the production cleanup deleted.
+        let checks = 0;
+        const stillActive = () => { checks += 1; return checks <= 1; };
+
+        // CDP detection returns one candidate; the download itself is fetched.
+        const cdpSession = /** @type {any} */ ({
+            send: async (method) => {
+                if (method === 'Runtime.evaluate') {
+                    return { result: { value: [{ href: 'https://chatgpt.com/backend-api/estuary/content?id=file_dl1', download: 'report.txt', text: 'report.txt' }] } };
+                }
+                if (method === 'Network.getCookies') return { cookies: [] };
+                return {};
+            },
+        });
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = /** @type {any} */ (async () => new Response(Buffer.from('late-bytes'), {
+            status: 200, headers: { 'content-type': 'text/plain' },
+        }));
+        try {
+            const out = await saveAssistantDownloadableFiles(cdpSession, {}, {
+                sessionId: session.sessionId, baselineAssistantCount: 0, stillActive,
+            });
+            expect(out.files).toEqual([]);
+            expect(out.warnings).toContain('file-artifact-deadline-exceeded');
+            expect(checks).toBeGreaterThanOrEqual(2);
+            const dir = resolveArtifactsDir(session.sessionId);
+            const leftover = existsSync(dir) ? readdirSync(dir) : [];
+            expect(leftover).toEqual([]);
+            expect(getSession(session.sessionId).artifacts ?? []).toEqual([]);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+});
