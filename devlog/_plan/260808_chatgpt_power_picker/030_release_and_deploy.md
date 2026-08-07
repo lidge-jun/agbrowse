@@ -102,7 +102,7 @@ git commit -C 7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b
 test -z "$(git diff-tree --no-commit-id --name-only -r HEAD | grep '^devlog/' || true)"
 ```
 
-Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
+Do not resolve a scoped-patch conflict by hand; stop and narrow or drop the candidate. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration. Never merge the whole branch.
 6. Rerun `git merge-tree` or an equivalent no-commit cherry-pick dry run and the full release gates on the resulting main tree.
 7. Let `npm run release -- patch --publish` create the version/count commit, push main, dispatch `release.yml`, and watch it. Do not manually publish from the laptop.
 
