@@ -79,13 +79,13 @@ git commit -C edce15e0be045f23a476d9712a08dce793c5e6c1
 
 No generated `structure/str_func.md`, old CLI integration test, or unrelated docs are imported by those replacements; current docs arrive in the scoped `7b1f1cc` replacement and `npm run fix:counts` regenerates counts. If any scoped patch conflicts, stop and inspect rather than broadening it.
 
-Apply `76e4793` as a scoped replacement:
+Apply `76e4793` as a source/test scoped replacement. A full no-commit cherry-pick still merges generated counts before the two goalplan paths can be removed, so do not invoke it:
 
 ```bash
-git cherry-pick --no-commit 76e4793b1aba51f6966b9569ca8d25cafd010fae
-git restore --staged --worktree --source=HEAD -- \
-  .codexclaw/goalplans/agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o/goalplan.json \
-  .codexclaw/goalplans/agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o/ledger.jsonl
+git diff 76e4793^ 76e4793 -- \
+  web-ai/chatgpt-model.mjs web-ai/chatgpt.mjs web-ai/mcp-server.mjs \
+  test/unit/web-ai-chatgpt-model.test.mjs \
+  test/integration/web-ai-mcp-server.test.mjs | git apply --index -3
 git commit -C 76e4793b1aba51f6966b9569ca8d25cafd010fae
 test -z "$(git diff-tree --no-commit-id --name-only -r HEAD | grep '^.codexclaw/' || true)"
 ```
