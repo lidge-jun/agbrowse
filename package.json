@@ -20,7 +20,9 @@
     "devlog/",
     "!devlog/context/redesign-candidates/**",
     "vitest.config.mjs",
-    "scripts/postinstall.mjs"
+    "scripts/postinstall.mjs",
+    "scripts/agent-driven.mjs",
+    "scripts/interactive-confirm.mjs"
   ],
   "publishConfig": {
     "access": "public"
