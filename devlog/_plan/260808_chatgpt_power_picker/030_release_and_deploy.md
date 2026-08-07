@@ -32,8 +32,9 @@ Candidate prerequisite closure, frozen before the dry run:
 2. `f8e8b9b6751d2b19b3840455d2fbdad641448256` — Chat family/tier selector.
 3. `4dad538dd62a83b1fb656d8040cf0a2b243bdbf2` — Work/unresolved surface guard.
 4. `edce15e0be045f23a476d9712a08dce793c5e6c1` — canonical locale projections used by the selector.
-5. `661e6257530f48198abbd73583cf4d58df3625d7` — opt-in Work→Chat normalization dependency.
-6. `76e4793b1aba51f6966b9569ca8d25cafd010fae` — family-aware probe/MCP contract.
+5. `76e4793b1aba51f6966b9569ca8d25cafd010fae` — family-aware probe/MCP contract.
+
+`661e625` was removed from the closure after the dry run: it changes Work normalization wiring but not `chatgpt-model.mjs`, and its `chatgpt.mjs` conflict proved it is adjacent rather than required by this picker repair.
 
 The prerequisite path set is a coverage aid, not a closure algorithm; `web-ai/cli.mjs` and docs are shared surfaces and therefore return unrelated commits. The frozen SHA list above is authoritative and the dry-run cherry-pick is the executable dependency proof. Coverage paths include:
 
@@ -57,7 +58,7 @@ test/fixtures/provider-dom/chatgpt-gpt56-work.html
 2. Fetch; rebase/merge only after comparing current remote tips. Push `dev` and verify remote SHA.
 3. No workflow is reachable from a plain `dev` push: `contract-drift` is PR/schedule-only, Pages is main-only, and `release.yml` dispatches main. Therefore verify `origin/dev` equals the locally gated exact SHA, retain the terminal 2,202-test/17-gate evidence for that SHA, and use the integrated-main release workflow as the remote CI proof. Do not claim a nonexistent dev-push CI run.
 4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Use the path log only to inspect surrounding history, then prove the frozen closure by applying the nine entries below in order on a throwaway detached branch.
-5. Cherry-pick only `4786d54` normally. The full `f8e8b9b` dry run conflicts in the older broad CLI integration test, so apply the next four prerequisites as source/test scoped replacements and regenerate counts after the stack:
+5. Cherry-pick only `4786d54` normally. The full `f8e8b9b` dry run conflicts in the older broad CLI integration test, so apply the next two source prerequisites as source/test scoped replacements and regenerate counts after the stack:
 
 ```bash
 git diff f8e8b9b^ f8e8b9b -- \
@@ -71,14 +72,9 @@ git diff 4dad538^ 4dad538 -- \
 git commit -C 4dad538dd62a83b1fb656d8040cf0a2b243bdbf2
 
 git diff edce15e^ edce15e -- \
-  web-ai/chatgpt-model.mjs test/unit/web-ai-chatgpt-locale.test.mjs \
-  test/integration/activity-state-transport.test.mjs | git apply --index -3
+  web-ai/chatgpt-model.mjs test/unit/web-ai-chatgpt-locale.test.mjs | \
+  git apply --index -3
 git commit -C edce15e0be045f23a476d9712a08dce793c5e6c1
-
-git diff 661e625^ 661e625 -- \
-  web-ai/chatgpt-work-picker.mjs web-ai/chatgpt.mjs web-ai/cli.mjs \
-  test/unit/web-ai-chat-surface-normalization.test.mjs | git apply --index -3
-git commit -C 661e6257530f48198abbd73583cf4d58df3625d7
 ```
 
 No generated `structure/str_func.md`, old CLI integration test, or unrelated docs are imported by those replacements; current docs arrive in the scoped `7b1f1cc` replacement and `npm run fix:counts` regenerates counts. If any scoped patch conflicts, stop and inspect rather than broadening it.
