@@ -126,7 +126,15 @@ jobs:
         run: git diff --check
 
       - name: Verify package contents
-        run: npm pack --dry-run
+        run: |
+          set -euo pipefail
+
+          PACK_JSON="$RUNNER_TEMP/agbrowse-pack.json"
+          INSTALL_PREFIX="$RUNNER_TEMP/agbrowse-pack-smoke"
+          npm pack --json > "$PACK_JSON"
+          TARBALL="$(node -e "const fs=require('node:fs'); const result=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(result[0].filename)" "$PACK_JSON")"
+          npm install -g "./$TARBALL" --prefix "$INSTALL_PREFIX"
+          AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null
 
       - name: Publish to npm
         run: |
@@ -149,6 +157,9 @@ jobs:
               echo "registry version=${VERSION}"
               test "$VERSION" = "$RELEASE_VERSION"
               npm dist-tag ls "$PACKAGE_NAME"
+              INSTALL_PREFIX="$RUNNER_TEMP/agbrowse-registry-smoke"
+              npm install -g "${PACKAGE_NAME}@${RELEASE_VERSION}" --prefix "$INSTALL_PREFIX"
+              AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null
               exit 0
             fi
             echo "::notice::${PACKAGE_NAME}@${RELEASE_VERSION} not visible yet (attempt ${attempt}/30)"

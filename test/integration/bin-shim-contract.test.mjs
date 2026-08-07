@@ -77,11 +77,26 @@ describe('P02 — bin shim contract', () => {
             'bin/',
             'devlog/',
             'docs/',
+            'scripts/agent-driven.mjs',
+            'scripts/interactive-confirm.mjs',
             'scripts/postinstall.mjs',
             'skills/',
             'structure/',
             'vitest.config.mjs',
             'web-ai/',
         ].sort());
+    });
+
+    it('packages every relative module imported by postinstall', () => {
+        const postinstall = readFileSync(resolve(root, 'scripts/postinstall.mjs'), 'utf8');
+        const relativeImports = [...postinstall.matchAll(/from\s+['"](\.\/[^'"]+)['"]/g)]
+            .map(match => match[1]);
+
+        expect(relativeImports.length).toBeGreaterThan(0);
+        for (const importPath of relativeImports) {
+            const packedPath = `scripts/${importPath.slice(2)}`;
+            expect(pkg.files).toContain(packedPath);
+            expect(() => statSync(resolve(root, packedPath))).not.toThrow();
+        }
     });
 });
