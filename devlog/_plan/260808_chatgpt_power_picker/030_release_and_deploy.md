@@ -2,6 +2,14 @@
 
 Depends on: WP2 DONE, clean scoped diff, current `origin/dev` re-fetched.
 
+## P stale check at WP3 entry
+
+- Fresh fetch: `origin/dev=6cb58681771e273221a3b65089a3cf3a433890bf`, unchanged from discovery; local `dev=7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b` is a four-commit fast-forward.
+- `origin/main=fd125841b46441cf59adf74ff61cdd68827220d7`; main/dev remain diverged, so the bounded cherry-pick worktree path remains mandatory.
+- All 17 release gates, 2,202 tests, release doc/count gates, and pack dry-run passed at `7b1f1cc`.
+- The final independent verdict is `PASS-for-push / PARTIAL-live`; `NEEDS_HUMAN_LOGIN` is not a code gate failure but remains open and must appear in release proof.
+- At this P revision, this `030` plan carries the audit amendments and must be committed before P→A. After that commit, the only tracked dirty paths must be the pre-existing `.codexclaw` state.
+
 ## Branch/integration facts to re-check
 
 - `dev` is the development integration branch, but `scripts/release.sh` requires a clean `main` checkout.
@@ -10,18 +18,44 @@ Depends on: WP2 DONE, clean scoped diff, current `origin/dev` re-fetched.
 
 ## Commit stack
 
-1. `test(web-ai): capture the Chat Power picker contract` — fixture + RED-capable tests only.
-2. `fix(web-ai): support the Chat Power picker shell` — selector + family enums/help wiring.
-3. `docs(web-ai): document the current Chat picker contract` — skills/README/structure/static docs/devlog closeout.
-4. Release commit produced by `scripts/release.sh` on `main` only.
+Push all five local docs/runtime commits after this plan commit. The bounded main release integration contains exactly these three scoped commits:
+
+1. `ea3eb34171714285efa9887ab2b81e85dcaeda93` — RED fixture/tests.
+2. `a2171c32a3b79ee072cfb75ccfc95e32aa13d56e` — selector/schema/help implementation.
+3. `7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b` — docs/eval/count sync.
+
+`8970ca2` and this WP3 plan commit remain dev-only process evidence. The release script creates the final version/count commit on `main`.
+
+Candidate prerequisite closure, frozen before the dry run:
+
+1. `4786d544f0eff06e198e4e7015f860b54b1c7c06` — base GPT-5.6 Chat/Work picker contract.
+2. `f8e8b9b6751d2b19b3840455d2fbdad641448256` — Chat family/tier selector.
+3. `4dad538dd62a83b1fb656d8040cf0a2b243bdbf2` — Work/unresolved surface guard.
+4. `edce15e0be045f23a476d9712a08dce793c5e6c1` — canonical locale projections used by the selector.
+5. `661e6257530f48198abbd73583cf4d58df3625d7` — opt-in Work→Chat normalization dependency.
+6. `76e4793b1aba51f6966b9569ca8d25cafd010fae` — family-aware probe/MCP contract.
+
+The prerequisite path set is exact:
+
+```text
+web-ai/chatgpt-model.mjs
+web-ai/product-surfaces.mjs
+web-ai/chatgpt.mjs
+web-ai/cli.mjs
+web-ai/tool-schema.mjs
+test/unit/web-ai-chatgpt-model.test.mjs
+test/unit/web-ai-product-surfaces.test.mjs
+test/unit/web-ai-tool-schema.test.mjs
+test/integration/web-ai-mcp-server.test.mjs
+```
 
 ## Remote workflow
 
 1. Inspect each commit with `git show --stat --oneline` and verify no unrelated dirty path is included.
 2. Fetch; rebase/merge only after comparing current remote tips. Push `dev` and verify remote SHA.
 3. Confirm dev CI on exact SHA. If a job fails, inspect logs and repair latest HEAD; never blind rerun.
-4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Compute the picker prerequisite closure with `git log --reverse origin/main..origin/dev -- <picker paths>` and prove each prerequisite is required by applying the new scoped commits in a throwaway dry-run branch.
-5. Cherry-pick only the audited picker prerequisite closure plus this unit's three scoped commits. Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
+4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Confirm the exact path log above yields only the six frozen prerequisite commits needed by the three scoped commits; prove it by cherry-picking those nine SHAs in order on a throwaway detached branch.
+5. Cherry-pick only the six frozen prerequisites plus `ea3eb34`, `a2171c3`, and `7b1f1cc`. Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
 6. Rerun `git merge-tree` or an equivalent no-commit cherry-pick dry run and the full release gates on the resulting main tree.
 7. Let `npm run release -- patch --publish` create the version/count commit, push main, dispatch `release.yml`, and watch it. Do not manually publish from the laptop.
 
