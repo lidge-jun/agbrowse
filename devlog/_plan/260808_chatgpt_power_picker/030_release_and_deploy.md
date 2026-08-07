@@ -55,7 +55,7 @@ test/fixtures/provider-dom/chatgpt-gpt56-work.html
 
 1. Inspect each commit with `git show --stat --oneline` and verify no unrelated dirty path is included.
 2. Fetch; rebase/merge only after comparing current remote tips. Push `dev` and verify remote SHA.
-3. Confirm dev CI on exact SHA. If a job fails, inspect logs and repair latest HEAD; never blind rerun.
+3. No workflow is reachable from a plain `dev` push: `contract-drift` is PR/schedule-only, Pages is main-only, and `release.yml` dispatches main. Therefore verify `origin/dev` equals the locally gated exact SHA, retain the terminal 2,202-test/17-gate evidence for that SHA, and use the integrated-main release workflow as the remote CI proof. Do not claim a nonexistent dev-push CI run.
 4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Use the path log only to inspect surrounding history, then prove the frozen closure by applying the nine entries below in order on a throwaway detached branch.
 5. Cherry-pick the first five frozen prerequisites normally. Apply `76e4793` as a scoped replacement:
 
