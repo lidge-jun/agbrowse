@@ -35,7 +35,7 @@ Candidate prerequisite closure, frozen before the dry run:
 5. `661e6257530f48198abbd73583cf4d58df3625d7` — opt-in Work→Chat normalization dependency.
 6. `76e4793b1aba51f6966b9569ca8d25cafd010fae` — family-aware probe/MCP contract.
 
-The prerequisite path set is exact:
+The prerequisite path set is a coverage aid, not a closure algorithm; `web-ai/cli.mjs` and docs are shared surfaces and therefore return unrelated commits. The frozen SHA list above is authoritative and the dry-run cherry-pick is the executable dependency proof. Coverage paths include:
 
 ```text
 web-ai/chatgpt-model.mjs
@@ -47,6 +47,8 @@ test/unit/web-ai-chatgpt-model.test.mjs
 test/unit/web-ai-product-surfaces.test.mjs
 test/unit/web-ai-tool-schema.test.mjs
 test/integration/web-ai-mcp-server.test.mjs
+test/fixtures/provider-dom/chatgpt-gpt56-chat.html
+test/fixtures/provider-dom/chatgpt-gpt56-work.html
 ```
 
 ## Remote workflow
@@ -54,8 +56,19 @@ test/integration/web-ai-mcp-server.test.mjs
 1. Inspect each commit with `git show --stat --oneline` and verify no unrelated dirty path is included.
 2. Fetch; rebase/merge only after comparing current remote tips. Push `dev` and verify remote SHA.
 3. Confirm dev CI on exact SHA. If a job fails, inspect logs and repair latest HEAD; never blind rerun.
-4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Confirm the exact path log above yields only the six frozen prerequisite commits needed by the three scoped commits; prove it by cherry-picking those nine SHAs in order on a throwaway detached branch.
-5. Cherry-pick only the six frozen prerequisites plus `ea3eb34`, `a2171c3`, and `7b1f1cc`. Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
+4. Create a fresh release worktree from current `origin/main`; never merge all of `dev` by default. Use the path log only to inspect surrounding history, then prove the frozen closure by applying the nine entries below in order on a throwaway detached branch.
+5. Cherry-pick the first five frozen prerequisites normally. Apply `76e4793` as a scoped replacement:
+
+```bash
+git cherry-pick --no-commit 76e4793b1aba51f6966b9569ca8d25cafd010fae
+git restore --staged --worktree --source=HEAD -- \
+  .codexclaw/goalplans/agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o/goalplan.json \
+  .codexclaw/goalplans/agbrowse-dev-pr-89-87-88-devlog-pabcd-wp1-docs-o/ledger.jsonl
+git commit -C 76e4793b1aba51f6966b9569ca8d25cafd010fae
+test -z "$(git diff-tree --no-commit-id --name-only -r HEAD | grep '^.codexclaw/' || true)"
+```
+
+Then cherry-pick `ea3eb34`, `a2171c3`, and `7b1f1cc`. Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
 6. Rerun `git merge-tree` or an equivalent no-commit cherry-pick dry run and the full release gates on the resulting main tree.
 7. Let `npm run release -- patch --publish` create the version/count commit, push main, dispatch `release.yml`, and watch it. Do not manually publish from the laptop.
 
