@@ -6,7 +6,7 @@ import { WebAiError } from './errors.mjs';
 /** @typedef {'instant'|'thinking'|'pro'} ModelChoice */
 /** @typedef {'medium'|'high'|'xhigh'} EffortChoice */
 /** @typedef {'chat'|'work'} ChatGptSurface */
-/** @typedef {'gpt-5.6-sol'|'gpt-5.5'|'gpt-5.4'|'gpt-5.3'|'o3'} FamilyChoice */
+/** @typedef {'gpt-5.6-sol'|'gpt-5.5'|'o3'} FamilyChoice */
 /** @typedef {{ label: string, retirementWarning?: string }} FamilyOptionConfig */
 /** @typedef {{ label: string|null, changed: boolean, verified: boolean }} FamilySelectionEvidence */
 /** @typedef {'chat'|'work'|'ambiguous'|'legacy'} ChatGptSurfaceDiscriminator */
@@ -244,8 +244,6 @@ const CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS = {
 export const CHATGPT_FAMILY_OPTIONS = Object.freeze({
     'gpt-5.6-sol': { label: 'GPT-5.6 Sol' },
     'gpt-5.5': { label: 'GPT-5.5' },
-    'gpt-5.4': { label: 'GPT-5.4', retirementWarning: 'Leaving on July 23' },
-    'gpt-5.3': { label: 'GPT-5.3' },
     o3: { label: 'o3' },
 });
 
@@ -253,8 +251,6 @@ export const CHATGPT_FAMILY_OPTIONS = Object.freeze({
 const FAMILY_ALIASES = Object.freeze({
     'gpt-5.6-sol': 'gpt-5.6-sol',
     'gpt-5.5': 'gpt-5.5',
-    'gpt-5.4': 'gpt-5.4',
-    'gpt-5.3': 'gpt-5.3',
     o3: 'o3',
 });
 
@@ -298,8 +294,12 @@ const PRO_UNENFORCED_LEGACY_EFFORTS = new Set([
 
 export const CHATGPT_SURFACE_RADIO_SELECTOR = 'button[role="radio"]';
 export const CHATGPT_CHAT_PICKER_TRIGGER_SELECTOR = 'button[aria-haspopup="menu"]';
-export const CHATGPT_OPEN_PICKER_CONTENT_SELECTOR =
-    '[role="menu"][data-state="open"] [data-testid="composer-intelligence-picker-content"]';
+const CHATGPT_POWER_PICKER_ROOT_SELECTOR =
+    '[role="menu"][data-state="open"]:has([role="menuitem"][aria-label="Power"])';
+export const CHATGPT_OPEN_PICKER_CONTENT_SELECTOR = [
+    '[role="menu"][data-state="open"] [data-testid="composer-intelligence-picker-content"]',
+    CHATGPT_POWER_PICKER_ROOT_SELECTOR,
+].join(', ');
 export const CHATGPT_WORK_PICKER_MARKER_SELECTOR = [
     '[data-testid="composer-model-picker-slider-simple-view"]',
     '[data-testid="composer-model-picker-slider-advanced-view"]',
@@ -816,6 +816,63 @@ function chatGptComposerMenuRoot(page) {
 }
 
 /**
+ * The current Chat picker is a Power shell whose Model and Effort rows open
+ * sibling portal menus. Keep this predicate root-owned so a Work menu or an
+ * unrelated page menu cannot satisfy the Chat mutation contract.
+ * @param {Page} page
+ * @returns {Promise<boolean>}
+ */
+async function isChatGptPowerPickerOpen(page) {
+    const root = page.locator(CHATGPT_POWER_PICKER_ROOT_SELECTOR).last();
+    if (!(await root.isVisible().catch(() => false))) return false;
+    const power = root.locator('[role="menuitem"][aria-label="Power"]').first();
+    if (!(await power.isVisible().catch(() => false))) return false;
+    const triggers = await root.locator('[role="menuitem"][data-has-submenu]').all()
+        .catch(() => /** @type {Locator[]} */ ([]));
+    let hasModel = false;
+    let hasEffort = false;
+    for (const trigger of triggers) {
+        if (!(await trigger.isVisible().catch(() => false))) continue;
+        const text = (await trigger.innerText({ timeout: 500 }).catch(() => '')).trim();
+        hasModel ||= menuTextHasExactLine(text, 'Model');
+        hasEffort ||= menuTextHasExactLine(text, 'Effort');
+    }
+    return hasModel && hasEffort;
+}
+
+/**
+ * Find a current Power-shell submenu trigger by its exact first line.
+ * @param {Page} page
+ * @param {'Model'|'Effort'} heading
+ * @returns {Promise<Locator|null>}
+ */
+async function findPowerPickerSubmenuTrigger(page, heading) {
+    if (!(await isChatGptPowerPickerOpen(page))) return null;
+    const root = page.locator(CHATGPT_POWER_PICKER_ROOT_SELECTOR).last();
+    const triggers = await root.locator('[role="menuitem"][data-has-submenu]').all()
+        .catch(() => /** @type {Locator[]} */ ([]));
+    for (const trigger of triggers) {
+        if (!(await trigger.isVisible().catch(() => false))) continue;
+        const text = (await trigger.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (menuTextHasExactLine(text, heading)) return trigger;
+    }
+    return null;
+}
+
+/**
+ * @param {Page} page
+ * @param {'Model'|'Effort'} heading
+ * @returns {Promise<boolean>}
+ */
+async function openPowerPickerSubmenu(page, heading) {
+    const trigger = await findPowerPickerSubmenuTrigger(page, heading);
+    if (!trigger) return false;
+    await trigger.click({ timeout: 2_000 }).catch(() => undefined);
+    await page.waitForTimeout(300).catch(() => undefined);
+    return true;
+}
+
+/**
  * Legacy fallback: find an open menu root that is controlled by the composer
  * form's trigger via `aria-controls`. Only used when the current Intelligence
  * picker content root is not visible (no-toggle legacy surface).
@@ -842,6 +899,16 @@ async function chatGptLegacyMenuRootOpenedByComposer(page) {
  */
 async function findModelOption(page, choice) {
     const option = CHATGPT_MODEL_OPTIONS[choice];
+    // Current Power shell: tier choices live in the sibling Effort portal.
+    if (await isChatGptPowerPickerOpen(page)) {
+        await openPowerPickerSubmenu(page, 'Effort');
+        const powerChoice = await findOptionByExactLabels(page, [
+            ...simplifiedDefaultLabels(choice),
+            ...option.labels,
+        ]);
+        if (powerChoice && await isModelOptionCandidate(powerChoice, choice)) return powerChoice;
+        return null;
+    }
     // Current path: exact labels in composer-scoped menu root.
     const current = await findOptionByExactLabels(page, [
         ...simplifiedDefaultLabels(choice),
@@ -892,6 +959,12 @@ async function openSimplifiedIntelligenceSubmenu(page, options = {}) {
     const forceFamily = options.forceFamily === true;
     if (!forceFamily && await isSimplifiedIntelligenceMenuOpen(page, null, null)) return;
     const familyLabels = Object.values(CHATGPT_FAMILY_OPTIONS).map(option => option.label);
+    if (forceFamily && await isChatGptPowerPickerOpen(page)) {
+        if (await openPowerPickerSubmenu(page, 'Model')) {
+            await findOpenFamilySubmenu(page, familyLabels);
+        }
+        return;
+    }
     let menu = chatGptComposerMenuRoot(page);
     if (!(await menu.isVisible().catch(() => false))) {
         menu = await chatGptLegacyMenuRootOpenedByComposer(page);
@@ -991,10 +1064,14 @@ async function findOpenFamilySubmenu(page, familyLabels) {
         if (!(await menu.isVisible().catch(() => false))) continue;
         const rows = await menu.locator('[role="menuitemradio"]').all()
             .catch(() => /** @type {Locator[]} */ ([]));
+        /** @type {string[]} */
+        const visibleTexts = [];
         for (const row of rows) {
+            if (!(await row.isVisible().catch(() => false))) continue;
             const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
-            if (familyLabels.some(label => menuTextHasExactLine(text, label))) return menu;
+            visibleTexts.push(text);
         }
+        if (familyLabels.every(label => visibleTexts.some(text => menuTextHasExactLine(text, label)))) return menu;
     }
     return null;
 }
@@ -1143,6 +1220,21 @@ async function findEffortOption(page, model, effort) {
 async function openEffortMenu(page, model, effort, usedFallbacks) {
     if (await isEffortMenuOpen(page, model, { effort })) return;
     if (!(await isModelMenuOpen(page))) await openModelMenu(page, usedFallbacks);
+    if (await isChatGptPowerPickerOpen(page)) {
+        if (await openPowerPickerSubmenu(page, 'Effort')
+            && await isEffortMenuOpen(page, model, { effort })) {
+            usedFallbacks.push(`${model}-effort-power-submenu`);
+            return;
+        }
+        throw new WebAiError({
+            errorCode: 'provider.model-mismatch',
+            stage: 'provider-select-mode',
+            vendor: 'chatgpt',
+            retryHint: 'model-fallback',
+            message: `ChatGPT Power effort submenu did not expose ${model}/${effort}`,
+            evidence: { model, effort, trigger: 'Effort' },
+        });
+    }
     const simplifiedDirect = await findOptionByExactLabels(page, simplifiedEffortLabels(model, effort));
     if (simplifiedDirect && await simplifiedDirect.isVisible().catch(() => false)) {
         usedFallbacks.push(`${model}-effort-simplified-direct`);
@@ -1381,6 +1473,33 @@ async function readCheckedModel(page, expectedModel = null) {
  * @returns {Promise<{ choice: ModelChoice, label: string } | null>}
  */
 async function readCheckedModelEvidence(page, expectedModel = null) {
+    const powerPickerOpen = await isChatGptPowerPickerOpen(page);
+    if (powerPickerOpen) {
+        const effortTrigger = await findPowerPickerSubmenuTrigger(page, 'Effort');
+        if (effortTrigger) {
+            const text = (await effortTrigger.innerText({ timeout: 500 }).catch(() => '')).trim();
+            const choice = modelChoiceFromPowerTierText(text);
+            if (choice) return { choice, label: text || String(choice) };
+        }
+        const openMenus = await page.locator('[role="menu"][data-state="open"]').all()
+            .catch(() => /** @type {Locator[]} */ ([]));
+        for (let index = openMenus.length - 1; index >= 0; index -= 1) {
+            const menu = openMenus[index];
+            if (!(await isPowerEffortPortalMenu(menu))) continue;
+            const checkedRows = await menu.locator(
+                '[role="menuitemradio"][aria-checked="true"], '
+                + '[role="menuitemradio"][data-state="checked"]',
+            ).all().catch(() => /** @type {Locator[]} */ ([]));
+            for (const row of checkedRows) {
+                if (!(await row.isVisible().catch(() => false))) continue;
+                if (!(await hasConsistentCheckedState(row))) continue;
+                const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+                const choice = modelChoiceFromPowerTierText(text);
+                if (choice) return { choice, label: text || String(choice) };
+            }
+        }
+        return null;
+    }
     for (const [choice, option] of Object.entries(CHATGPT_MODEL_OPTIONS)) {
         for (const testId of option.testIds) {
             const row = page.locator(`[role="menuitemradio"][data-testid="${testId}"][aria-checked="true"], [data-testid="${testId}"][aria-checked="true"]`).first();
@@ -1401,6 +1520,21 @@ async function readCheckedModelEvidence(page, expectedModel = null) {
     const active = await readActiveModelPill(page, { allowStandaloneHeavy: expectedModel === 'pro' });
     const choice = modelChoiceFromText(active);
     return choice ? { choice, label: active || String(choice) } : null;
+}
+
+/**
+ * Map the current Power submenu's checked tier to the public model axis.
+ * @param {string} text
+ * @returns {ModelChoice|null}
+ */
+function modelChoiceFromPowerTierText(text) {
+    if (menuTextHasAnyExactLine(text, simplifiedDefaultLabels('instant'))) return 'instant';
+    if (menuTextHasAnyExactLine(text, [
+        ...simplifiedDefaultLabels('thinking'),
+        ...Object.values(CHATGPT_SIMPLIFIED_INTELLIGENCE_OPTIONS.thinking.efforts).flat(),
+    ])) return 'thinking';
+    if (menuTextHasAnyExactLine(text, simplifiedDefaultLabels('pro'))) return 'pro';
+    return null;
 }
 
 /**
@@ -1533,10 +1667,31 @@ function modelChoiceFromText(text) {
  */
 async function findOptionByExactLabels(page, labels) {
     let menu = chatGptComposerMenuRoot(page);
-    if (!(await menu.isVisible().catch(() => false))) {
-        menu = await chatGptLegacyMenuRootOpenedByComposer(page);
-        if (!menu) menu = page;
+    if (await menu.isVisible().catch(() => false)) {
+        const owned = await findExactOptionInMenu(menu, labels);
+        if (owned) return owned;
+        if (await isChatGptPowerPickerOpen(page)) {
+            const openMenus = await page.locator('[role="menu"][data-state="open"]').all()
+                .catch(() => /** @type {Locator[]} */ ([]));
+            for (let index = openMenus.length - 1; index >= 0; index -= 1) {
+                if (!(await isPowerEffortPortalMenu(openMenus[index]))) continue;
+                const portalOption = await findExactOptionInMenu(openMenus[index], labels);
+                if (portalOption) return portalOption;
+            }
+            return null;
+        }
     }
+    menu = await chatGptLegacyMenuRootOpenedByComposer(page);
+    if (!menu) menu = page;
+    return findExactOptionInMenu(menu, labels);
+}
+
+/**
+ * @param {Locator|Page} menu
+ * @param {readonly string[]} labels
+ * @returns {Promise<Locator|null>}
+ */
+async function findExactOptionInMenu(menu, labels) {
     for (const label of labels) {
         const candidates = await menu.locator('[role="menuitemradio"], [role="menuitem"]').all().catch(() => /** @type {Locator[]} */ ([]));
         for (const loc of candidates) {
@@ -1546,6 +1701,27 @@ async function findOptionByExactLabels(page, labels) {
         }
     }
     return null;
+}
+
+/**
+ * Verify the sibling portal is the current five-row Power effort menu before
+ * selecting from it. Establishing the shell alone is not enough because other
+ * page menus can be open at the same time.
+ * @param {Locator} menu
+ * @returns {Promise<boolean>}
+ */
+async function isPowerEffortPortalMenu(menu) {
+    if (!(await menu.isVisible().catch(() => false))) return false;
+    const rows = await menu.locator('[role="menuitemradio"]').all()
+        .catch(() => /** @type {Locator[]} */ ([]));
+    /** @type {string[]} */
+    const observed = [];
+    for (const row of rows) {
+        if (!(await row.isVisible().catch(() => false))) continue;
+        observed.push((await row.innerText({ timeout: 500 }).catch(() => '')).trim());
+    }
+    const expected = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
+    return expected.every(label => observed.some(text => menuTextHasExactLine(text, label)));
 }
 
 /**
@@ -1562,6 +1738,21 @@ async function isSimplifiedIntelligenceMenuOpen(page, model, effort) {
     const menu = chatGptComposerMenuRoot(page);
     const visible = await menu.isVisible().catch(() => false);
     if (!visible) return false;
+    if (!model && !effort && await isChatGptPowerPickerOpen(page)) return true;
+    if (await isChatGptPowerPickerOpen(page)) {
+        const openMenus = await page.locator('[role="menu"][data-state="open"]').all()
+            .catch(() => /** @type {Locator[]} */ ([]));
+        for (let index = openMenus.length - 1; index >= 0; index -= 1) {
+            if (!(await isPowerEffortPortalMenu(openMenus[index]))) continue;
+            const rows = await openMenus[index].locator('[role="menuitemradio"]').all()
+                .catch(() => /** @type {Locator[]} */ ([]));
+            for (const row of rows) {
+                const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+                if (requiredLabels.some(label => menuTextHasExactLine(text, label))) return true;
+            }
+        }
+        return false;
+    }
     const rows = await menu.locator('[role="menuitemradio"]').all()
         .catch(() => /** @type {Locator[]} */ ([]));
     for (const row of rows) {
@@ -1617,7 +1808,7 @@ function menuTextHasExactLine(text, label) {
 
 /**
  * @param {string} text
- * @param {string[]} labels
+ * @param {readonly string[]} labels
  * @returns {boolean}
  */
 function menuTextHasAnyExactLine(text, labels) {
