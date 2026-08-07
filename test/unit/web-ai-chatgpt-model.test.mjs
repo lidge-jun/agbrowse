@@ -103,6 +103,55 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('selects Pro through the current Chat Power effort submenu', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                family: 'gpt-5.6-sol',
+                initialSelectedEffort: 'xhigh',
+                powerPickerShell: true,
+                genericEffortTrigger: false,
+                genericTriggerMode: 'disabled',
+                advanceClock: clock.advance,
+            });
+
+            await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+                selected: 'pro',
+                effort: null,
+            });
+            expect(page.__state.shellEffortTriggerClicks).toBeGreaterThan(0);
+            expect(page.__state.genericEffortTriggerClicks).toBe(0);
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('selects o3 through the current Chat Power model submenu', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                family: 'gpt-5.6-sol',
+                initialSelectedEffort: 'xhigh',
+                powerPickerShell: true,
+                genericEffortTrigger: false,
+                genericTriggerMode: 'disabled',
+                advanceClock: clock.advance,
+            });
+
+            await expect(selectChatGptModel(page, undefined, { family: 'o3' })).resolves.toMatchObject({
+                family: 'o3',
+            });
+            expect(page.__state.shellModelTriggerClicks).toBeGreaterThan(0);
+            expect(page.__state.currentFamily).toBe('o3');
+        } finally {
+            clock.restore();
+        }
+    });
+
     it('routes legacy Pro effort requests to flat Pro with unenforced warning', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
 
@@ -749,6 +798,28 @@ describe('web-ai ChatGPT model selector policy', () => {
 // #87: `--family` reached the selector but never the capability probe, so a
 // probe `ok` was mistaken for proof that the requested family was enforced.
 describe('capability probe family contract (#87)', () => {
+    it.each(['gpt-5.4', 'gpt-5.3'])('rejects retired Chat family %s before touching the menu', async family => {
+        const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({ powerPickerShell: true, advanceClock: clock.advance });
+            let touched = 0;
+            const watched = new Proxy(page, {
+                get(target, prop, receiver) {
+                    if (prop === 'locator' || prop === 'keyboard') touched += 1;
+                    const value = Reflect.get(target, prop, receiver);
+                    return typeof value === 'function' ? value.bind(target) : value;
+                },
+            });
+
+            await expect(chatGptModelCapabilityProbe(watched, 'thinking', { family }))
+                .resolves.toMatchObject({ state: 'fail', evidence: { family } });
+            expect(touched).toBe(0);
+        } finally {
+            clock.restore();
+        }
+    });
+
     it('fails an unsupported family before touching the menu', async () => {
         const { chatGptModelCapabilityProbe } = await import('../../web-ai/chatgpt-model.mjs');
         const page = createFakeModelPage({ simplifiedIntelligenceMenu: true });
@@ -887,6 +958,7 @@ function createFakeModelPage({
     effortOptionRole = 'menuitemradio',
     modelPickerUnavailable = false,
     simplifiedIntelligenceMenu = false,
+    powerPickerShell = false,
     advanceClock = null,
     hiddenFamilyRows = false,
 } = {}) {
@@ -906,6 +978,9 @@ function createFakeModelPage({
         exactEffortTrigger,
         exactEffortTriggerVisible,
         genericEffortTrigger,
+        shellEffortTriggerClicks: 0,
+        shellModelTriggerClicks: 0,
+        genericEffortTriggerClicks: 0,
     };
     const legacyModelRows = [
         createElement({
@@ -955,13 +1030,18 @@ function createFakeModelPage({
         }),
     ];
     const modelRows = simplifiedIntelligenceMenu ? simplifiedRows : legacyModelRows;
-    const familyLabels = {
+    const legacyFamilyLabels = {
         'gpt-5.6-sol': 'GPT-5.6 Sol',
         'gpt-5.5': 'GPT-5.5',
         'gpt-5.4': 'GPT-5.4',
         'gpt-5.3': 'GPT-5.3',
         o3: 'o3',
     };
+    const familyLabels = powerPickerShell ? {
+        'gpt-5.6-sol': 'GPT-5.6 Sol',
+        'gpt-5.5': 'GPT-5.5',
+        o3: 'o3',
+    } : legacyFamilyLabels;
     const familyRows = Object.entries(familyLabels).map(([key, text]) => createElement({
         text,
         get checked() { return state.currentFamily === key; },
@@ -971,12 +1051,17 @@ function createFakeModelPage({
         visible: !hiddenFamilyRows,
     }));
     const familyTrigger = createElement({
-        text: () => familyLabels[state.currentFamily],
+        text: () => powerPickerShell
+            ? `Model\n${familyLabels[state.currentFamily]}`
+            : familyLabels[state.currentFamily],
         // Any of the three real interactions opens the submenu, matching
         // openSimplifiedIntelligenceSubmenu's hover -> ArrowRight -> click ladder.
         onHover: () => { state.familySubmenuOpen = true; },
         onFocus: () => { state.familySubmenuOpen = true; },
-        onClick: () => { state.familySubmenuOpen = true; },
+        onClick: () => {
+            state.familySubmenuOpen = true;
+            if (powerPickerShell) state.shellModelTriggerClicks += 1;
+        },
     });
     const exactTrigger = createElement({
         text: exactEffortTriggerText,
@@ -990,7 +1075,17 @@ function createFakeModelPage({
     }));
     const genericTrigger = createElement({
         text: 'Reasoning effort',
-        onClick: () => openEffortRows('generic'),
+        onClick: () => {
+            state.genericEffortTriggerClicks += 1;
+            openEffortRows('generic');
+        },
+    });
+    const shellEffortTrigger = createElement({
+        text: () => `Effort\n${modelPillText()}`,
+        onClick: () => {
+            state.shellEffortTriggerClicks += 1;
+            openEffortRows('shell');
+        },
     });
     const dropdownButton = createElement({
         text: 'ChatGPT',
@@ -999,9 +1094,7 @@ function createFakeModelPage({
         visible: closedDropdownButton,
     });
     const modelPill = createElement({
-        text: () => composerProPillLabel || (state.selectedEffort
-            ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
-            : state.currentModel),
+        text: () => modelPillText(),
         onClick: () => { state.modelMenuOpen = true; },
     });
     const splitModelPill = createElement({
@@ -1067,12 +1160,19 @@ function createFakeModelPage({
         state.modelMenuOpen = false;
     }
 
+    function modelPillText() {
+        return composerProPillLabel || (state.selectedEffort
+            ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
+            : state.currentModel);
+    }
+
     function currentEffortTexts() {
         if (state.effortMenuSource === 'generic' && genericEffortTexts) return genericEffortTexts;
         return effortTexts;
     }
 
     function currentEffortRows() {
+        if (state.effortMenuSource === 'shell') return simplifiedRows;
         return Object.entries(currentEffortTexts()).map(([effort, text]) => createElement({
             text,
             get checked() { return checkedEffortRows && state.selectedEffort === effort; },
@@ -1089,6 +1189,45 @@ function createFakeModelPage({
         return splitModelPillText ? [splitModelPill, modelPill] : [modelPill];
     }
 
+    function powerShellRoot() {
+        return createElement({
+            text: () => `Power\n${familyTrigger.text}\n${shellEffortTrigger.text}`,
+            selectChildren: selector => {
+            if (selector.includes('[role="menuitem"][aria-label="Power"]')) {
+                return [createElement({ text: 'Power' })];
+            }
+            if (selector === '[role="menuitem"][data-has-submenu]') {
+                return [familyTrigger, shellEffortTrigger];
+            }
+            if (selector === '[role="menuitemradio"], [role="menuitem"]') {
+                return [familyTrigger, shellEffortTrigger];
+            }
+            if (selector === '[role="menuitemradio"]') return [];
+                return [];
+            },
+        });
+    }
+    function familyPortalRoot() {
+        return createElement({
+            text: () => familyRows.map(row => row.text).join('\n'),
+            selectChildren: selector => {
+            if (selector === '[role="menuitemradio"], [role="menuitem"]') return familyRows;
+            if (selector === '[role="menuitemradio"]') return familyRows;
+                return [];
+            },
+        });
+    }
+    function effortPortalRoot() {
+        return createElement({
+            text: () => simplifiedRows.map(row => row.text).join('\n'),
+            selectChildren: selector => {
+            if (selector === '[role="menuitemradio"], [role="menuitem"]') return simplifiedRows;
+            if (selector === '[role="menuitemradio"]') return simplifiedRows;
+                return [];
+            },
+        });
+    }
+
     function selectElements(selector) {
         if (modelPickerUnavailable) return [];
         if (selector === 'button, [role="button"], [role="menuitem"]') return state.modelMenuOpen && !state.effortMenuOpen && state.genericEffortTrigger && genericTriggerMode === 'text' ? [...composerPills(), genericTrigger] : composerPills();
@@ -1096,6 +1235,9 @@ function createFakeModelPage({
         if (selector.includes('__composer-pill') && !selector.includes('aria-haspopup')) return roleButtonPill ? composerPills() : [];
         if (selector === 'button[aria-haspopup="menu"]') return composerPills();
         if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));
+        if (powerPickerShell && selector.includes('[role="menu"]') && selector.includes('aria-label="Power"')) {
+            return state.modelMenuOpen ? [powerShellRoot()] : [];
+        }
         // Composer-scoped Intelligence picker content root
         if (selector.includes('composer-intelligence-picker-content')) {
             if (simplifiedIntelligenceMenu && state.modelMenuOpen) {
@@ -1104,6 +1246,13 @@ function createFakeModelPage({
             return [];
         }
         if (selector === '[role="menu"]') {
+            if (powerPickerShell && state.modelMenuOpen) {
+                return [
+                    powerShellRoot(),
+                    ...(state.familySubmenuOpen ? [familyPortalRoot()] : []),
+                    ...(state.effortMenuOpen ? [effortPortalRoot()] : []),
+                ];
+            }
             if (simplifiedIntelligenceMenu && state.modelMenuOpen) return [createElement({ text: `Intelligence\n${simplifiedRows.map(row => row.text).join('\n')}\nGPT-5.5`, visible: true })];
             if (state.effortMenuOpen) return [createElement({ text: Object.values(currentEffortTexts()).join('\n') })];
             if (!simplifiedIntelligenceMenu && state.modelMenuOpen) {
@@ -1113,6 +1262,13 @@ function createFakeModelPage({
             return [];
         }
         if (selector === '[role="menu"][data-state="open"]') {
+            if (powerPickerShell && state.modelMenuOpen) {
+                return [
+                    powerShellRoot(),
+                    ...(state.familySubmenuOpen ? [familyPortalRoot()] : []),
+                    ...(state.effortMenuOpen ? [effortPortalRoot()] : []),
+                ];
+            }
             // The family submenu is a distinct surface: it only exists once its
             // trigger has been interacted with. Gating it here is what makes the
             // family assertions fail if the selector code stops opening it.
@@ -1120,22 +1276,42 @@ function createFakeModelPage({
                 ? [createElement({ text: familyRows.map(row => row.text).join('\n') })]
                 : [];
         }
-        if (selector === '[role="menuitem"][data-has-submenu]') return state.modelMenuOpen ? [familyTrigger] : [];
+        if (selector === '[role="menuitem"][data-has-submenu]') {
+            if (powerPickerShell && state.modelMenuOpen) return [familyTrigger, shellEffortTrigger];
+            return state.modelMenuOpen ? [familyTrigger] : [];
+        }
         if (selector === '[data-testid^="model-switcher-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
         if (selector === '[data-testid^="model-switcher-gpt-"]') return state.modelMenuOpen ? modelRows.filter(element => element.testId) : (closedHeroEffortPill ? [closedHeroPill] : []);
         if (selector === '[role="menuitemradio"], [role="menuitem"]') {
+            if (powerPickerShell && state.modelMenuOpen) {
+                if (state.effortMenuOpen) return simplifiedRows;
+                if (state.familySubmenuOpen) return familyRows;
+                return [familyTrigger, shellEffortTrigger];
+            }
             if (state.effortMenuOpen) return currentEffortRows();
             if (simplifiedIntelligenceMenu && state.modelMenuOpen) return [...strayModelMenuItems, ...simplifiedRows];
             return [...strayModelMenuItems, ...modelRows];
         }
         if (selector === '[role="menuitemradio"]') {
+            if (powerPickerShell && state.modelMenuOpen) {
+                if (state.effortMenuOpen) return simplifiedRows;
+                if (state.familySubmenuOpen) return familyRows;
+                return [];
+            }
             if (state.effortMenuOpen && effortOptionRole === 'menuitemradio') return currentEffortRows();
             if (simplifiedIntelligenceMenu && state.modelMenuOpen) {
                 return state.familySubmenuOpen ? [...familyRows, ...simplifiedRows] : [...simplifiedRows];
             }
             return [];
         }
-        if (selector === '[role="menuitem"]') return state.effortMenuOpen && effortOptionRole === 'menuitem' ? currentEffortRows() : [];
+        if (selector === '[role="menuitem"]') {
+            if (powerPickerShell && state.modelMenuOpen) {
+                if (state.effortMenuOpen) return simplifiedRows;
+                if (state.familySubmenuOpen) return familyRows;
+                return [familyTrigger, shellEffortTrigger];
+            }
+            return state.effortMenuOpen && effortOptionRole === 'menuitem' ? currentEffortRows() : [];
+        }
         if (selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')) {
             const checkedTestId = selector.match(/data-testid="([^"]+)"/)?.[1];
             return [...familyRows, ...modelRows, ...currentEffortRows()]
@@ -1161,6 +1337,7 @@ function createElement(input = {}) {
         onClick: input.onClick || (() => undefined),
         onHover: input.onHover || (() => undefined),
         onFocus: input.onFocus || (() => undefined),
+        selectChildren: input.selectChildren || null,
         visible: input.visible ?? true,
         rect: input.rect || { x: 10, y: 10, width: 120, height: 32 },
     };
@@ -1201,9 +1378,15 @@ function makeLocator(elements, selector = '') {
                 return null;
             },
         })), arg),
-        // Scoped locator: delegate to the page's selectElements for sub-queries.
-        // This allows composer-scoped menu root patterns to work.
+        // Root-owned locators model portal/shell ownership. Legacy fixtures can
+        // still delegate to the page because their older menu root is flat.
         locator: childSelector => {
+            const owned = elements.flatMap(element => element.selectChildren?.(childSelector) || []);
+            if (owned.length > 0 || elements.some(element => element.selectChildren)) {
+                const child = makeLocator(owned, childSelector);
+                child._page = loc._page;
+                return child;
+            }
             if (loc._page) return loc._page.locator(childSelector);
             return makeLocator([], childSelector);
         },

@@ -60,88 +60,49 @@
          >Send</button>
        </form>
  
-       <div id="fixture-chat-intelligence-menu" role="menu" data-state="open">
+       <div id="fixture-chat-intelligence-menu" role="menu" data-state="open" data-eval-key="chat.power-shell">
+         <div role="menuitem" aria-label="Power" data-eval-key="chat.power-label" data-eval-label="Power">Power</div>
          <div
-           role="group"
-           aria-labelledby="fixture-chat-intelligence-heading"
-           data-testid="composer-intelligence-picker-content"
-           data-eval-key="chat.intelligence-group"
-         >
-           <div id="fixture-chat-intelligence-heading" role="presentation">Intelligence</div>
-           <div
-             role="menuitemradio"
-             aria-checked="false"
-             data-state="unchecked"
-             tabindex="-1"
-             data-eval-key="chat.tier.instant"
-             data-eval-label="Instant"
-             data-eval-tier="instant"
-           ><span>Instant</span><span>5.5</span></div>
-           <div
-             role="menuitemradio"
-             aria-checked="false"
-             data-state="unchecked"
-             tabindex="-1"
-             data-eval-key="chat.tier.medium"
-             data-eval-label="Medium"
-             data-eval-tier="medium"
-           ><span>Medium</span></div>
-           <div
-             role="menuitemradio"
-             aria-checked="true"
-             data-state="checked"
-             tabindex="0"
-             data-eval-key="chat.tier.high"
-             data-eval-label="High"
-             data-eval-tier="high"
-           ><span>High</span></div>
-           <div
-             role="menuitemradio"
-             aria-checked="false"
-             data-state="unchecked"
-             tabindex="-1"
-             data-eval-key="chat.tier.extra-high"
-             data-eval-label="Extra High"
-             data-eval-tier="extra-high"
-           ><span>Extra High</span></div>
-           <div
-             role="menuitemradio"
-             aria-checked="false"
-             data-state="unchecked"
-             tabindex="-1"
-             data-eval-key="chat.tier.pro"
-             data-eval-label="Pro"
-             data-eval-tier="pro"
-           ><span>Pro</span></div>
- 
-           <div role="separator"></div>
-           <div
-             role="menuitem"
-             aria-haspopup="menu"
-             data-has-submenu
-             tabindex="-1"
-             data-eval-key="chat.family-trigger"
-             data-eval-label="GPT-5.6 Sol"
-           >
-             <span>GPT-5.6 Sol</span>
-             <svg
-               aria-hidden="true"
-               data-testid="menu-item-submenu-chevron"
-               viewBox="0 0 16 16"
-               width="16"
-               height="16"
-            ><path d="M6,3.5L10.5,8L6,12.5"></path></svg>
-           </div>
-         </div>
+           role="slider"
+           aria-hidden="true"
+           aria-valuemin="0"
+           aria-valuemax="4"
+           aria-valuenow="3"
+           data-eval-key="chat.power-slider"
+         ></div>
+         <button type="button" aria-label="Show compact options" data-eval-key="chat.advanced-toggle">Advanced</button>
+         <div
+           role="menuitem"
+           aria-haspopup="menu"
+           data-has-submenu
+           tabindex="-1"
+           data-eval-key="chat.family-trigger"
+           data-eval-label="Model&#10;GPT-5.6 Sol"
+         ><span>Model</span><span>GPT-5.6 Sol</span></div>
+         <div
+           role="menuitem"
+           aria-haspopup="menu"
+           data-has-submenu
+           tabindex="-1"
+           data-eval-key="chat.effort-trigger"
+           data-eval-label="Effort&#10;Extra High"
+         ><span>Effort</span><span>Extra High</span></div>
        </div>
  
        <template data-eval-state="family-submenu-open">
          <div role="menu" data-state="open" data-eval-key="chat.family-submenu">
            <div role="menuitemradio" aria-checked="true" data-eval-key="chat.family.gpt-5.6-sol" data-eval-label="GPT-5.6 Sol"><span>GPT-5.6 Sol</span></div>
            <div role="menuitemradio" aria-checked="false" data-eval-key="chat.family.gpt-5.5" data-eval-label="GPT-5.5"><span>GPT-5.5</span></div>
-           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.family.gpt-5.4" data-eval-label="GPT-5.4"><span>GPT-5.4</span><span>Leaving on July 23</span></div>
-           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.family.gpt-5.3" data-eval-label="GPT-5.3"><span>GPT-5.3</span></div>
            <div role="menuitemradio" aria-checked="false" data-eval-key="chat.family.o3" data-eval-label="o3"><span>o3</span></div>
+         </div>
+       </template>
+       <template data-eval-state="effort-submenu-open">
+         <div role="menu" data-state="open" data-eval-key="chat.effort-submenu">
+           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.tier.instant" data-eval-label="Instant"><span>Instant</span></div>
+           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.tier.medium" data-eval-label="Medium"><span>Medium</span></div>
+           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.tier.high" data-eval-label="High"><span>High</span></div>
+           <div role="menuitemradio" aria-checked="true" data-eval-key="chat.tier.extra-high" data-eval-label="Extra High"><span>Extra High</span></div>
+           <div role="menuitemradio" aria-checked="false" data-eval-key="chat.tier.pro" data-eval-label="Pro"><span>Pro</span></div>
          </div>
        </template>
      </main>

@@ -37,12 +37,21 @@ describe('GPT-5.6 Chat fixture contract', () => {
         expect(workRadio?.label).toBe('Work');
     });
 
-    it('has Intelligence group with composer-intelligence-picker-content testid', () => {
-        expect(chat.html).toContain('data-testid="composer-intelligence-picker-content"');
-        expect(chat.recordsByKey.get('chat.intelligence-group')).toBeDefined();
+    it('has the current Power shell without the retired Intelligence testid', () => {
+        expect(chat.html).not.toContain('data-testid="composer-intelligence-picker-content"');
+        expect(chat.recordsByKey.get('chat.power-shell')).toBeDefined();
+        expect(chat.recordsByKey.get('chat.power-label')?.label).toBe('Power');
     });
 
-    it('has flat Intelligence tiers: Instant, Medium, High, Extra High, Pro', () => {
+    it('has Power slider value 3 on the observed 0..4 range', () => {
+        const slider = chat.recordsByKey.get('chat.power-slider');
+        expect(slider?.role).toBe('slider');
+        expect(chat.html).toContain('aria-valuemin="0"');
+        expect(chat.html).toContain('aria-valuemax="4"');
+        expect(chat.html).toContain('aria-valuenow="3"');
+    });
+
+    it('has Effort submenu tiers: Instant, Medium, High, Extra High, Pro', () => {
         const tiers = ['instant', 'medium', 'high', 'extra-high', 'pro'];
         const labels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
         for (let i = 0; i < tiers.length; i++) {
@@ -53,30 +62,28 @@ describe('GPT-5.6 Chat fixture contract', () => {
         }
     });
 
-    it('Instant tier has 5.5 badge text', () => {
-        expect(chat.html).toMatch(/Instant<\/span><span>5\.5<\/span>/);
+    it('Extra High tier is checked by default', () => {
+        const xhigh = chat.recordsByKey.get('chat.tier.extra-high');
+        expect(xhigh?.ariaChecked).toBe('true');
     });
 
-    it('High tier is checked by default', () => {
-        const high = chat.recordsByKey.get('chat.tier.high');
-        expect(high?.ariaChecked).toBe('true');
-        expect(high?.dataState).toBe('checked');
-    });
-
-    it('has family trigger with GPT-5.6 Sol label', () => {
+    it('has exact multiline Model and Effort submenu triggers', () => {
         const trigger = chat.recordsByKey.get('chat.family-trigger');
-        expect(trigger).toBeDefined();
-        expect(trigger?.label).toBe('GPT-5.6 Sol');
+        const effort = chat.recordsByKey.get('chat.effort-trigger');
+        expect(trigger?.label).toBe('Model&#10;GPT-5.6 Sol');
+        expect(effort?.label).toBe('Effort&#10;Extra High');
         expect(trigger?.role).toBe('menuitem');
+        expect(effort?.role).toBe('menuitem');
     });
 
-    it('has family submenu in inert template with Sol/5.5/5.4+badge/5.3/o3', () => {
+    it('has family submenu in inert template with only Sol/5.5/o3', () => {
         expect(chat.html).toContain('data-eval-state="family-submenu-open"');
-        const families = ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3', 'o3'];
+        const families = ['gpt-5.6-sol', 'gpt-5.5', 'o3'];
         for (const fam of families) {
             expect(chat.recordsByKey.get(`chat.family.${fam}`), `missing family ${fam}`).toBeDefined();
         }
-        expect(chat.html).toContain('Leaving on July 23');
+        expect(chat.recordsByKey.get('chat.family.gpt-5.4')).toBeUndefined();
+        expect(chat.recordsByKey.get('chat.family.gpt-5.3')).toBeUndefined();
     });
 
     it('does NOT contain legacy testids or labels', () => {
