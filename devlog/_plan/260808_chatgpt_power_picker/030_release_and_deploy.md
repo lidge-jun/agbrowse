@@ -18,11 +18,11 @@ Depends on: WP2 DONE, clean scoped diff, current `origin/dev` re-fetched.
 
 ## Commit stack
 
-Push all five local docs/runtime commits after this plan commit. The bounded main release integration contains exactly these three scoped commits:
+Push the full dev fast-forward stack, including process commits `8970ca2`, `1c11ef6`, `771eee3`, and this final plan amendment; verify the exact count with `git rev-list --count origin/dev..HEAD` immediately before push. The bounded main release integration contains the runtime/test commit pair plus a scoped docs replacement:
 
 1. `ea3eb34171714285efa9887ab2b81e85dcaeda93` — RED fixture/tests.
 2. `a2171c32a3b79ee072cfb75ccfc95e32aa13d56e` — selector/schema/help implementation.
-3. `7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b` — docs/eval/count sync.
+3. `7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b` — source for a scoped docs/eval/count replacement; exclude its `devlog/_plan/260808_chatgpt_power_picker/{010,020,021}*` paths because their creation commit remains dev-only.
 
 `8970ca2` and this WP3 plan commit remain dev-only process evidence. The release script creates the final version/count commit on `main`.
 
@@ -68,7 +68,19 @@ git commit -C 76e4793b1aba51f6966b9569ca8d25cafd010fae
 test -z "$(git diff-tree --no-commit-id --name-only -r HEAD | grep '^.codexclaw/' || true)"
 ```
 
-Then cherry-pick `ea3eb34`, `a2171c3`, and `7b1f1cc`. Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
+Then cherry-pick `ea3eb34` and `a2171c3`. Apply `7b1f1cc` as a scoped replacement that never introduces the dev-only plan unit:
+
+```bash
+git diff 7b1f1cc^ 7b1f1cc -- \
+  README.md docs/dev/guides/web-ai.html docs/dev/ko/guides/web-ai.html \
+  docs/dev/reference/cli.html docs/dev/ko/reference/cli.html \
+  skills/web-ai/SKILL.md structure/commands.md structure/str_func.md \
+  test/fixtures/provider-dom/chatgpt-gpt56-eval.json | git apply --index -3
+git commit -C 7b1f1cce185999cc8b50c5a4dfadc06be8c3e38b
+test -z "$(git diff-tree --no-commit-id --name-only -r HEAD | grep '^devlog/' || true)"
+```
+
+Resolve only picker-owned `web-ai/cli.mjs` or generated `structure/str_func.md` conflicts. Explicitly leave `chatgpt-attachments.mjs`, `chatgpt-upload-surface.mjs`, their attachment test, and `gemini-live.mjs` out of the release integration; if a scoped commit cannot be separated from those conflicts, stop as UNSAFE and re-plan instead of merging the whole branch.
 6. Rerun `git merge-tree` or an equivalent no-commit cherry-pick dry run and the full release gates on the resulting main tree.
 7. Let `npm run release -- patch --publish` create the version/count commit, push main, dispatch `release.yml`, and watch it. Do not manually publish from the laptop.
 
