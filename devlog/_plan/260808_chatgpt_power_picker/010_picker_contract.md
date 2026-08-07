@@ -2,6 +2,12 @@
 
 Depends on: `001_live_dom_evidence.md`.
 
+## P stale check at WP1 entry
+
+- `createFakeModelPage` already owns mutable family-submenu state and checked-state serialization (`test/unit/web-ai-chatgpt-model.test.mjs:864-1228`); extend it instead of introducing a browser runner.
+- Its `simplifiedIntelligenceMenu` branch still models one flat root and exposes family menus only under the old selector assumptions. Add a `powerPickerShell` mode that returns the top root, exact multiline Model/Effort triggers, and sibling open portal menus.
+- The source remains unchanged since roadmap lock at `8970ca2`; all path targets below are current.
+
 ## Test-first delta
 
 1. MODIFY `test/fixtures/provider-dom/chatgpt-gpt56-chat.html`.
@@ -15,7 +21,9 @@ Depends on: `001_live_dom_evidence.md`.
 3. MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`.
    - Extend the existing fake page owner; do not add a second fake framework.
    - Add an executable activation case whose top shell opens sibling effort/family portal menus through the same locator and click paths used by production, with no content test id.
-   - Require three independent mutation REDs before GREEN: restore the old root-only selector; remove the sibling open-menu search; remove the exact Effort/Model trigger opener. Static template/label presence is not activation evidence.
+   - In `powerPickerShell` mode, make `makeLocator(...).locator(childSelector)` return only elements owned by that fake root or submenu. It must not delegate scoped child queries back to the whole page as the legacy fake currently does.
+   - Disable generic CSS/text effort triggers in the shell activation case and assert their click counters stay zero, so only the exact multiline `Effort\n<value>` and `Model\n<family>` submenu triggers can arm the path.
+   - Require four independent mutation REDs before GREEN: restore the old root-only selector; remove the sibling open-menu search; remove the exact Effort/Model trigger opener; restore the retired five-family enum/fixture expectation. Static template/label presence is not activation evidence.
 
 ## Production delta
 
@@ -58,3 +66,15 @@ No persistence format change. No migration.
 - Residual: account cohorts may expose additional families.
 - Wording: current verified set, not universal permanent support.
 - Final layer: live option visibility/enabled check and post-click checked-state verification.
+
+## WP1 build evidence
+
+- RED contract commit: `ea3eb34 test(web-ai): capture the Chat Power picker contract`.
+- Initial RED: the current-shell Pro and o3 paths could not resolve the retired content-testid root; 5.4/5.3 reached browser mutation instead of failing preflight.
+- GREEN: selector, fixture, and MCP schema suites passed 102/102 after the Power root, exact submenu triggers, sibling portal signature, checked-tier mapping, and three-family enum landed in the working tree.
+- Mutation checks all returned non-zero, then passed after restoration:
+  - old content-testid-only root: current Pro and o3 both RED;
+  - removed sibling portal search: current Pro RED with `model option not found`;
+  - removed exact Effort trigger match: current Pro RED;
+  - restored five-family aliases: both retired-family zero-touch assertions RED.
+- TypeScript project gate: `npm run typecheck` passed. `typecheck:checkjs` remains a noisy repository baseline with existing DOM-lib and check-JS errors; the one new implicit-array diagnostic was removed before commit.

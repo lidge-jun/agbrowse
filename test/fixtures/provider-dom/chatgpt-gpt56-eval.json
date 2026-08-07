@@ -9,7 +9,7 @@
       "variant": "gpt56-chat",
       "htmlPath": "chatgpt-gpt56-chat.html",
       "mustContain": [
-        "composer-intelligence-picker-content",
+        "aria-label=\"Power\"",
         "GPT-5.6 Sol"
       ],
       "mustNotContain": [
