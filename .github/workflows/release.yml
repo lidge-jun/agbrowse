@@ -126,7 +126,16 @@ jobs:
         run: git diff --check
 
       - name: Verify package contents
-        run: npm pack --dry-run
+        run: |
+          set -euo pipefail
+
+          INSTALL_PREFIX="$RUNNER_TEMP/agbrowse-pack-smoke"
+          TARBALL="$RUNNER_TEMP/${PACKAGE_NAME}-${RELEASE_VERSION}.tgz"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          test -f "$TARBALL"
+          npm install -g "$TARBALL" --prefix "$INSTALL_PREFIX"
+          node "$INSTALL_PREFIX/lib/node_modules/$PACKAGE_NAME/scripts/postinstall.mjs"
+          AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null
 
       - name: Publish to npm
         run: |
@@ -147,11 +156,18 @@ jobs:
           for attempt in $(seq 1 30); do
             if VERSION="$(npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version 2>/dev/null)"; then
               echo "registry version=${VERSION}"
-              test "$VERSION" = "$RELEASE_VERSION"
-              npm dist-tag ls "$PACKAGE_NAME"
-              exit 0
+              INSTALL_PREFIX="$RUNNER_TEMP/agbrowse-registry-smoke-${attempt}"
+              if test "$VERSION" = "$RELEASE_VERSION" &&
+                npm dist-tag ls "$PACKAGE_NAME" &&
+                npm install -g "${PACKAGE_NAME}@${RELEASE_VERSION}" --prefix "$INSTALL_PREFIX" &&
+                node "$INSTALL_PREFIX/lib/node_modules/$PACKAGE_NAME/scripts/postinstall.mjs" &&
+                AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null; then
+                exit 0
+              fi
+              echo "::notice::${PACKAGE_NAME}@${RELEASE_VERSION} metadata is visible but install smoke is not ready (attempt ${attempt}/30)"
+            else
+              echo "::notice::${PACKAGE_NAME}@${RELEASE_VERSION} not visible yet (attempt ${attempt}/30)"
             fi
-            echo "::notice::${PACKAGE_NAME}@${RELEASE_VERSION} not visible yet (attempt ${attempt}/30)"
             sleep 10
           done
 
