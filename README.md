@@ -31,12 +31,13 @@ workflow. It gives an agent a small CLI surface for:
 It does not require a long-running MCP server. Each command is a short-lived
 Node process that reconnects to the same Chrome DevTools Protocol endpoint.
 
-## What's New in 0.1.17
+## Current ChatGPT picker contract
 
 - **GPT-5.6 Chat contract**: select Chat families with
-  `--family gpt-5.6-sol|gpt-5.5|gpt-5.4|gpt-5.3|o3` and use canonical
+  `--family gpt-5.6-sol|gpt-5.5|o3` and use canonical
   `--effort medium|high|xhigh` values. The runtime understands the current
-  flat `Instant (5.5) / Medium / High / Extra High / Pro` Intelligence picker.
+  Power shell with exact Model/Effort submenus and the
+  `Instant / Medium / High / Extra High / Pro` effort rows.
 - **ChatGPT Work surface v1**: submit through the dedicated
   `agbrowse web-ai work send --prompt "..." --power 1..6` command or MCP
   `web_ai_work_send`. Chat `send/query/poll/watch` and
