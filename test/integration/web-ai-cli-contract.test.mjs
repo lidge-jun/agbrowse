@@ -161,8 +161,8 @@ describe('web-ai CLI contract', () => {
         expect(result.stderr).not.toContain('unsupported');
 
         const effortWithoutModel = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
-        expect(effortWithoutModel.code).not.toBe(0);
-        expect(effortWithoutModel.stderr).toContain('reasoning effort requires --model');
+        expect(effortWithoutModel.code).toBe(0);
+        expect(effortWithoutModel.stderr).not.toContain('reasoning effort requires --model');
     });
 
     it('rejects unsupported ChatGPT model choices', async () => {
@@ -181,8 +181,8 @@ describe('web-ai CLI contract', () => {
         expect(thinking.stderr).not.toContain('unsupported ChatGPT reasoning effort');
 
         const effortOnly = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--effort', 'extended']);
-        expect(effortOnly.code).not.toBe(0);
-        expect(effortOnly.stderr).toContain('reasoning effort requires --model');
+        expect(effortOnly.code).toBe(0);
+        expect(effortOnly.stderr).not.toContain('reasoning effort requires --model');
 
         const proHeavy = await execBrowser(['web-ai', 'render', '--vendor', 'chatgpt', '--prompt', 'hello', '--model', 'pro', '--effort', 'heavy']);
         expect(proHeavy.code).not.toBe(0);
