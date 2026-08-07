@@ -116,8 +116,8 @@ Provider:
                         Gemini  models: flash-lite, flash, pro
                         Gemini  tool:   deepthink
                         Grok:   auto, fast, expert, thinking, heavy
-  --family <alias>    ChatGPT family alias: gpt-5.6-sol, gpt-5.5, gpt-5.4,
-                      gpt-5.3, o3. Preserves the currently checked tier.
+  --family <alias>    ChatGPT family alias: gpt-5.6-sol, gpt-5.5, o3.
+                      Preserves the currently checked tier.
   --effort <alias>    ChatGPT reasoning effort. The reasoning-effort menu is
                       ONLY touched when this flag is provided; otherwise the
                       currently-checked effort in the browser is left as-is.

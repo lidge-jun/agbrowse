@@ -3392,8 +3392,8 @@ try {
       Common flags:
         --vendor <chatgpt|gemini|grok>
         --surface <chat>               Chat commands reject an active Work surface
-        --family <alias>               ChatGPT: gpt-5.6-sol | gpt-5.5 | gpt-5.4 |
-                                       gpt-5.3 | o3; omit to leave unchanged
+        --family <alias>               ChatGPT: gpt-5.6-sol | gpt-5.5 | o3;
+                                       omit to leave unchanged
         --model <alias>                ChatGPT tiers: pro/thinking/instant
                                        Gemini:  flash-lite/flash/pro + tool deepthink
                                        Grok:    heavy/expert/thinking/fast/auto

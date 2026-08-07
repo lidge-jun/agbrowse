@@ -143,10 +143,56 @@ describe('web-ai ChatGPT model selector policy', () => {
             });
 
             await expect(selectChatGptModel(page, undefined, { family: 'o3' })).resolves.toMatchObject({
-                family: 'o3',
+                modelSelection: { familyLabel: 'o3', verified: true },
             });
-            expect(page.__state.shellModelTriggerClicks).toBeGreaterThan(0);
+            expect(page.__state.shellModelTriggerInteractions).toBeGreaterThan(0);
             expect(page.__state.currentFamily).toBe('o3');
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('does not verify a Power tier from an unrelated checked radio', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                initialSelectedEffort: 'xhigh',
+                powerPickerShell: true,
+                powerSelectionNoop: true,
+                unrelatedCheckedPowerText: 'Pro',
+                advanceClock: clock.advance,
+            });
+
+            const result = await selectChatGptModel(page, 'pro');
+            expect(result).toMatchObject({
+                selected: 'thinking',
+                modelSelection: { verified: false },
+            });
+            expect(result.warnings).toContain('model-selection-unverified');
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('does not accept a one-label unrelated menu as the family portal', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                model: 'thinking',
+                family: 'gpt-5.6-sol',
+                initialSelectedEffort: 'xhigh',
+                powerPickerShell: true,
+                familyPortalAvailable: false,
+                unrelatedFamilyMenuTexts: ['o3'],
+                advanceClock: clock.advance,
+            });
+
+            await expect(selectChatGptModel(page, undefined, { family: 'o3' }))
+                .rejects.toMatchObject({ errorCode: 'provider.model-mismatch' });
+            expect(page.__state.currentFamily).toBe('gpt-5.6-sol');
         } finally {
             clock.restore();
         }
@@ -961,6 +1007,10 @@ function createFakeModelPage({
     powerPickerShell = false,
     advanceClock = null,
     hiddenFamilyRows = false,
+    powerSelectionNoop = false,
+    familyPortalAvailable = true,
+    unrelatedCheckedPowerText = null,
+    unrelatedFamilyMenuTexts = [],
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
     const state = {
@@ -979,7 +1029,7 @@ function createFakeModelPage({
         exactEffortTriggerVisible,
         genericEffortTrigger,
         shellEffortTriggerClicks: 0,
-        shellModelTriggerClicks: 0,
+        shellModelTriggerInteractions: 0,
         genericEffortTriggerClicks: 0,
     };
     const legacyModelRows = [
@@ -1006,27 +1056,27 @@ function createFakeModelPage({
         createElement({
             text: 'Instant',
             get checked() { return state.currentModel === 'instant'; },
-            onClick: () => setSimplifiedSelection('instant', null),
+            onClick: () => { if (!(powerPickerShell && powerSelectionNoop)) setSimplifiedSelection('instant', null); },
         }),
         createElement({
             text: 'Medium',
             get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'medium'; },
-            onClick: () => setSimplifiedSelection('thinking', 'medium'),
+            onClick: () => { if (!(powerPickerShell && powerSelectionNoop)) setSimplifiedSelection('thinking', 'medium'); },
         }),
         createElement({
             text: 'High',
             get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'high'; },
-            onClick: () => setSimplifiedSelection('thinking', 'high'),
+            onClick: () => { if (!(powerPickerShell && powerSelectionNoop)) setSimplifiedSelection('thinking', 'high'); },
         }),
         createElement({
             text: 'Extra High',
             get checked() { return state.currentModel === 'thinking' && state.selectedEffort === 'xhigh'; },
-            onClick: () => setSimplifiedSelection('thinking', 'xhigh'),
+            onClick: () => { if (!(powerPickerShell && powerSelectionNoop)) setSimplifiedSelection('thinking', 'xhigh'); },
         }),
         createElement({
             text: 'Pro',
             get checked() { return state.currentModel === 'pro'; },
-            onClick: () => setSimplifiedSelection('pro', null),
+            onClick: () => { if (!(powerPickerShell && powerSelectionNoop)) setSimplifiedSelection('pro', null); },
         }),
     ];
     const modelRows = simplifiedIntelligenceMenu ? simplifiedRows : legacyModelRows;
@@ -1050,17 +1100,30 @@ function createFakeModelPage({
         // match the label would report success for exactly this shape.
         visible: !hiddenFamilyRows,
     }));
+    const unrelatedCheckedPowerRow = unrelatedCheckedPowerText
+        ? createElement({ text: unrelatedCheckedPowerText, checked: true })
+        : null;
+    const unrelatedFamilyRows = unrelatedFamilyMenuTexts.map(text => createElement({
+        text,
+        checked: true,
+    }));
     const familyTrigger = createElement({
         text: () => powerPickerShell
             ? `Model\n${familyLabels[state.currentFamily]}`
             : familyLabels[state.currentFamily],
         // Any of the three real interactions opens the submenu, matching
         // openSimplifiedIntelligenceSubmenu's hover -> ArrowRight -> click ladder.
-        onHover: () => { state.familySubmenuOpen = true; },
-        onFocus: () => { state.familySubmenuOpen = true; },
+        onHover: () => {
+            state.familySubmenuOpen = true;
+            if (powerPickerShell) state.shellModelTriggerInteractions += 1;
+        },
+        onFocus: () => {
+            state.familySubmenuOpen = true;
+            if (powerPickerShell) state.shellModelTriggerInteractions += 1;
+        },
         onClick: () => {
             state.familySubmenuOpen = true;
-            if (powerPickerShell) state.shellModelTriggerClicks += 1;
+            if (powerPickerShell) state.shellModelTriggerInteractions += 1;
         },
     });
     const exactTrigger = createElement({
@@ -1081,7 +1144,7 @@ function createFakeModelPage({
         },
     });
     const shellEffortTrigger = createElement({
-        text: () => `Effort\n${modelPillText()}`,
+        text: () => `Effort\n${shellTierLabel()}`,
         onClick: () => {
             state.shellEffortTriggerClicks += 1;
             openEffortRows('shell');
@@ -1157,6 +1220,8 @@ function createFakeModelPage({
     function setSimplifiedSelection(nextModel, nextEffort) {
         state.currentModel = nextModel;
         state.selectedEffort = nextEffort;
+        state.effortMenuOpen = false;
+        state.effortMenuSource = null;
         state.modelMenuOpen = false;
     }
 
@@ -1164,6 +1229,14 @@ function createFakeModelPage({
         return composerProPillLabel || (state.selectedEffort
             ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel);
+    }
+
+    function shellTierLabel() {
+        if (state.currentModel === 'instant') return 'Instant';
+        if (state.currentModel === 'pro') return 'Pro';
+        if (state.selectedEffort === 'high') return 'High';
+        if (state.selectedEffort === 'xhigh') return 'Extra High';
+        return 'Medium';
     }
 
     function currentEffortTexts() {
@@ -1213,6 +1286,9 @@ function createFakeModelPage({
             selectChildren: selector => {
             if (selector === '[role="menuitemradio"], [role="menuitem"]') return familyRows;
             if (selector === '[role="menuitemradio"]') return familyRows;
+            if (selector.includes('[aria-checked="true"]') || selector.includes('[data-state="checked"]')) {
+                return familyRows.filter(row => row.checked);
+            }
                 return [];
             },
         });
@@ -1223,6 +1299,22 @@ function createFakeModelPage({
             selectChildren: selector => {
             if (selector === '[role="menuitemradio"], [role="menuitem"]') return simplifiedRows;
             if (selector === '[role="menuitemradio"]') return simplifiedRows;
+            if (selector.includes('[aria-checked="true"]') || selector.includes('[data-state="checked"]')) {
+                return simplifiedRows.filter(row => row.checked);
+            }
+                return [];
+            },
+        });
+    }
+    function unrelatedFamilyPortalRoot() {
+        return createElement({
+            text: () => unrelatedFamilyRows.map(row => row.text).join('\n'),
+            selectChildren: selector => {
+                if (selector === '[role="menuitemradio"], [role="menuitem"]') return unrelatedFamilyRows;
+                if (selector === '[role="menuitemradio"]') return unrelatedFamilyRows;
+                if (selector.includes('[aria-checked="true"]') || selector.includes('[data-state="checked"]')) {
+                    return unrelatedFamilyRows.filter(row => row.checked);
+                }
                 return [];
             },
         });
@@ -1249,7 +1341,8 @@ function createFakeModelPage({
             if (powerPickerShell && state.modelMenuOpen) {
                 return [
                     powerShellRoot(),
-                    ...(state.familySubmenuOpen ? [familyPortalRoot()] : []),
+                    ...(state.familySubmenuOpen && familyPortalAvailable ? [familyPortalRoot()] : []),
+                    ...(state.familySubmenuOpen && unrelatedFamilyRows.length > 0 ? [unrelatedFamilyPortalRoot()] : []),
                     ...(state.effortMenuOpen ? [effortPortalRoot()] : []),
                 ];
             }
@@ -1265,7 +1358,8 @@ function createFakeModelPage({
             if (powerPickerShell && state.modelMenuOpen) {
                 return [
                     powerShellRoot(),
-                    ...(state.familySubmenuOpen ? [familyPortalRoot()] : []),
+                    ...(state.familySubmenuOpen && familyPortalAvailable ? [familyPortalRoot()] : []),
+                    ...(state.familySubmenuOpen && unrelatedFamilyRows.length > 0 ? [unrelatedFamilyPortalRoot()] : []),
                     ...(state.effortMenuOpen ? [effortPortalRoot()] : []),
                 ];
             }
@@ -1314,7 +1408,8 @@ function createFakeModelPage({
         }
         if (selector.includes('aria-checked="true"') || selector.includes('data-state="checked"')) {
             const checkedTestId = selector.match(/data-testid="([^"]+)"/)?.[1];
-            return [...familyRows, ...modelRows, ...currentEffortRows()]
+            return [unrelatedCheckedPowerRow, ...familyRows, ...modelRows, ...currentEffortRows()]
+                .filter(Boolean)
                 .filter(element => element.checked)
                 .filter(element => !checkedTestId || element.testId === checkedTestId);
         }

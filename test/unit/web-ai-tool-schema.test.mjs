@@ -65,10 +65,10 @@ describe('web-ai MCP tool schema', () => {
         expect(schema.inputSchema.properties.surface.enum).toEqual(['chat']);
     });
 
-    it('web_ai_submit_prompt has family enum with five canonical aliases', () => {
+    it('web_ai_submit_prompt has family enum with three canonical aliases', () => {
         const schema = toolSchemaForMcp('web_ai_submit_prompt');
         expect(schema.inputSchema.properties.family.enum).toEqual([
-            'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3', 'o3',
+            'gpt-5.6-sol', 'gpt-5.5', 'o3',
         ]);
     });
 
