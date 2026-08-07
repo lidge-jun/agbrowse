@@ -844,12 +844,12 @@ Model aliases:
 | `thinking`, `think` | selected family + thinking tier; defaults to `medium` |
 | `pro` | selected family + flat `Pro` row; omit effort |
 | `--effort medium\|high\|xhigh` | `Medium` / `High` / `Extra High` |
-| `--family gpt-5.6-sol\|gpt-5.5\|gpt-5.4\|gpt-5.3\|o3` | Chat family aliases; omit to preserve current UI family |
+| `--family gpt-5.6-sol\|gpt-5.5\|o3` | Current Chat family aliases; omit to preserve current UI family |
 
 Legacy effort normalization: `light|standard → medium`, `extended → high` (one
 stderr warning), `heavy → xhigh`. Legacy Pro effort resolves to flat Pro and
-emits one no-selection stderr warning. `gpt-5.3` is no longer a synonym for
-`instant`; use `--family gpt-5.3`.
+emits one no-selection stderr warning. The legacy `--model gpt-5.3` alias still
+maps to `instant`; GPT-5.3 and GPT-5.4 are no longer selectable Chat families.
 
 ### Legacy UI (before 2026-07-10)
 

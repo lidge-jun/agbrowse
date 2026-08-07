@@ -689,8 +689,6 @@ ChatGPT current contract (2026-07-10):
 | `--effort xhigh` | `Extra High` |
 | `--family gpt-5.6-sol` | select the GPT-5.6 Sol family |
 | `--family gpt-5.5` | select GPT-5.5 |
-| `--family gpt-5.4` | select GPT-5.4 |
-| `--family gpt-5.3` | select GPT-5.3 |
 | `--family o3` | select o3 |
 | (omit `--family`) | preserve current UI family selection (zero submenu mutation) |
 
@@ -700,8 +698,8 @@ stderr warning. `heavy`, `extra-high`, `extra_high`, `extra high` remap to
 `xhigh`. Legacy Pro effort (`standard`, `extended`) resolves to the flat `Pro`
 row and emits exactly one no-selection stderr warning.
 
-`gpt-5.3` is no longer a synonym for `instant`. It is an independent family;
-use `--family gpt-5.3` rather than `--model gpt-5.3`.
+The legacy `--model gpt-5.3` alias still maps to `instant`. GPT-5.3 and GPT-5.4
+are no longer selectable Chat families.
 
 ### Legacy UI (before 2026-07-10)
 
