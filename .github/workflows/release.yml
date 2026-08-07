@@ -134,6 +134,7 @@ jobs:
           npm pack --json > "$PACK_JSON"
           TARBALL="$(node -e "const fs=require('node:fs'); const result=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(result[0].filename)" "$PACK_JSON")"
           npm install -g "./$TARBALL" --prefix "$INSTALL_PREFIX"
+          node "$INSTALL_PREFIX/lib/node_modules/$PACKAGE_NAME/scripts/postinstall.mjs"
           AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null
 
       - name: Publish to npm
@@ -159,6 +160,7 @@ jobs:
               npm dist-tag ls "$PACKAGE_NAME"
               INSTALL_PREFIX="$RUNNER_TEMP/agbrowse-registry-smoke"
               npm install -g "${PACKAGE_NAME}@${RELEASE_VERSION}" --prefix "$INSTALL_PREFIX"
+              node "$INSTALL_PREFIX/lib/node_modules/$PACKAGE_NAME/scripts/postinstall.mjs"
               AGBROWSE_UPDATE_CHECK=0 "$INSTALL_PREFIX/bin/agbrowse" --help >/dev/null
               exit 0
             fi
