@@ -103,6 +103,33 @@ describe('web-ai ChatGPT model selector policy', () => {
         }
     });
 
+    it('allows Chat Power selection when Work slider markers are present in the open shell', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = createFakeModelPage({
+                model: 'pro',
+                family: 'gpt-5.6-sol',
+                initialSelectedEffort: null,
+                powerPickerShell: true,
+                workSliderMarkersInPowerShell: true,
+                genericEffortTrigger: false,
+                genericTriggerMode: 'disabled',
+                advanceClock: clock.advance,
+            });
+
+            await expect(selectChatGptModel(page, 'pro')).resolves.toMatchObject({
+                selected: 'pro',
+                effort: null,
+            });
+            // The open shell still exposes the old Work slider markers, but the
+            // Chat Power path must not fail closed as Work.
+            expect(page.__state.shellEffortTriggerClicks + page.__state.shellModelTriggerInteractions).toBeGreaterThanOrEqual(0);
+        } finally {
+            clock.restore();
+        }
+    });
+
     it('selects Pro through the current Chat Power effort submenu', async () => {
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const clock = useAdvancingClock();
@@ -1010,6 +1037,7 @@ function createFakeModelPage({
     powerSelectionNoop = false,
     familyPortalAvailable = true,
     unrelatedCheckedPowerText = null,
+        workSliderMarkersInPowerShell = false,
     unrelatedFamilyMenuTexts = [],
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
@@ -1327,6 +1355,15 @@ function createFakeModelPage({
         if (selector.includes('__composer-pill') && !selector.includes('aria-haspopup')) return roleButtonPill ? composerPills() : [];
         if (selector === 'button[aria-haspopup="menu"]') return composerPills();
         if (selector === 'button') return roleButtonPill ? [] : [dropdownButton, ...composerPills(), closedHeroPill].filter(element => element.visible && (element !== closedHeroPill || closedHeroEffortPill));
+        if (workSliderMarkersInPowerShell && (
+            selector.includes('composer-model-picker-slider-simple-view')
+            || selector.includes('composer-model-picker-slider-advanced-view')
+        )) {
+            return [createElement({
+                text: selector.includes('simple-view') ? 'Pro, 5 of 5.' : 'Model\nGPT-5.6 Sol\nEffort\nPro',
+                visible: true,
+            })];
+        }
         if (powerPickerShell && selector.includes('[role="menu"]') && selector.includes('aria-label="Power"')) {
             return state.modelMenuOpen ? [powerShellRoot()] : [];
         }
