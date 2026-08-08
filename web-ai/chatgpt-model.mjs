@@ -390,7 +390,9 @@ const MODEL_SELECT_MAX_ATTEMPTS = 3;
 async function waitForModelPillEvidence(page, requested, deadlineMs = MODEL_PILL_SETTLE_MS) {
     const deadline = Date.now() + deadlineMs;
     let evidence = await readCheckedModelEvidence(page, requested);
-    while (!evidence?.choice && Date.now() < deadline) {
+    let attempts = 0;
+    while (!evidence?.choice && Date.now() < deadline && attempts < 12) {
+        attempts += 1;
         await page.waitForTimeout(400).catch(() => undefined);
         evidence = await readCheckedModelEvidence(page, requested);
     }
@@ -473,7 +475,20 @@ export async function selectChatGptModel(page, model, options = {}) {
         while (currentModel !== requested && attempt < MODEL_SELECT_MAX_ATTEMPTS) {
             attempt += 1;
             const option = await findModelOption(page, requested);
-            if (!option) throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT model option not found: ${requested}`, evidence: { requested } });
+            if (!option) {
+                if (await isChatGptPowerPickerOpen(page)
+                    && await selectChatGptPowerTierBySlider(page, requested, {
+                        effort: requestedEffort || null,
+                        usedFallbacks,
+                    })) {
+                    await page.waitForTimeout(400).catch(() => undefined);
+                    currentEvidence = await readCheckedModelEvidence(page, requested);
+                    currentModel = currentEvidence?.choice || null;
+                    modelChanged = true;
+                    continue;
+                }
+                throw new WebAiError({ errorCode: 'provider.model-mismatch', stage: 'provider-select-mode', vendor: 'chatgpt', retryHint: 'model-fallback', message: `ChatGPT model option not found: ${requested}`, evidence: { requested } });
+            }
             await option.click({ timeout: 5_000 });
             await page.waitForTimeout(750).catch(() => undefined);
             await openModelMenu(page, usedFallbacks);
@@ -504,9 +519,28 @@ export async function selectChatGptModel(page, model, options = {}) {
         const simplifiedSelected = currentEvidence?.label
             ? effortChoiceFromSimplifiedText(currentEvidence.label, /** @type {string} */ (targetModel), requestedEffort)
             : null;
-        if (simplifiedSelected === requestedEffort) {
-            selectedEffort = { requested: requestedEffort, selected: requestedEffort, changed: modelChanged };
-            usedFallbacks.push(`${targetModel}-effort-simplified-direct`);
+        // Power slider stops encode thinking effort (Medium/High/Extra High) in the
+        // visible tier label. If the shell already reports that stop, treat the
+        // effort as selected without requiring a detached Effort portal.
+        const powerSliderEffortLabel = String(currentEvidence?.label || '')
+            .split(/\r?\n/)[0]
+            .replace(/,\s*\d+\s+of\s+\d+\.?$/i, '')
+            .trim();
+        const powerSliderEffort = targetModel === 'thinking'
+            ? (
+                effortChoiceFromSimplifiedText(powerSliderEffortLabel, 'thinking', requestedEffort)
+                || effortChoiceFromSimplifiedText(currentEvidence?.label || '', 'thinking', requestedEffort)
+            )
+            : null;
+        if (simplifiedSelected === requestedEffort || powerSliderEffort === requestedEffort) {
+            selectedEffort = {
+                requested: requestedEffort,
+                selected: requestedEffort,
+                changed: modelChanged || powerSliderEffort === requestedEffort,
+            };
+            usedFallbacks.push(simplifiedSelected === requestedEffort
+                ? `${targetModel}-effort-simplified-direct`
+                : `${targetModel}-effort-power-slider`);
         } else {
             try {
                 selectedEffort = await selectChatGptEffort(page, /** @type {string} */ (targetModel), requestedEffort, usedFallbacks);
@@ -696,6 +730,16 @@ async function assertChatSurfaceForModelMutation(page) {
  * @param {Page} page
  */
 async function assertOpenMenuIsNotWorkPicker(page) {
+    // Current Chat Power reuses the old Work slider testids inside its own
+    // open shell. Those markers alone are no longer Work-proof when the open
+    // menu is the Chat Power shell or the Chat surface radio is active.
+    if (await isChatGptPowerPickerOpen(page)) return;
+    const chatRadio = page.locator(CHATGPT_SURFACE_RADIO_SELECTOR).filter({ hasText: /^Chat$/i }).first();
+    if (typeof chatRadio?.getAttribute === 'function') {
+        const chatChecked = await chatRadio.getAttribute('aria-checked').catch(() => null);
+        const chatState = await chatRadio.getAttribute('data-state').catch(() => null);
+        if (chatChecked === 'true' || chatState === 'on') return;
+    }
     const workMarker = page.locator(CHATGPT_WORK_PICKER_MARKER_SELECTOR).first();
     if (await workMarker.isVisible().catch(() => false)) {
         throw workSurfaceUnsupportedError({
@@ -716,7 +760,9 @@ async function openModelMenu(page, usedFallbacks) {
         return;
     }
     const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
+    let openAttempts = 0;
+    while (Date.now() < deadline && openAttempts < 12) {
+        openAttempts += 1;
         for (const selector of CHATGPT_MODEL_SELECTOR_BUTTONS) {
             const loc = page.locator(selector).first();
             if (!(await loc.isVisible().catch(() => false))) continue;
@@ -897,9 +943,137 @@ async function chatGptLegacyMenuRootOpenedByComposer(page) {
  * @param {ModelChoice} choice
  * @returns {Promise<Locator | null>}
  */
+
+/**
+ * Current Chat Power shell exposes Instant/Medium/High/Extra High/Pro on a
+ * five-stop slider (aria-valuenow 0..4) rather than only as a detached radio
+ * portal. Prefer the portal when present; otherwise drive the Power control.
+ * @type {Readonly<Record<ModelChoice, number>>}
+ */
+const CHATGPT_POWER_TIER_INDEX = Object.freeze({
+    instant: 0,
+    thinking: 2,
+    pro: 4,
+});
+
+/**
+ * @param {string} text
+ * @returns {ModelChoice|null}
+ */
+function modelChoiceFromPowerSimpleText(text) {
+    const first = String(text || '').split(/\r?\n/)[0] || '';
+    // "High, 3 of 5." / "Pro, 5 of 5."
+    const label = first.replace(/,\s*\d+\s+of\s+\d+\.?$/i, '').trim();
+    return modelChoiceFromPowerTierText(label) || modelChoiceFromText(label);
+}
+
+/**
+ * @param {Page} page
+ * @returns {Promise<{index:number|null, choice:ModelChoice|null, label:string|null}>}
+ */
+async function readChatGptPowerSliderState(page) {
+    const simple = page.locator('[data-testid="composer-model-picker-slider-simple-view"]').first();
+    const simpleText = typeof simple?.innerText === 'function'
+        ? (await simple.innerText({ timeout: 500 }).catch(() => '')).trim()
+        : '';
+    const choiceFromSimple = modelChoiceFromPowerSimpleText(simpleText);
+    const slider = page.locator(
+        '[data-testid="composer-model-picker-slider-simple-view"] [role="slider"], [role="menu"][data-state="open"] [role="slider"]',
+    ).first();
+    const nowStr = typeof slider?.getAttribute === 'function'
+        ? await slider.getAttribute('aria-valuenow').catch(() => null)
+        : null;
+    const index = nowStr != null && nowStr !== '' ? Number(nowStr) : null;
+    if (choiceFromSimple) return { index: Number.isFinite(index) ? index : null, choice: choiceFromSimple, label: simpleText || choiceFromSimple };
+    if (Number.isFinite(index)) {
+        /** @type {ModelChoice[]} */
+        const byIndex = ['instant', 'thinking', 'thinking', 'thinking', 'pro'];
+        // 0 Instant, 1 Medium, 2 High, 3 Extra High, 4 Pro. Medium/High/xhigh all map to thinking.
+        const mapped = byIndex[/** @type {number} */ (index)] || null;
+        return { index: /** @type {number} */ (index), choice: mapped, label: simpleText || mapped };
+    }
+    const effortTrigger = await findPowerPickerSubmenuTrigger(page, 'Effort');
+    if (effortTrigger) {
+        const text = (await effortTrigger.innerText({ timeout: 500 }).catch(() => '')).trim();
+        const choice = modelChoiceFromPowerTierText(text);
+        if (choice) return { index: null, choice, label: text };
+    }
+    return { index: null, choice: null, label: simpleText || null };
+}
+
+/**
+ * Resolve the public model choice to the nearest Power slider index.
+ * thinking without an effort lands on High (index 2), the stable middle thinking tier.
+ * @param {ModelChoice} choice
+ * @param {EffortChoice|null} [effort]
+ * @returns {number}
+ */
+function powerTierIndexForChoice(choice, effort = null) {
+    if (choice === 'instant') return 0;
+    if (choice === 'pro') return 4;
+    if (effort === 'medium') return 1;
+    if (effort === 'xhigh') return 3;
+    if (effort === 'high') return 2;
+    return 2;
+}
+
+/**
+ * Drive the current Chat Power slider with keyboard arrows. Returns true when
+ * the shell reports the requested model choice.
+ * @param {Page} page
+ * @param {ModelChoice} choice
+ * @param {{effort?: EffortChoice|null, usedFallbacks?: string[]}} [options]
+ * @returns {Promise<boolean>}
+ */
+async function selectChatGptPowerTierBySlider(page, choice, options = {}) {
+    if (!(await isChatGptPowerPickerOpen(page))) return false;
+    const effort = options.effort || null;
+    const usedFallbacks = options.usedFallbacks || [];
+    const targetIndex = powerTierIndexForChoice(choice, effort);
+    const power = page.locator('[role="menuitem"][aria-label="Power"]').first();
+    if (!(await power.isVisible().catch(() => false))) return false;
+    await power.focus({ timeout: 1_000 }).catch(() => undefined);
+    await power.click({ timeout: 2_000 }).catch(() => undefined);
+    await page.waitForTimeout(150).catch(() => undefined);
+    let stagnant = 0;
+    let previousIndex = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+        const state = await readChatGptPowerSliderState(page);
+        if (state.choice === choice) {
+            // For thinking, also honor the requested effort stop when known.
+            if (choice !== 'thinking' || effort == null || state.index == null || state.index === targetIndex) {
+                usedFallbacks.push('chat-power-slider');
+                return true;
+            }
+        }
+        const currentIndex = state.index != null ? state.index : (
+            state.choice === 'instant' ? 0
+                : state.choice === 'pro' ? 4
+                    : 2
+        );
+        if (currentIndex === targetIndex && state.choice === choice) {
+            usedFallbacks.push('chat-power-slider');
+            return true;
+        }
+        if (previousIndex != null && previousIndex === currentIndex) stagnant += 1;
+        else stagnant = 0;
+        previousIndex = currentIndex;
+        if (stagnant >= 2) break;
+        const key = currentIndex > targetIndex ? 'ArrowLeft' : 'ArrowRight';
+        await page.keyboard.press(key).catch(() => undefined);
+        await page.waitForTimeout(250).catch(() => undefined);
+    }
+    const finalState = await readChatGptPowerSliderState(page);
+    if (finalState.choice === choice) {
+        usedFallbacks.push('chat-power-slider');
+        return true;
+    }
+    return false;
+}
+
 async function findModelOption(page, choice) {
     const option = CHATGPT_MODEL_OPTIONS[choice];
-    // Current Power shell: tier choices live in the sibling Effort portal.
+    // Current Power shell: prefer the Effort portal radios, then the Power slider.
     if (await isChatGptPowerPickerOpen(page)) {
         await openPowerPickerSubmenu(page, 'Effort');
         const powerChoice = await findOptionByExactLabels(page, [
@@ -907,6 +1081,7 @@ async function findModelOption(page, choice) {
             ...option.labels,
         ]);
         if (powerChoice && await isModelOptionCandidate(powerChoice, choice)) return powerChoice;
+        // No detached radio portal: selection is performed by the Power slider path.
         return null;
     }
     // Current path: exact labels in composer-scoped menu root.
@@ -1475,6 +1650,10 @@ async function readCheckedModel(page, expectedModel = null) {
 async function readCheckedModelEvidence(page, expectedModel = null) {
     const powerPickerOpen = await isChatGptPowerPickerOpen(page);
     if (powerPickerOpen) {
+        const sliderState = await readChatGptPowerSliderState(page);
+        if (sliderState.choice) {
+            return { choice: sliderState.choice, label: sliderState.label || String(sliderState.choice) };
+        }
         const effortTrigger = await findPowerPickerSubmenuTrigger(page, 'Effort');
         if (effortTrigger) {
             const text = (await effortTrigger.innerText({ timeout: 500 }).catch(() => '')).trim();
