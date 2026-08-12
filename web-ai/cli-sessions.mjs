@@ -10,8 +10,8 @@ import { grokPollWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { resumeDeepResearch } from './chatgpt-deep-research.mjs';
 import { WebAiError } from './errors.mjs';
-import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolveTimeoutBudgetSec } from './session.mjs';
-import { resolveSessionPage, withSessionPage, openConversationInNewTab } from './tab-recovery.mjs';
+import { getSession, listSessions, pruneSessionsOlderThan, updateSession, resolvePollTimeoutSec, resolveTimeoutBudgetSec, expiredSessionTimeoutResult } from './session.mjs';
+import { resolveSessionPage, storedDeadlineStillActive, withSessionPage, withSessionPageGuarded, openConversationInNewTab } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { buildSessionDoctorReport } from './session-doctor.mjs';
 
@@ -87,27 +87,43 @@ export async function runSessionsCommand(args, values, deps, input) {
         const id = rest[0];
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions show <id> requires a sessionId argument' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
         return { ok: true, status: 'show', session };
     }
     if (sub === 'resume') {
         const id = rest[0] || values.session;
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions resume <id> requires a sessionId (positional or --session)' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
+        // Refuse an expired session before resolving its page. The poll clamp
+        // keeps a positive minimum so providers cannot read it as "no budget",
+        // which means an expired session would otherwise still open a tab and
+        // take at least one probe. Checked again inside the lock below.
+        const expiredBeforeLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+        if (expiredBeforeLock) return expiredBeforeLock;
         // 35.2: a Deep Research session resumes via the DR capture path (no new
         // prompt), not the generic poller.
         if (session.researchMode === 'deep' && session.vendor === 'chatgpt') {
-            const drResult = await withSessionCommandLock(id, () => withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
+            const drResult = await withSessionCommandLock(id, () => {
+                // Re-checked INSIDE the lock. Acquiring it retries 200 times at
+                // 25ms, so a session with 150ms left can expire while waiting,
+                // and the pre-lock check alone let that run open a tab.
+                const expiredInLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+                if (expiredInLock) return expiredInLock;
+                return withSessionPageGuarded(deps, id, async ({ page, targetId, session: refreshed }) => {
                 const sessionDeps = {
                     ...deps,
                     getPage: async () => page,
                     getTargetId: async () => targetId,
                     getCdpSession: async () => /** @type {any} */ (page).context?.().newCDPSession?.(page),
                 };
-                const budgetMs = resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt') * 1000;
+                // Clamped to the stored deadline. This value is used as a HARD
+                // `timeoutMs`, so the budget resolver's whole-second floor let a
+                // sub-second remainder run past the session's own deadline.
+                const budgetMs = resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt') * 1000;
                 return resumeDeepResearch(page, sessionDeps, { session: refreshed, timeoutMs: budgetMs });
-            }));
+                }, { stillActive: storedDeadlineStillActive(session) });
+            });
             return { ...drResult, status: drResult.status || 'resumed' };
         }
         const pollInput = {
@@ -120,7 +136,11 @@ export async function runSessionsCommand(args, values, deps, input) {
             : session.vendor === 'gemini' ? geminiPollWebAi
             : session.vendor === 'grok' ? grokPollWebAi
             : pollWebAi;
-        const result = await withSessionCommandLock(id, () => withSessionPage(deps, id, async ({ page, targetId, session: refreshed }) => {
+        const result = await withSessionCommandLock(id, () => {
+            // Re-checked inside the lock: see the Deep Research branch above.
+            const expiredInLock = expiredSessionTimeoutResult(id, session.vendor || 'chatgpt');
+            if (expiredInLock) return expiredInLock;
+            return withSessionPageGuarded(deps, id, async ({ page, targetId, session: refreshed }) => {
             const sessionDeps = {
                 ...deps,
                 getPage: async () => page,
@@ -131,21 +151,41 @@ export async function runSessionsCommand(args, values, deps, input) {
                 ...pollInput,
                 vendor: refreshed.vendor,
                 session: refreshed.sessionId,
-                timeout: resolveTimeoutBudgetSec(input, refreshed, refreshed.vendor || 'chatgpt'),
+                // Clamped to the stored deadline, fractional. Resolving a plain
+                // budget floored the remainder to a whole second and handed it
+                // down as if the user had typed it. Omitting it instead is only
+                // safe for ChatGPT: Gemini and Grok read no stored deadline and
+                // fall back to their own 1200s/600s defaults.
+                timeout: resolvePollTimeoutSec(input, refreshed, refreshed.vendor || 'chatgpt'),
             });
-        }));
+            }, { stillActive: storedDeadlineStillActive(session) });
+        });
         return { ...result, status: result.status || 'resumed' };
     }
     if (sub === 'reattach') {
         const id = rest[0] || values.session;
         if (!id) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: 'sessions reattach <id> requires a sessionId' });
         const session = getSession(id);
-        if (!session) throw new WebAiError({ errorCode: 'internal.unhandled', stage: 'internal', retryHint: 'report', message: `no session record for ${id}`, evidence: { sessionId: id } });
+        if (!session) throw new WebAiError({ errorCode: 'input.session-not-found', stage: 'input-preflight', retryHint: 'list-sessions', message: `no session record for ${id} — run \`agbrowse web-ai sessions list\``, evidence: { sessionId: id } });
         const targetUrl = session.conversationUrl || session.originalUrl;
         if (!targetUrl) {
             return { ok: false, status: 'reattach-failed', sessionId: id, error: 'session has no conversationUrl/originalUrl', warnings: [] };
         }
         const resolved = await resolveSessionPage(deps, id, { allowNavigate: input.navigate === true });
+        // Liveness unverified is not a mismatch: the stored tab may be perfectly
+        // usable and merely unreadable right now. Opening a replacement here
+        // would rebind the session to a new tab and strand the live one.
+        if (/** @type {any} */ (resolved).strategy === 'unverified') {
+            return {
+                ok: false,
+                status: 'reattach-unverified',
+                sessionId: id,
+                error: 'tab liveness could not be verified; retry once the browser responds',
+                warnings: resolved.warnings || [],
+                recoverable: true,
+                retryHint: 'retry-reattach',
+            };
+        }
         if (resolved.mismatch) {
             // 35.1 new-tab recovery: when navigation is authorized, open the saved
             // ChatGPT conversation in a fresh tab (32.3-guarded) instead of failing.

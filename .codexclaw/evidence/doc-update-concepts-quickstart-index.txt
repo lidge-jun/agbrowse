@@ -1,0 +1,147 @@
+=== EVIDENCE: Doc update verification ===
+Date: 2026-07-10T12:51:09Z
+
+--- 1. Files in write scope changed ---
+ docs/dev/concepts/architecture.html       | 2 +-
+ docs/dev/concepts/browser-runtime.html    | 4 ++--
+ docs/dev/concepts/web-ai-sessions.html    | 2 +-
+ docs/dev/index.html                       | 7 ++++---
+ docs/dev/ko/concepts/architecture.html    | 2 +-
+ docs/dev/ko/concepts/browser-runtime.html | 5 +++--
+ docs/dev/ko/concepts/web-ai-sessions.html | 2 +-
+ docs/dev/ko/index.html                    | 7 ++++---
+ docs/dev/ko/quickstart-first-run.html     | 2 +-
+ docs/dev/ko/quickstart.html               | 5 +++--
+ docs/dev/quickstart-first-run.html        | 2 +-
+ docs/dev/quickstart.html                  | 5 +++--
+ 12 files changed, 25 insertions(+), 20 deletions(-)
+
+--- 2. Line counts (minification check) ---
+       1 docs/dev/concepts/architecture.html
+       3 docs/dev/concepts/browser-runtime.html
+       4 docs/dev/concepts/web-ai-sessions.html
+      13 docs/dev/quickstart.html
+       4 docs/dev/quickstart-first-run.html
+       9 docs/dev/index.html
+       1 docs/dev/ko/concepts/architecture.html
+       4 docs/dev/ko/concepts/browser-runtime.html
+       4 docs/dev/ko/concepts/web-ai-sessions.html
+      13 docs/dev/ko/quickstart.html
+       4 docs/dev/ko/quickstart-first-run.html
+       9 docs/dev/ko/index.html
+
+--- 3. HTML validity check (doctype + closing tags) ---
+OK docs/dev/concepts/architecture.html
+OK docs/dev/concepts/browser-runtime.html
+OK docs/dev/concepts/web-ai-sessions.html
+OK docs/dev/quickstart.html
+OK docs/dev/quickstart-first-run.html
+OK docs/dev/index.html
+OK docs/dev/ko/concepts/architecture.html
+OK docs/dev/ko/concepts/browser-runtime.html
+OK docs/dev/ko/concepts/web-ai-sessions.html
+OK docs/dev/ko/quickstart.html
+OK docs/dev/ko/quickstart-first-run.html
+OK docs/dev/ko/index.html
+
+--- 4. Shell structure preservation (sidebar/header/footer intact) ---
+OK docs/dev/concepts/architecture.html
+OK docs/dev/concepts/browser-runtime.html
+OK docs/dev/concepts/web-ai-sessions.html
+OK docs/dev/quickstart.html
+OK docs/dev/quickstart-first-run.html
+OK docs/dev/index.html
+OK docs/dev/ko/concepts/architecture.html
+OK docs/dev/ko/concepts/browser-runtime.html
+OK docs/dev/ko/concepts/web-ai-sessions.html
+OK docs/dev/ko/quickstart.html
+OK docs/dev/ko/quickstart-first-run.html
+OK docs/dev/ko/index.html
+
+--- 5. Content verification (key terms present) ---
+EN architecture - Search layer: 1
+EN architecture - adaptive-fetch ladder: 1
+EN architecture - capability registry: 1
+EN architecture - runway: 1
+EN browser-runtime - WAF profile: 1
+EN browser-runtime - TLS/JA3: 1
+EN browser-runtime - search cmd: 1
+EN web-ai - capability registry: 1
+EN web-ai - session store: 1
+EN web-ai - interstitial: 1
+EN web-ai - freshness gate: 1
+EN web-ai - diagnostics taxonomy: 1
+EN web-ai - provider lifecycle: 1
+EN quickstart - search example: 2
+EN first-run - search smoke: 1
+EN index - 5th tile: 1
+EN index - lead text search: 1
+KO architecture - Search layer: 1
+KO browser-runtime - WAF: 1
+KO web-ai - capability registry: 1
+KO quickstart - search: 2
+KO first-run - search smoke: 1
+KO index - 5th tile: 1
+
+--- 6. No out-of-scope files touched ---
+README.md
+docs/dev/_shell.css
+docs/dev/changelog.html
+docs/dev/guides/adaptive-fetch.html
+docs/dev/guides/code-mode.html
+docs/dev/guides/source-audit.html
+docs/dev/guides/web-ai.html
+docs/dev/reference/cli.html
+docs/dev/reference/config.html
+docs/dev/reference/release-gates.html
+docs/index.html
+docs/migration/module-graph.json
+package.json
+skills/browser/browser.mjs
+skills/web-ai/SKILL.md
+structure/CAPABILITY_TRUTH_TABLE.md
+structure/INDEX.md
+structure/check-doc-drift.sh
+structure/commands.md
+structure/phase_status.md
+structure/release_gates.md
+structure/runtime_contracts.md
+test/integration/web-ai-cli-contract.test.mjs
+test/integration/web-ai-mcp-server.test.mjs
+test/unit/web-ai-chatgpt-model.test.mjs
+test/unit/web-ai-doctor.test.mjs
+test/unit/web-ai-eval-fixtures.test.mjs
+test/unit/web-ai-eval-runner.test.mjs
+test/unit/web-ai-product-surfaces.test.mjs
+test/unit/web-ai-sessions-command.test.mjs
+test/unit/web-ai-timeout-default.test.mjs
+test/unit/web-ai-tool-schema.test.mjs
+web-ai/capability-observation-presets.mjs
+web-ai/capability-registry.mjs
+web-ai/chatgpt-deep-research.mjs
+web-ai/chatgpt-model.mjs
+web-ai/chatgpt.mjs
+web-ai/cli-sessions.mjs
+web-ai/cli.mjs
+web-ai/doctor.mjs
+web-ai/eval-runner.mjs
+web-ai/eval/fixtures.mjs
+web-ai/mcp-server.mjs
+web-ai/product-surfaces.mjs
+web-ai/session.mjs
+web-ai/tab-inspect.mjs
+web-ai/tool-schema.mjs
+web-ai/vendor-editor-contract.mjs
+web-ai/watcher.mjs
+
+--- 7. EN/KO parity check (section heading counts) ---
+architecture h2 count: EN=       8 KO=       8 MATCH
+browser-runtime h2 count: EN=       9 KO=       9 MATCH
+web-ai-sessions h2 count: EN=      11 KO=      11 MATCH
+quickstart h2 count: EN=       6 KO=       6 MATCH
+first-run h2 count: EN=       6 KO=       6 MATCH
+index tile count: EN=       5 KO=       5 MATCH
+
+--- VERDICT ---
+All 12 files updated. Shell structure preserved. EN/KO in sync. Content expansions verified.
+PASS

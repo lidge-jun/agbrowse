@@ -3,12 +3,34 @@
 // Parity catalog 203.3 (P2): Camoufox stealth-browser fallback (hardened fingerprint).
 // agbrowse escalated only to its own CDP Chrome; this adds a Python Camoufox render lane.
 // Reverse port of cli-jaw adaptive-fetch/camoufox-session.ts. Spawn-based (no-op without
-// python3 + camoufox); bails before spawning when the overall deadline already fired.
+// python3 + camoufox); bails before spawning when the caller's deadline already fired.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Headroom the lane allows on top of the per-attempt page budget so a browser
+ * launch is not counted against the page's own time.
+ */
+export const CAMOUFOX_LAUNCH_HEADROOM_MS = 30_000;
+
+/**
+ * The wall-clock budget for one camoufox attempt: the process timeout below and
+ * the caller's abort signal must agree, so both derive from this. The seconds
+ * rounding matters — the Python script takes whole seconds, and computing the
+ * signal from raw `timeoutMs` instead left it firing up to 999ms early.
+ *
+ * Clamped to the `AbortSignal.timeout` ceiling: without it a `timeoutMs` near
+ * 2^32 turns the added headroom into a cause-less RangeError.
+ *
+ * @param {number} [timeoutMs]
+ */
+export function camoufoxBudgetMs(timeoutMs) {
+    const seconds = Math.ceil((timeoutMs || 30_000) / 1000);
+    return Math.min(seconds * 1000 + CAMOUFOX_LAUNCH_HEADROOM_MS, 2_147_483_647);
+}
 
 /** @type {string|null|undefined} */
 let cachedPython;
@@ -52,16 +74,21 @@ async function detectCamoufox() {
 
 /**
  * @param {string} url
- * @param {{ timeoutMs?: number, signal?: AbortSignal }} [options]
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, execFileImpl?: typeof execFileAsync, detect?: () => Promise<boolean> }} [options]
  * @returns {Promise<CamoufoxResult|null>}
  */
 export async function fetchViaCamoufox(url, options) {
-    // P0-6: bail before spawning if the overall deadline already fired.
+    // P0-6: bail before spawning if the caller's deadline already fired. The
+    // caller budgets this signal with `camoufoxBudgetMs`, the same value the
+    // execFile timeout below uses — `timeoutMs` alone would abort mid-launch.
     if (options?.signal?.aborted) return null;
-    const available = await detectCamoufox();
+    // Injected the way `deps.fetch` is injected in the scheduler: without it the
+    // spawn-failure paths can only be exercised on a machine that has camoufox.
+    const available = options?.detect ? await options.detect() : await detectCamoufox();
     if (!available) return null;
 
-    const python = /** @type {string} */ (cachedPython);
+    const python = /** @type {string} */ (cachedPython || 'python3');
+    const runFile = options?.execFileImpl || execFileAsync;
     const timeout = Math.ceil((options?.timeoutMs || 30_000) / 1000);
     const script = [
         'import json, sys',
@@ -77,14 +104,19 @@ export async function fetchViaCamoufox(url, options) {
     ].join('\n');
 
     try {
-        const { stdout } = await execFileAsync(python, ['-c', script], {
-            timeout: (timeout + 30) * 1000,
+        const { stdout } = await runFile(python, ['-c', script], {
+            timeout: camoufoxBudgetMs(options?.timeoutMs),
             maxBuffer: 10_000_000,
-            // P0-6: kill the Camoufox subprocess if the overall deadline fires.
+            // P0-6: kill the Camoufox subprocess if the caller's deadline fires.
             ...(options?.signal ? { signal: options.signal } : {}),
         });
         return JSON.parse(stdout.trim().split('\n').pop() || '{}');
-    } catch {
+    } catch (error) {
+        // An abort is the caller's own deadline firing, not "this source had
+        // nothing". Returning null here made the lane vanish without a trace;
+        // let the scheduler record why.
+        if ((/** @type {any} */ (error))?.name === 'AbortError'
+            || (/** @type {any} */ (error))?.code === 'ABORT_ERR') throw error;
         return null;
     }
 }

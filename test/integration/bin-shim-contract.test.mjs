@@ -99,4 +99,13 @@ describe('P02 — bin shim contract', () => {
             expect(() => statSync(resolve(root, packedPath))).not.toThrow();
         }
     });
+
+    it('ships no npm lifecycle install scripts (npm >= 11.16 warns; npm 12 default-denies)', () => {
+        // The star prompt moved to a first-run CLI trigger; a lifecycle hook
+        // must never come back — it only produces allow-scripts warnings on
+        // modern npm and stops running at all under npm 12 defaults.
+        for (const hook of ['preinstall', 'install', 'postinstall', 'preuninstall', 'postuninstall']) {
+            expect(pkg.scripts?.[hook], `scripts.${hook} must not exist`).toBeUndefined();
+        }
+    });
 });

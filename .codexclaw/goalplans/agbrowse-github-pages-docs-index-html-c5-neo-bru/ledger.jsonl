@@ -1,0 +1,5 @@
+{"ts":"2026-07-10T11:34:44.455Z","slug":"agbrowse-github-pages-docs-index-html-c5-neo-bru","event":"created","detail":"init objective=\"agbrowse GitHub Pages 랜딩(docs/index.html)을 C5 Neo-Brutalist Terminal 방향으로 전면 리디자인 + 풀스크린 전환 시그니처 모션. WP1 설계잠금 → WP2 구조/스타일 구현 → WP3 모션 레이어 → WP4 검증/폴리시. 수용기준: 3뷰포트 렌더검증, 스크롤모션 증명, reduced-motion 완전지원, 링크보존, 글래스/그라디언트/이모지 0, 리뷰어 게이트 통과.\" criteria=0"}
+{"ts":"2026-07-10T11:41:58.505Z","slug":"agbrowse-github-pages-docs-index-html-c5-neo-bru","event":"workphase_done","detail":"closed wp1"}
+{"ts":"2026-07-10T11:41:58.505Z","slug":"agbrowse-github-pages-docs-index-html-c5-neo-bru","event":"workphase_started","detail":"started wp2"}
+{"ts":"2026-07-10T12:20:34.301Z","slug":"agbrowse-github-pages-docs-index-html-c5-neo-bru","event":"workphase_done","detail":"closed wp3"}
+{"ts":"2026-07-10T12:20:34.301Z","slug":"agbrowse-github-pages-docs-index-html-c5-neo-bru","event":"workphase_started","detail":"started wp4"}

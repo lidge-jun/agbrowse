@@ -11,6 +11,7 @@
 //                                                        tab-switch|poll-session
 //   session.target-ambiguous        target-resolution    pass-session
 //   provider.composer-not-visible   composer-prereq      re-snapshot
+//   provider.interstitial           provider-interstitial wait-and-retry|login|navigate
 //   provider.model-mismatch         provider-select-mode model-fallback
 //   provider.attachment-preflight   attachment-preflight inline-only-or-file
 //   provider.attachment-evidence-missing
@@ -21,6 +22,8 @@
 //   capability.unsupported          capability-preflight feature-fallback
 //   context.over-budget             context-preflight    reduce-files
 //   context.symlink-rejected        context-preflight    path-list
+//   context.transform-invalid       context-transform    use-supported-transform
+//   context.transform-failed        context-transform    install-compatible-repomix
 //   grok.context-pack-not-allowed   grok-context-pack-not-allowed
 //                                                        inline-only-or-allow-flag
 //   internal.unhandled              internal             report

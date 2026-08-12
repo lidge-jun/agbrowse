@@ -371,4 +371,420 @@ describe('saveAssistantDownloadableFiles', () => {
         expect(out.files).toEqual([]);
         expect(out.warnings.some((w) => w.startsWith('file-artifact-fetch-failed:'))).toBe(true);
     });
+
+    /**
+     * `strict` is the require-all path. The assertions below are about the
+     * DIFFERENCE from the opportunistic path above: same inputs, different
+     * verdicts, because the caller asked for the files.
+     */
+    describe('strict (require-all)', () => {
+        it('F1: a malformed detection is a failure, not an empty answer', async () => {
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const out = await saveAssistantDownloadableFiles(fakeCdp('not json'), {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('detection-malformed');
+        });
+
+        it('F2: finding no candidates is an unmet request', async () => {
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const out = await saveAssistantDownloadableFiles(fakeCdp([]), {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('no-candidates');
+            // The paired case: the same emptiness is fine without the flag.
+            const lenient = await saveAssistantDownloadableFiles(fakeCdp([]), {}, { sessionId: session.sessionId });
+            expect(lenient.ok).toBe(true);
+        });
+
+        it('F3: one failed download rolls the whole batch back', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => {
+                if (String(url).includes('file_a')) return okResponse('first', { 'content-type': 'text/plain' });
+                return { ok: false, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
+            }));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: 'b.txt', text: '' },
+            ]);
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('fetch-failed');
+            // Nothing published, and no staging leftovers.
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F4: rollback leaves an artifact from an earlier run untouched', async () => {
+            // The failure mode this guards: the deterministic basename means a
+            // second capture of `a.txt` would overwrite the first, so deleting
+            // "the file we wrote" on failure would destroy the earlier one.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { saveFileArtifact, resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            const existing = saveFileArtifact(session.sessionId, {
+                filename: 'a.txt', buffer: Buffer.from('ORIGINAL'), mimeType: 'text/plain',
+            });
+            const existingPath = join(resolveArtifactsDir(session.sessionId), existing.path);
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => {
+                if (String(url).includes('file_a')) return okResponse('REPLACEMENT', { 'content-type': 'text/plain' });
+                return { ok: false, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
+            }));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: 'b.txt', text: '' },
+            ]);
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(readFileSync(existingPath, 'utf8')).toBe('ORIGINAL');
+        });
+
+        it('F5: a second attempt reuses what the first one saved', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            const downloadsAfterFirst = fetchSpy.mock.calls.length;
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            expect(second.savedCount).toBe(1);
+            // No re-download, no duplicate artifact.
+            expect(fetchSpy.mock.calls.length).toBe(downloadsAfterFirst);
+            expect(getSession(session.sessionId).artifacts).toHaveLength(1);
+        });
+
+        it('F6: a recorded artifact whose file is gone is not reused', async () => {
+            // Trusting the session record alone would report success with
+            // nothing on disk — the same fail-open shape in a new place.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { rmSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            rmSync(join(resolveArtifactsDir(session.sessionId), first.files[0].path), { force: true });
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            // Re-downloaded rather than counted from the stale record.
+            expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+        });
+
+        it('F7: a losing run stops before it writes anything', async () => {
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true, stillActive: () => false,
+            });
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('deadline-exceeded');
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F8: two candidates that resolve to the same filename both survive', async () => {
+            // Different URLs can both be `data.csv`. Keying the staging path on
+            // the name alone let the second write clobber the first, and the
+            // commit then failed renaming a file that was gone — so an ordinary
+            // two-file request failed.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async (url) => okResponse(
+                String(url).includes('file_a') ? 'FIRST' : 'SECOND',
+                { 'content-disposition': 'attachment; filename="same.txt"', 'content-type': 'text/plain' },
+            )));
+            const cdp = fakeCdp([
+                { href: 'https://chatgpt.com/backend-api/files/file_a/download', download: '', text: '' },
+                { href: 'https://chatgpt.com/backend-api/files/file_b/download', download: '', text: '' },
+            ]);
+
+            const out = await saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true,
+            });
+
+            expect(out.ok).toBe(true);
+            expect(out.savedCount).toBe(2);
+            // Published under distinct names, not one overwriting the other.
+            expect(new Set(out.files.map(f => f.path)).size).toBe(2);
+            expect(getSession(session.sessionId).artifacts).toHaveLength(2);
+        });
+
+        it('F9: a fetch still in flight at the deadline writes nothing', async () => {
+            // The contract case: not "already expired at entry" but a download
+            // that is pending WHEN the deadline passes, then resolves.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            let active = true;
+            let release = () => {};
+            const inFlight = new Promise(resolve => { release = resolve; });
+            vi.stubGlobal('fetch', vi.fn(async () => {
+                // The deadline passes while this is outstanding.
+                active = false;
+                await inFlight;
+                return okResponse('late body', { 'content-type': 'text/plain' });
+            }));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const pending = saveAssistantDownloadableFiles(cdp, {}, {
+                sessionId: session.sessionId, strict: true, stillActive: () => active,
+            });
+            release();
+            const out = await pending;
+
+            expect(out.ok).toBe(false);
+            expect(out.errors[0].reason).toBe('deadline-exceeded');
+            expect(getSession(session.sessionId).artifacts || []).toHaveLength(0);
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (existsSync(dir)) expect(readdirSync(dir)).toEqual([]);
+        });
+
+        it('F10: a tampered file is re-downloaded rather than counted', async () => {
+            // F6 covers a deleted file; this covers one whose bytes changed.
+            // Matching on the record alone would return stale content as fresh.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const { writeFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const fetchSpy = vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' }));
+            vi.stubGlobal('fetch', fetchSpy);
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+
+            const first = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(first.ok).toBe(true);
+            writeFileSync(join(resolveArtifactsDir(session.sessionId), first.files[0].path), 'TAMPERED');
+
+            const second = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            expect(second.ok).toBe(true);
+            expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+        });
+
+        it('F11: a failed session write leaves no published files behind', async () => {
+            // The session update takes a store lock that can throw. Leaving it
+            // outside the rollback published the files while recording nothing.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { saveAssistantDownloadableFiles } = await import('../../web-ai/chatgpt-files.mjs');
+            const { resolveArtifactsDir } = await import('../../web-ai/session-artifacts.mjs');
+            const storeModule = await import('../../web-ai/session-store.mjs');
+            const { readdirSync, existsSync } = await import('node:fs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            vi.stubGlobal('fetch', vi.fn(async () => okResponse('body', { 'content-type': 'text/plain' })));
+            const cdp = fakeCdp([{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }]);
+            const spy = vi.spyOn(storeModule, 'appendSessionArtifactsLocked').mockImplementation(() => {
+                throw new Error('store lock unavailable');
+            });
+
+            let out;
+            try {
+                out = await saveAssistantDownloadableFiles(cdp, {}, { sessionId: session.sessionId, strict: true });
+            } finally {
+                spy.mockRestore();
+            }
+
+            expect(out.ok).toBe(false);
+            const dir = resolveArtifactsDir(session.sessionId);
+            const left = existsSync(dir) ? readdirSync(dir) : [];
+            expect(left).toEqual([]);
+        });
+
+        it('F12: publishing never replaces an artifact another run just wrote', async () => {
+            // Scope, stated plainly: two synchronous commits cannot interleave
+            // in one process, so this asserts the PRIMITIVE that makes the
+            // cross-process race safe — publishing claims a name only if it is
+            // still free, and never overwrites what is already there. A bare
+            // `rename` replaces the destination silently, which is how the
+            // loser's bytes ended up under the winner's descriptor hash.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { readFileSync, writeFileSync, mkdirSync, existsSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            // Stands in for the file a concurrent run published between this
+            // run choosing the name and reaching the write.
+            writeFileSync(join(dir, 'race.txt'), 'WINNER');
+
+            const staged = stageFileArtifact(session.sessionId, {
+                filename: 'race.txt', buffer: Buffer.from('LOSER'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+            });
+            const result = await commitStagedArtifacts(session.sessionId, [staged]);
+
+            expect(result.ok).toBe(true);
+            expect(result.files[0].path).not.toBe('race.txt');
+            expect(readFileSync(join(dir, 'race.txt'), 'utf8')).toBe('WINNER');
+            expect(readFileSync(join(dir, result.files[0].path), 'utf8')).toBe('LOSER');
+        });
+
+        it('F13: a concurrent commit cannot erase another run\'s descriptors', async () => {
+            // Sequential commits cannot interleave in one process, so the stale
+            // snapshot is created directly: another run appends WHILE this
+            // commit is between its read and its write. A read-then-write
+            // implementation writes the array it read and drops the other
+            // descriptor; appending under the store lock cannot.
+            const { createSession, getSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts } = await import('../../web-ai/session-artifacts.mjs');
+            const { appendSessionArtifacts } = await import('../../web-ai/session-store.mjs');
+            const sessionModule = await import('../../web-ai/session.mjs');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+
+            // The other run's descriptor, already recorded.
+            appendSessionArtifacts(session.sessionId, [{
+                kind: 'file', label: 'other.txt', path: 'other.txt', sha256: 'x',
+                validation: { type: 'generic', ok: true },
+            }]);
+
+            const staged = stageFileArtifact(session.sessionId, {
+                filename: 'mine.txt', buffer: Buffer.from('MINE'), mimeType: 'text/plain', txId: 'tx1', slot: 0,
+            });
+            // The snapshot this commit would have read before the other run
+            // landed. Appending under the lock never consults it; reading and
+            // rewriting the whole array does, and loses `other.txt`.
+            const spy = vi.spyOn(sessionModule, 'getSession').mockImplementation((id) => ({
+                sessionId: id, vendor: 'chatgpt', artifacts: [],
+            }));
+            try {
+                expect((await commitStagedArtifacts(session.sessionId, [staged])).ok).toBe(true);
+            } finally {
+                spy.mockRestore();
+            }
+
+            const artifacts = getSession(session.sessionId).artifacts || [];
+            expect(artifacts.map(a => a.path).sort()).toEqual(['mine.txt', 'other.txt']);
+        });
+
+        it('F14: a failure part-way through publishing leaves nothing behind', async () => {
+            // Publishing is per file, so a batch can fail after some entries are
+            // already linked. Those have to come back off disk; the earlier
+            // flow rolled back only what it had recorded, and an entry that
+            // failed between linking and being named escaped that list.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { stageFileArtifact, commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { rmSync: removeSync, mkdirSync, existsSync, writeFileSync: write } = await import('node:fs');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            // Two entries: the first publishes cleanly, the second cannot even
+            // be linked because its staging file is gone. The commit must roll
+            // the first one back, and F14's point is that whatever it cannot
+            // remove comes back off disk rather than being left behind.
+            const good = stageFileArtifact(session.sessionId, {
+                filename: 'kept.txt', buffer: Buffer.from('K'), mimeType: 'text/plain', txId: 'tx', slot: 0,
+            });
+            const broken = stageFileArtifact(session.sessionId, {
+                filename: 'orphan.txt', buffer: Buffer.from('X'), mimeType: 'text/plain', txId: 'tx', slot: 1,
+            });
+            removeSync(broken.stagedPath, { force: true });
+            const result = await commitStagedArtifacts(session.sessionId, [good, broken]);
+
+            expect(result.ok).toBe(false);
+            // The first entry was published and then rolled back, so nothing of
+            // this transaction may remain on disk.
+            expect(existsSync(join(dir, 'kept.txt'))).toBe(false);
+            expect(existsSync(join(dir, 'orphan.txt'))).toBe(false);
+            write(join(dir, '.keep'), '');
+        });
+
+        it('F15: a link whose staging entry cannot be removed is undone', async () => {
+            // The first half of the orphan path: `link` succeeds, removing the
+            // staging entry fails. The link has to come back off disk, because
+            // the caller never learns its name and no later rollback can reach
+            // it. Staging lives in a read-only directory here, which permits
+            // `link` and refuses `unlink`.
+            //
+            // The far half — that removal ALSO failing, which is what raises
+            // EROLLBACK — needs the destination directory to be read-only too,
+            // and that would block the `link` itself. It is covered by
+            // inspection rather than by this test.
+            const { createSession } = await import('../../web-ai/session.mjs');
+            const { commitStagedArtifacts, resolveArtifactsDir } =
+                await import('../../web-ai/session-artifacts.mjs');
+            const { chmodSync, mkdirSync, mkdtempSync, existsSync, writeFileSync: write, readdirSync, rmSync: removeSync } =
+                await import('node:fs');
+            const { tmpdir } = await import('node:os');
+            const { join } = await import('node:path');
+            const session = createSession({ vendor: 'chatgpt', prompt: 'p', attachmentPolicy: 'inline-only' });
+            const dir = resolveArtifactsDir(session.sessionId);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+            const lockedDir = mkdtempSync(join(tmpdir(), 'agbrowse-locked-'));
+            const stagedPath = join(lockedDir, 'staged.bin');
+            write(stagedPath, 'BODY');
+            chmodSync(lockedDir, 0o500);
+
+            let result;
+            try {
+                result = await commitStagedArtifacts(session.sessionId, [{
+                    stagedPath,
+                    descriptor: {
+                        kind: 'file', label: 'locked.txt', path: 'locked.txt',
+                        sha256: 'x', validation: { type: 'generic', ok: true },
+                    },
+                }]);
+            } finally {
+                chmodSync(lockedDir, 0o700);
+                removeSync(lockedDir, { recursive: true, force: true });
+            }
+
+            expect(result.ok).toBe(false);
+            // The published link was undone, so the batch left nothing behind.
+            expect(readdirSync(dir).filter(f => !f.startsWith('.'))).toEqual([]);
+        });
+    });
 });

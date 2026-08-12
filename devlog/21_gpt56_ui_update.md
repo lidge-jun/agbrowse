@@ -127,4 +127,4 @@ timeout 됐다. 동일 유닛 내 후속 수리 워커가 `isWorkSession` predic
 
 ## 계획 문서
 
-`devlog/_plan/260710_gpt56_update/` (00~10, 11 파일 + assets).
+`devlog/_fin/260710_gpt56_update/` (00~10, 11 파일 + assets).

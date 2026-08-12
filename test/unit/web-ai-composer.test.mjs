@@ -64,6 +64,13 @@ describe('web-ai ChatGPT composer hardening', () => {
         expect(page.keys).toContain('Enter');
     });
 
+    it('does not press Enter when an enabled send button is required', async () => {
+        const page = createFakePage({ hasSendButton: false });
+        const result = await submitPromptFromComposer(page, { requireEnabledSendButton: true });
+        expect(result).toEqual({ method: 'none', failure: 'send-button-disabled' });
+        expect(page.keys).not.toContain('Enter');
+    });
+
     it('clicks enabled send button before Enter fallback', async () => {
         const page = createFakePage();
         const result = await submitPromptFromComposer(page);

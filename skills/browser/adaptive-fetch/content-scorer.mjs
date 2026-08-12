@@ -16,8 +16,27 @@ const SOURCE_TRUST = {
 };
 
 /**
+ * The SCORED wrapper. The candidate's own fields (`text`, `title`, `source`,
+ * `ok`, ...) live under `.candidate`, NOT on this object. Reading `wrapper.text`
+ * or `rawCandidate.verdict` silently yields `undefined`, which shipped twice as
+ * a dead condition — once always-true (camoufox guard), once always-false
+ * (candidate discovery). Keep this typedef explicit so `tsc` can say so.
+ *
+ * @typedef {{
+ *   candidate: any,
+ *   score: number,
+ *   verdict: string,
+ *   markers: any[],
+ *   textLength: number,
+ *   density: number,
+ *   evidence: string[],
+ * }} ScoredReaderCandidate
+ */
+
+/**
  * @param {any} candidate
  * @param {{ minStrongScore?: number, minWeakScore?: number }} [options]
+ * @returns {ScoredReaderCandidate}
  */
 export function scoreReaderCandidate(candidate, options = {}) {
     const text = String(candidate.text || '');
@@ -78,6 +97,7 @@ export function scoreReaderCandidate(candidate, options = {}) {
 /**
  * @param {any[]} candidates
  * @param {Record<string, unknown>} [options]
+ * @returns {ScoredReaderCandidate|null}
  */
 export function chooseBestReaderCandidate(candidates = [], options = {}) {
     const scored = candidates.map(candidate => scoreReaderCandidate(candidate, options));

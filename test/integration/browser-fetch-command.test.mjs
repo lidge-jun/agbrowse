@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { constants as bufferConstants } from 'node:buffer';
 import { runAdaptiveFetch, runAdaptiveFetchCli } from '../../skills/browser/adaptive-fetch/index.mjs';
 import { getFetchBrowserPage, BrowserRequiredError } from '../../skills/browser/adaptive-fetch/browser-runtime.mjs';
 import { fetchTextCandidate } from '../../skills/browser/adaptive-fetch/fetcher.mjs';
@@ -372,6 +373,670 @@ describe('adaptive fetch browser escalation', () => {
         });
         expect(result.ok).toBe(true);
         expect(result.safetyFlags).toContain('user_session_used');
+    });
+
+    // A CDP connect failure is a plain Error, not a BrowserRequiredError, so the
+    // escalation catch used to rethrow it and the whole fetch died with
+    // internal.unhandled — throwing away text an earlier lane had already read.
+    // Running `agbrowse fetch <url>` without Chrome up hit this on the default
+    // path.
+    it('keeps earlier lane content when browser escalation fails with a plain error', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => {
+                throw new Error('CDP connection failed after 4 attempts: connect ECONNREFUSED 127.0.0.1:9222');
+            },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.content.length).toBeGreaterThan(100);
+        expect(result.attempts.some(a => a.source === 'browser' && a.verdict === 'error')).toBe(true);
+        expect(result.warnings.some(w => w.includes('CDP connection failed'))).toBe(true);
+    });
+
+    // Same failure under `required`: there is no usable candidate, so the verdict
+    // stays browser_required, but the reason why the browser never came up must
+    // survive into the result instead of vanishing.
+    it('reports browser_required with the failure reason when required escalation errors', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/spa',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('', { status: 200, headers: { 'content-type': 'text/html' } }),
+            createIsolatedPage: async () => {
+                throw new Error('CDP connection failed after 4 attempts: connect ECONNREFUSED 127.0.0.1:9222');
+            },
+        });
+        expect(result.ok).toBe(false);
+        expect(result.verdict).toBe('browser_required');
+        expect(result.warnings.some(w => w.includes('CDP connection failed'))).toBe(true);
+    });
+
+    // Swallowing a lane failure is right for the environment and wrong for our
+    // own bug: a TypeError from this code would be reported as "that source had
+    // nothing" and the fetch would return partial evidence as if complete.
+    it('rethrows a programming fault instead of recording it as a lane failure', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => {
+                throw new TypeError('undefined is not a function');
+            },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // The separator is `cause`, not the type. Node's fetch reports ENOTFOUND and
+    // ECONNREFUSED as `TypeError: fetch failed` with the system error attached,
+    // so a type-only rule would crash on any dead hostname.
+    it('keeps going when a fetch lane fails with undici TypeError carrying a cause', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                const error = new TypeError('fetch failed');
+                error.cause = Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' });
+                throw error;
+            },
+        });
+        expect(result.ok).toBe(false);
+        expect(result.attempts.some(a => a.verdict === 'error' && a.reason === 'fetch failed')).toBe(true);
+    });
+
+    it('rethrows a fetch-lane TypeError that carries no cause', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                throw new TypeError('deps.fetch is not a function');
+            },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // Pin the whole set, not just the type we happened to hit first. Without
+    // this, dropping a constructor from the guard passes every other test.
+    it.each([
+        ['TypeError', () => new TypeError('undefined is not a function')],
+        ['ReferenceError', () => new ReferenceError('someVar is not defined')],
+        ['RangeError', () => new RangeError('Maximum call stack size exceeded')],
+        ['SyntaxError', () => new SyntaxError('Unexpected token }')],
+    ])('rethrows %s from a lane instead of recording it', async (_name, makeError) => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => { throw makeError(); },
+        })).rejects.toBeInstanceOf(makeError().constructor);
+    });
+
+    // A malformed `Location` is remote input, not our bug. Before the fetcher
+    // guarded it, `new URL()` threw a cause-less TypeError that the scheduler
+    // read as a programming fault and rethrew, crashing the whole fetch.
+    it('treats a malformed redirect Location as a lane failure, not a crash', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/x',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('', { status: 301, headers: { location: 'http://[bad' } }),
+        });
+        expect(result.ok).toBe(false);
+        expect(result.verdict).toBe('blocked');
+        expect(result.attempts.some(a => a.evidence?.includes('invalid-redirect-location'))).toBe(true);
+    });
+
+    it('still follows a well-formed relative redirect', async () => {
+        const seen = [];
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/start',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async (url) => {
+                seen.push(String(url));
+                if (seen.length === 1) return new Response('', { status: 302, headers: { location: '/moved' } });
+                return new Response(
+                    '<title>Moved</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(seen[1]).toBe('https://example.com/moved');
+        expect(result.ok).toBe(true);
+    });
+
+    // A blank Location resolves to the base URL rather than throwing, so without
+    // the blank check it becomes a redirect to itself and burns the redirect
+    // budget. Standard Headers normalizes blanks away, so reach it through a
+    // fetchImpl that implements headers.get directly.
+    it('does not loop on a blank redirect Location', async () => {
+        let calls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/start',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => {
+                calls += 1;
+                return {
+                    status: 301,
+                    headers: {
+                        get: (name) => (name.toLowerCase() === 'location' ? '   ' : null),
+                        entries: () => [][Symbol.iterator](),
+                    },
+                    body: null,
+                    text: async () => '',
+                };
+            },
+        });
+        expect(calls).toBe(1);
+        expect(result.ok).toBe(false);
+    });
+
+    // Q6: the lane reads `camoResult.html`. Reading `content` instead made the
+    // candidate's text always '' so it was dropped, and the lane could never
+    // contribute evidence even with camoufox installed. Nothing pinned that
+    // field name until this test, because reaching the lane used to require a
+    // real camoufox install and a browser spawn.
+    it('reads html from the camoufox lane and adopts it as evidence', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({
+                ok: true,
+                url: 'https://example.com/article',
+                title: 'Rendered Title',
+                html: '<title>Rendered Title</title><article>'
+                    + 'Content the camoufox lane rendered. '.repeat(20) + '</article>',
+            }),
+        });
+        expect(result.ok).toBe(true);
+        expect(result.evidence).toContain('camoufox-render');
+        expect(result.content.length).toBeGreaterThan(100);
+        expect(result.attempts.some(a => a.reason === 'camoufox-render')).toBe(true);
+    });
+
+    // The lane must stay a no-op when camoufox returns nothing, and must not
+    // fabricate a candidate from an empty render.
+    it('drops the camoufox candidate when the render carries no text', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({ ok: true, url: 'https://example.com/article', title: '', html: '' }),
+            // Inject the browser lane too, otherwise the verdict below would be
+            // asserting that this environment has no isolated page rather than
+            // anything about the camoufox lane.
+            createIsolatedPage: async () => ({
+                page: fakePage({ text: '', title: '' }),
+                cleanup: async () => undefined,
+            }),
+        });
+        expect(result.evidence).not.toContain('camoufox-render');
+        expect(result.ok).toBe(false);
+    });
+
+    // `--browser never` must not reach the camoufox lane at all. Nothing pinned
+    // this: dropping the browserMode guard left all 1892 tests green while every
+    // `--no-browser` run paid for a spawn.
+    it('never spawns the camoufox lane in browser never mode', async () => {
+        let camoufoxCalls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async () => {
+                camoufoxCalls += 1;
+                return { ok: true, url: 'https://example.com/article', title: 'T', html: '<article>x</article>' };
+            },
+        });
+        expect(camoufoxCalls).toBe(0);
+        expect(result.evidence).not.toContain('camoufox-render');
+    });
+
+    // The lane also has to stay off once an earlier rung already produced a
+    // strong result. It sits before the early-return check, so only the
+    // strong_ok guard stops it paying for a spawn nobody needs.
+    it('does not spawn the camoufox lane once a rung already scored strong_ok', async () => {
+        let camoufoxCalls = 0;
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Strong Article</title><article><p>'
+                + 'Long readable body text that scores well. '.repeat(80) + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => {
+                camoufoxCalls += 1;
+                return { ok: true, url: 'https://example.com/article', title: 'T', html: '<article>x</article>' };
+            },
+        });
+        expect(result.verdict).toBe('strong_ok');
+        expect(camoufoxCalls).toBe(0);
+    });
+
+    // Phase 1d reads the fetched body and records alternate URLs found in it.
+    // It was unreachable for the same reason the camoufox guard was always
+    // true: the scored wrapper has no `text`, only `candidate.text`. The unit
+    // tests import the discovery helpers directly, so they passed while the
+    // lane never ran in the pipeline.
+    it('records alternate URLs discovered in the fetched body', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Readable body text with a reference. '.repeat(20)
+                + ' See https://github.com/openai/codex and https://arxiv.org/abs/2401.00001 for more.'
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const discovered = result.attempts.filter(a => String(a.reason || '').startsWith('candidate-discovered:'));
+        expect(discovered.length).toBeGreaterThan(0);
+        expect(discovered.map(a => a.url)).toContain('https://github.com/openai/codex');
+        // Discovery records, it does not fetch. A verdict implying the URL passed
+        // evaluation would be a lie in the trace.
+        expect(discovered.every(a => a.verdict === 'discovered')).toBe(true);
+    });
+
+    // The trace summary has to name the lane whose candidate was returned. It
+    // used to report the last attempt, which is a different axis: a fetch that
+    // succeeded on rung 1 was summarized as `browser_required` because the
+    // browser rung ran afterwards and failed.
+    it('summarizes the lane that produced the result, not the last one tried', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.verdict).toBe('weak_ok');
+        expect(result.attempts.some(a => a.verdict === 'browser_required')).toBe(true);
+        expect(result._traceSummary).toContain(`selected source=${result.source} verdict=${result.verdict}`);
+        expect(result._traceSummary).not.toContain('browser_required');
+    });
+
+    // The phase must stay a recorder: `agbrowse fetch` reads the one URL it was
+    // given. Following discovered links would make every fetch a crawl.
+    it('does not fetch the URLs it discovers', async () => {
+        const requested = [];
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async (url) => {
+                requested.push(String(url));
+                return new Response(
+                    '<title>Article</title><article><p>'
+                    + 'Readable body text with a reference. '.repeat(20)
+                    + ' See https://github.com/openai/codex for more.</p></article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(requested).toEqual(['https://example.com/article']);
+    });
+
+    // Discovery classifies each URL into a lane, and the lane rides along in the
+    // attempt reason. Pin it: a bare `candidate-discovered:` with no lane means
+    // ranking silently degraded to unclassified.
+    it('classifies discovered candidates into lanes', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Readable body text with references. '.repeat(20)
+                + ' See https://github.com/openai/codex and https://arxiv.org/abs/2401.00001 for more.'
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const reasons = result.attempts
+            .filter(a => String(a.reason || '').startsWith('candidate-discovered:'))
+            .map(a => a.reason);
+        expect(reasons).toContain('candidate-discovered:package');
+        expect(reasons).toContain('candidate-discovered:academic');
+    });
+
+    // The original URL must not be re-fetched as its own discovered candidate.
+    it('does not rediscover the URL it is already fetching', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'never',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Article</title><article><p>'
+                + 'Body that links to itself: https://example.com/article and again. '.repeat(20)
+                + '</p></article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        const discoveredUrls = result.attempts
+            .filter(a => String(a.reason || '').startsWith('candidate-discovered:'))
+            .map(a => a.url);
+        expect(discoveredUrls).not.toContain('https://example.com/article');
+    });
+
+    // A render the lane itself reports as failed is not evidence. Without the
+    // `ok` guard a challenge page body gets promoted into the result.
+    it('does not adopt a camoufox render the lane reported as failed', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'required',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetchViaCamoufox: async () => ({
+                ok: false,
+                url: 'https://example.com/article',
+                title: 'Just a moment',
+                html: '<title>Just a moment</title><article>' + 'Checking your browser. '.repeat(20) + '</article>',
+            }),
+        });
+        expect(result.evidence).not.toContain('camoufox-render');
+        expect(result.ok).toBe(false);
+    });
+
+    // The lane is wrapped in `.catch(() => null)`, so a lane that throws must
+    // not take the whole fetch down.
+    it('keeps going when the camoufox lane throws', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => { throw new Error('camoufox spawn failed'); },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.content.length).toBeGreaterThan(100);
+    });
+
+    // WP6 stopped the other lanes from hiding our own bugs; the camoufox lane
+    // stayed the exception because it is wrapped in a bare `.catch(() => null)`.
+    it('rethrows a programming fault from the camoufox lane', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async () => { throw new TypeError('undefined is not a function'); },
+        })).rejects.toBeInstanceOf(TypeError);
+    });
+
+    // An infrastructure failure still has to be recorded rather than vanish:
+    // `attempts` only ships with `--trace`, so the reason belongs in warnings.
+    it('records why the camoufox lane failed instead of dropping it', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            trace: true,
+        }, {
+            fetch: async () => new Response(
+                '<title>Readable</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+            fetchViaCamoufox: async () => { throw new Error('camoufox spawn failed'); },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(result.ok).toBe(true);
+        // The lane shares `source: 'fetch'` with the direct-fetch lane, so the
+        // reason has to say which one failed.
+        expect(result.attempts.some(a => a.source === 'fetch'
+            && a.verdict === 'error'
+            && a.reason === 'camoufox-render: camoufox spawn failed')).toBe(true);
+        expect(result.warnings.some(w => w === 'camoufox-render-failed: camoufox spawn failed')).toBe(true);
+    });
+
+    // camoufox-session bails before spawning when the deadline already fired,
+    // but only if the caller hands it a signal. It never did.
+    it('gives the camoufox lane an abort signal so it can bail before spawning', async () => {
+        let received;
+        let abortedOnEntry;
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            timeoutMs: 5000,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async (_url, options) => {
+                received = options?.signal;
+                abortedOnEntry = options?.signal?.aborted;
+                return null;
+            },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(received).toBeInstanceOf(AbortSignal);
+        // A signal that is already aborted, or one that never fires, both satisfy
+        // "is an AbortSignal" while disabling or unbounding the lane.
+        expect(abortedOnEntry).toBe(false);
+    });
+
+    // The budget has to leave room for a browser launch. Signalling at
+    // `timeoutMs` aborts mid-launch: measured at `--timeout-ms 1500`, the fetch
+    // went from ok:true to ok:false with no attempt recorded.
+    it('budgets the camoufox signal above the per-attempt timeout', async () => {
+        const timeoutMs = 50;
+        let abortedWithinAttemptWindow = null;
+        await runAdaptiveFetch({
+            url: 'https://example.com/article',
+            browserMode: 'auto',
+            browserSession: 'isolated',
+            publicEndpoints: false,
+            timeoutMs,
+            trace: true,
+        }, {
+            fetch: async () => new Response('<p>Short</p>', {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+            }),
+            fetchViaCamoufox: async (_url, options) => {
+                // Outlast the per-attempt window by a margin. A signal budgeted at
+                // `timeoutMs` has fired by now; one that leaves launch headroom
+                // has not.
+                await new Promise((resolve) => setTimeout(resolve, timeoutMs * 4));
+                abortedWithinAttemptWindow = options.signal.aborted;
+                return null;
+            },
+            createIsolatedPage: async () => { throw new BrowserRequiredError('no browser here'); },
+        });
+        expect(abortedWithinAttemptWindow).toBe(false);
+    });
+
+    // A user typo is not an internal fault. These errors set `code` but the
+    // CLI's top-level handler reads `errorCode`, so every one of them reported
+    // `internal.unhandled` — "report a bug" for a mistyped URL.
+    it('reports a bad URL as an input error, not an internal fault', async () => {
+        await expect(runAdaptiveFetch({ url: 'not-a-url', browserMode: 'never' }, {}))
+            .rejects.toMatchObject({
+                errorCode: 'input.invalid-url',
+                stage: 'input-preflight',
+                retryHint: 'fix-arguments',
+            });
+    });
+
+    // `--timeout-ms` had no upper bound, so a large value reached
+    // `AbortSignal.timeout` and died with a bare RangeError — which the
+    // scheduler now treats as our own bug and rethrows.
+    // Pin the boundary, not just "some huge number". The first ceiling here was
+    // 2^32-1, which `AbortSignal.timeout` accepts and then silently resets to
+    // 1ms — a test that only rejected 5e9 passed against that wrong value.
+    it('rejects a timeout one past the ceiling that AbortSignal honours', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            timeoutMs: 2_147_483_648,
+        }, {})).rejects.toMatchObject({
+            errorCode: 'input.value-out-of-range',
+            stage: 'input-preflight',
+            message: expect.stringContaining('timeoutMs'),
+        });
+    });
+
+    // The ceiling has to be a delay `AbortSignal.timeout` actually honours.
+    // Node does not reject 2^32-1: it warns and resets the delay to 1ms, so a
+    // huge `--timeout-ms` aborted instantly. Respect the signal in the fake, or
+    // this test proves nothing — that is exactly how the wrong ceiling shipped.
+    it('accepts a timeout at the ceiling and still honours the signal', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            publicEndpoints: false,
+            timeoutMs: 2_147_483_647,
+        }, {
+            fetch: async (_url, init) => {
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                if (init?.signal?.aborted) {
+                    const error = new Error('The operation was aborted');
+                    error.name = 'AbortError';
+                    throw error;
+                }
+                return new Response(
+                    '<title>Fine</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                    { status: 200, headers: { 'content-type': 'text/html' } },
+                );
+            },
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    // `maxBytes` never reaches a timer — it bounds a body decoded into a
+    // string, so it gets its own ceiling instead of borrowing the timeout's.
+    it('rejects a max-bytes past the string-decode ceiling', async () => {
+        await expect(runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            // One past MAX_STRING_LENGTH. Borrowing the timeout ceiling here
+            // let a 4GB body limit through, and the decode is what actually
+            // breaks.
+            maxBytes: bufferConstants.MAX_STRING_LENGTH + 1,
+        }, {})).rejects.toMatchObject({
+            errorCode: 'input.value-out-of-range',
+            message: expect.stringContaining('maxBytes'),
+        });
+    });
+
+    it('accepts a max-bytes exactly at the string-decode ceiling', async () => {
+        const result = await runAdaptiveFetch({
+            url: 'https://example.com/a',
+            browserMode: 'never',
+            publicEndpoints: false,
+            maxBytes: bufferConstants.MAX_STRING_LENGTH,
+        }, {
+            fetch: async () => new Response(
+                '<title>Fine</title><article>' + 'Body text that a reader can use. '.repeat(20) + '</article>',
+                { status: 200, headers: { 'content-type': 'text/html' } },
+            ),
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    // Mistyping an enum flag was still `internal.unhandled` — "report a bug"
+    // for a typo, the same misclassification the URL errors had.
+    it.each([
+        ['browser', 'bogus', 'input.invalid-browser'],
+        ['identity', 'nope', 'input.invalid-identity'],
+        // camelCase option: the code stays kebab-case like every other one.
+        ['browserSession', 'bogus', 'input.invalid-browser-session'],
+    ])('reports an invalid --%s as an input error', async (key, value, errorCode) => {
+        await expect(runAdaptiveFetch({ url: 'https://example.com/a', [key]: value }, {}))
+            .rejects.toMatchObject({ errorCode, stage: 'input-preflight', retryHint: 'fix-arguments' });
+    });
+
+    // A refusal is not a typo. Telling the caller to fix their arguments after
+    // an SSRF guard fires invites them to retry what we deliberately blocked.
+    it.each([
+        ['http://localhost:8080/x', 'safety.private-network'],
+        ['https://user:pw@example.com/x', 'safety.credential-url'],
+    ])('reports %s as a safety refusal without a retry hint', async (url, errorCode) => {
+        await expect(runAdaptiveFetch({ url, browserMode: 'never' }, {}))
+            .rejects.toMatchObject({ errorCode, stage: 'safety-preflight', retryHint: null });
     });
 });
 

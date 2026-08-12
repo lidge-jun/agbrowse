@@ -1,8 +1,11 @@
 // @ts-check
-import { createTab, isTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
-import { updateSession, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
+import { createTab, probeTabAlive, getPageByTargetId, waitForPageByTargetId, listManagedTabs, closeTab } from '../skills/browser/tab-manager.mjs';
+import { DEADLINE_PASSED, updateSession, updateSessionAsync, getSession, incrementRecoveryCount, listSessions } from './session.mjs';
+import { mutateSessionAsync } from './session-store.mjs';
 import { waitForConversationReady, isProviderUrl } from './navigation-ready.mjs';
 import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
+import { isDurableConversationUrl } from './conversation-url.mjs';
+import { WebAiError } from './errors.mjs';
 
 /** @typedef {import('./session-store.mjs').WebAiSession} WebAiSession */
 
@@ -15,20 +18,24 @@ import { isWorkSession as _isWorkSession } from './chatgpt-work-picker.mjs';
 /**
  * @typedef {Object} RecoverResult
  * @property {boolean} recovered
- * @property {'existing-tab' | 'new-tab'} strategy
- * @property {string | null} targetId
+ * @property {'existing-tab' | 'new-tab' | 'unverified'} strategy
+ * @property {string | null} [targetId]
+ * @property {'alive'|'gone'|'unknown'} [liveness]
+ * @property {string} [reason]
  */
 
 /**
  * Recover a session's tab
  * @param {RecoverDeps} deps
  * @param {WebAiSession} session
+ * @param {{ stillActive?: () => boolean }} [options]
  * @returns {Promise<RecoverResult>}
  */
-export async function recoverSessionTab(deps, session) {
+export async function recoverSessionTab(deps, session, options = {}) {
     if (!session) throw new Error('recoverSessionTab: session required');
 
     const port = deps.getPort();
+    const stillActive = options.stillActive;
     const targetUrl = session.conversationUrl || session.originalUrl || 'about:blank';
     const isRunningWork = _isWorkSession(session) && session.status !== 'complete';
 
@@ -45,7 +52,18 @@ export async function recoverSessionTab(deps, session) {
     }
 
     // 1. Check if original tab still exists
-    const alive = await isTabAlive(port, /** @type {string} */ (session.targetId));
+    const liveness = await probeTabAlive(port, /** @type {string} */ (session.targetId));
+    // A tab we could not observe is not a tab we may replace: creating a new one
+    // here would rebind the session target and abandon a live conversation.
+    if (liveness === 'unknown') {
+        return {
+            recovered: false,
+            strategy: 'unverified',
+            liveness: 'unknown',
+            reason: 'tab liveness could not be verified',
+        };
+    }
+    const alive = liveness === 'alive';
 
     if (alive) {
         // Tab exists - verify URL by checking the actual page
@@ -65,7 +83,8 @@ export async function recoverSessionTab(deps, session) {
                 }
 
                 if (shouldPreferCurrentProviderUrl(targetUrl, currentUrl)) {
-                    await updateSession(session.sessionId, { conversationUrl: currentUrl });
+                    const binding = await updateRecoveryBinding(session.sessionId, { conversationUrl: currentUrl }, stillActive);
+                    if (binding === DEADLINE_PASSED) return deadlineRecoveryFailure('existing-tab', session.targetId);
                     return {
                         recovered: true,
                         strategy: 'existing-tab',
@@ -78,7 +97,8 @@ export async function recoverSessionTab(deps, session) {
                 const finalUrl = page.url();
                 await waitForConversationReady(page, finalUrl);
                 if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
-                    await updateSession(session.sessionId, { conversationUrl: finalUrl });
+                    const binding = await updateRecoveryBinding(session.sessionId, { conversationUrl: finalUrl }, stillActive);
+                    if (binding === DEADLINE_PASSED) return deadlineRecoveryFailure('existing-tab', session.targetId);
                 }
                 return {
                     recovered: true,
@@ -94,34 +114,87 @@ export async function recoverSessionTab(deps, session) {
 
     // 2. Create new tab
     const newTab = await createTab(port, targetUrl);
-    let recoveredConversationUrl = session.conversationUrl || targetUrl;
-    if (targetUrl !== 'about:blank') {
-        const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
-        if (newPage) {
-            await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
-            const finalUrl = /** @type {any} */ (newPage).url();
-            await waitForConversationReady(newPage, finalUrl);
-            if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
-                recoveredConversationUrl = finalUrl;
+    try {
+        let recoveredConversationUrl = session.conversationUrl || targetUrl;
+        if (targetUrl !== 'about:blank') {
+            const newPage = await waitForPageByTargetId(port, newTab.targetId).catch(() => null);
+            if (newPage) {
+                await /** @type {any} */ (newPage).waitForLoadState?.('load').catch(() => undefined);
+                const finalUrl = /** @type {any} */ (newPage).url();
+                await waitForConversationReady(newPage, finalUrl);
+                if (finalUrl !== targetUrl && isProviderUrl(finalUrl)) {
+                    recoveredConversationUrl = finalUrl;
+                }
             }
         }
-    }
 
-    // 3. Update session binding
-    await updateSession(session.sessionId, {
-        targetId: newTab.targetId,
-        conversationUrl: recoveredConversationUrl,
-        tabState: {
-            ...session.tabState,
-            recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
-            lastActiveAt: new Date().toISOString(),
+        // 3. Update session binding
+        const binding = stillActive
+            ? await mutateSessionAsync(session.sessionId, current => {
+                const patch = {
+                    targetId: newTab.targetId,
+                    tabState: {
+                        ...current.tabState,
+                        recoveryCount: (current.tabState?.recoveryCount || 0) + 1,
+                        lastActiveAt: new Date().toISOString(),
+                    },
+                    updatedAt: new Date().toISOString(),
+                };
+                if (current.vendor !== 'chatgpt' || isDurableConversationUrl(recoveredConversationUrl)) {
+                    (/** @type {Record<string, unknown>} */ (patch)).conversationUrl = recoveredConversationUrl;
+                }
+                return patch;
+            }, stillActive)
+            : await updateSession(session.sessionId, {
+                targetId: newTab.targetId,
+                conversationUrl: recoveredConversationUrl,
+                tabState: {
+                    ...session.tabState,
+                    recoveryCount: (session.tabState?.recoveryCount || 0) + 1,
+                    lastActiveAt: new Date().toISOString(),
+                }
+            });
+        if (binding === DEADLINE_PASSED) {
+            await closeTab(port, newTab.targetId).catch(() => undefined);
+            return deadlineRecoveryFailure('new-tab', newTab.targetId);
         }
-    });
 
+        return {
+            recovered: true,
+            strategy: 'new-tab',
+            targetId: newTab.targetId
+        };
+    } catch (err) {
+        // G8: Clean up the newly created target on failure (Oracle 83c3ca2)
+        await closeTab(port, newTab.targetId).catch(() => undefined);
+        throw err;
+    }
+}
+
+/**
+ * Preserve the legacy synchronous binding write unless a deadline predicate is
+ * explicitly supplied by a poll/recovery caller.
+ * @param {string} sessionId
+ * @param {Record<string, unknown>} patch
+ * @param {(() => boolean)|undefined} stillActive
+ */
+function updateRecoveryBinding(sessionId, patch, stillActive) {
+    return stillActive
+        ? updateSessionAsync(sessionId, patch, stillActive)
+        : updateSession(sessionId, patch);
+}
+
+/**
+ * @param {'existing-tab'|'new-tab'} strategy
+ * @param {string|null|undefined} targetId
+ * @returns {RecoverResult}
+ */
+function deadlineRecoveryFailure(strategy, targetId) {
     return {
-        recovered: true,
-        strategy: 'new-tab',
-        targetId: newTab.targetId
+        recovered: false,
+        strategy,
+        targetId: targetId || null,
+        reason: 'deadline-passed',
     };
 }
 
@@ -130,6 +203,7 @@ export async function recoverSessionTab(deps, session) {
  * @property {boolean} valid
  * @property {string | null} [targetId]
  * @property {boolean} needsRecovery
+ * @property {'alive'|'gone'|'unknown'} [liveness]
  */
 
 /**
@@ -143,20 +217,27 @@ export async function verifySessionTab(deps, session) {
         return { valid: false, needsRecovery: true };
     }
 
-    const alive = await isTabAlive(deps.getPort(), session.targetId);
+    const liveness = await probeTabAlive(deps.getPort(), session.targetId);
+    // Carry the verdict upward. Collapsing `unknown` into `needsRecovery: false`
+    // makes `resolveSessionPage` report `strategy: 'recovered'` for a tab it
+    // never recovered.
+    if (liveness === 'unknown') {
+        return { valid: false, targetId: session.targetId, needsRecovery: false, liveness: 'unknown' };
+    }
+    const alive = liveness === 'alive';
 
     if (alive) {
         const page = await getPageByTargetId(deps.getPort(), session.targetId).catch(() => null);
-        if (!page) return { valid: false, targetId: session.targetId, needsRecovery: true };
+        if (!page) return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'alive' };
         try {
             page.url();
         } catch {
-            return { valid: false, targetId: session.targetId, needsRecovery: true };
+            return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'alive' };
         }
-        return { valid: true, targetId: session.targetId, needsRecovery: false };
+        return { valid: true, targetId: session.targetId, needsRecovery: false, liveness: 'alive' };
     }
 
-    return { valid: false, targetId: session.targetId, needsRecovery: true };
+    return { valid: false, targetId: session.targetId, needsRecovery: true, liveness: 'gone' };
 }
 
 /**
@@ -210,6 +291,34 @@ export function isPageDeathError(err) {
         msg.includes('browser has been closed') ||
         msg.includes('crash')
     );
+}
+
+/**
+ * Classify a lost CDP client transport without conflating it with a dead page,
+ * target, or browser. Liveness is decided separately over DevTools HTTP.
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function isCdpDisconnectError(err) {
+    const seen = new Set();
+    let current = err;
+    while (current != null && !seen.has(current)) {
+        seen.add(current);
+        const msg = String((/** @type {any} */ (current))?.message || current || '').toLowerCase();
+        if (isPageDeathError(current)) return false;
+        if (
+            msg.includes('browser disconnected') ||
+            msg.includes('connection closed') ||
+            msg.includes('websocket is not open') ||
+            msg.includes('websocket closed') ||
+            msg.includes('connection to the browser') ||
+            msg.includes('cdp session detached') ||
+            msg.includes('session closed') ||
+            (msg.includes('protocol error') && (msg.includes('connection') || msg.includes('session')))
+        ) return true;
+        current = (/** @type {any} */ (current))?.cause;
+    }
+    return false;
 }
 
 // ─── Work-session recovery guards (04 section 6, round-2 fix) ──────────
@@ -276,7 +385,8 @@ export function isWorkTabUrlConsistent(session, tabUrl) {
  */
 export function isWorkSessionWithBareOrigin(session) {
     if (!_isWorkSession(session)) return false;
-    return isBareOriginUrl(/** @type {string|null|undefined} */ (session.conversationUrl));
+    const recoveryTarget = session.conversationUrl || session.originalUrl;
+    return isBareOriginUrl(/** @type {string|null|undefined} */ (recoveryTarget));
 }
 
 
@@ -314,7 +424,45 @@ export function isWorkSessionWithBareOrigin(session) {
  * @property {string | null} conversationUrl
  */
 
-/** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch} ResolveSessionPageResult */
+/**
+ * The tab could not be OBSERVED, so it was neither reused nor recovered. This is
+ * distinct from `ResolveSessionPageMismatch`: that one knows the tab is unusable,
+ * this one knows nothing. Consumers must be able to tell those apart mechanically,
+ * which a warning string does not allow.
+ *
+ * @typedef {Object} ResolveSessionPageUnverified
+ * @property {true} mismatch
+ * @property {null} page
+ * @property {string | null} targetId
+ * @property {WebAiSession} session
+ * @property {false} recovered
+ * @property {'unverified'} strategy
+ * @property {'unknown'} liveness
+ * @property {string[]} warnings
+ * @property {string | null} url
+ * @property {string | null} conversationUrl
+ */
+
+/** @typedef {ResolveSessionPageOk | ResolveSessionPageMismatch | ResolveSessionPageUnverified} ResolveSessionPageResult */
+
+/**
+ * @param {WebAiSession} session
+ * @param {'existing-tab'|'new-tab'} strategy
+ * @returns {ResolveSessionPageMismatch}
+ */
+function deadlineResolveFailure(session, strategy) {
+    return {
+        mismatch: true,
+        page: null,
+        targetId: session.targetId || null,
+        session,
+        recovered: false,
+        strategy,
+        warnings: [`session ${session.sessionId} deadline passed during tab recovery`],
+        url: null,
+        conversationUrl: session.conversationUrl || null,
+    };
+}
 
 /**
  * Fail-closed guard for ChatGPT later-session / new-tab recovery targets
@@ -326,17 +474,7 @@ export function isWorkSessionWithBareOrigin(session) {
  * @returns {boolean}
  */
 export function isSafeChatGptConversationUrl(url) {
-    if (typeof url !== 'string' || url === '') return false;
-    if (url.includes('..') || url.includes('\\') || url.includes('\0')) return false;
-    let u;
-    try {
-        u = new URL(url);
-    } catch {
-        return false;
-    }
-    if (u.protocol !== 'https:') return false;
-    if (u.hostname !== 'chatgpt.com' && u.hostname !== 'chat.openai.com') return false;
-    return /\/c\/[A-Za-z0-9_-]+/.test(u.pathname);
+    return isDurableConversationUrl(url);
 }
 
 /**
@@ -359,7 +497,10 @@ export async function openConversationInNewTab(deps, { conversationUrl } = {}) {
         const newTab = await createTab(port, safeUrl);
         targetId = newTab.targetId;
         const newPage = await waitForPageByTargetId(port, targetId).catch(() => null);
-        if (!newPage) return { opened: false, reason: 'page-unavailable', targetId };
+        if (!newPage) {
+            await closeTab(port, targetId).catch(() => undefined); // G8: close orphaned target
+            return { opened: false, reason: 'page-unavailable', targetId };
+        }
         await waitForConversationReady(newPage, newPage.url()).catch(() => undefined);
         if (!urlsCompatible(safeUrl, newPage.url())) {
             await closeTab(port, targetId).catch(() => undefined);
@@ -402,12 +543,13 @@ export function urlsCompatible(storedUrl, liveUrl) {
  *
  * @param {RecoverDeps} deps
  * @param {string} sessionId
- * @param {{ allowNavigate?: boolean, forceRecover?: boolean }} [options]
+ * @param {{ allowNavigate?: boolean, forceRecover?: boolean, stillActive?: () => boolean }} [options]
  * @returns {Promise<ResolveSessionPageResult>}
  */
 export async function resolveSessionPage(deps, sessionId, options = {}) {
     const allowNavigate = options.allowNavigate !== false;
     const forceRecover = options.forceRecover === true;
+    const stillActive = options.stillActive;
 
     const session = getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
@@ -416,7 +558,24 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
     const current = /** @type {WebAiSession} */ (session);
     const storedUrl = current.conversationUrl || current.originalUrl || null;
 
-    const { valid, needsRecovery } = await verifySessionTab(deps, current);
+    const { valid, needsRecovery, liveness } = await verifySessionTab(deps, current);
+
+    // Liveness unverified: do not recover, do not claim we did. Reported as its
+    // own variant so callers can retry rather than treat the tab as unusable.
+    if (liveness === 'unknown' && !forceRecover) {
+        return {
+            mismatch: true,
+            page: null,
+            targetId: current.targetId || null,
+            session: current,
+            recovered: false,
+            strategy: 'unverified',
+            liveness: 'unknown',
+            warnings: [`session ${sessionId} tab liveness could not be verified`],
+            url: null,
+            conversationUrl: current.conversationUrl || null,
+        };
+    }
 
     if (!valid || forceRecover) {
         if (!allowNavigate) {
@@ -435,8 +594,26 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
         }
         const recoveryTargetUrl = storedUrl;
         if ((needsRecovery || forceRecover) && recoveryTargetUrl) {
-            const recovery = await recoverSessionTab(deps, current);
+            const recovery = await recoverSessionTab(deps, current, { stillActive });
+            // `unverified` means the probe failed, not that recovery failed.
+            // Collapsing it into the generic throw loses the one detail that
+            // tells the caller to retry rather than replace the tab.
+            if (recovery.strategy === 'unverified') {
+                return {
+                    mismatch: true,
+                    page: null,
+                    targetId: current.targetId || null,
+                    session: current,
+                    recovered: false,
+                    strategy: 'unverified',
+                    liveness: 'unknown',
+                    warnings: [`session ${sessionId} tab liveness could not be verified`],
+                    url: null,
+                    conversationUrl: current.conversationUrl || null,
+                };
+            }
             if (!recovery.recovered) {
+                if (recovery.reason === 'deadline-passed') return deadlineResolveFailure(current, recovery.strategy);
                 throw new Error(`Session ${sessionId} tab recovery failed`);
             }
             const recovered = /** @type {WebAiSession} */ (getSession(sessionId));
@@ -463,7 +640,8 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
     if (current.conversationUrl && page.url() !== current.conversationUrl) {
         const liveUrl = page.url();
         if (shouldPreferCurrentProviderUrl(current.conversationUrl, liveUrl)) {
-            updateSession(sessionId, { conversationUrl: liveUrl });
+            const binding = await updateRecoveryBinding(sessionId, { conversationUrl: liveUrl }, stillActive);
+            if (binding === DEADLINE_PASSED) return deadlineResolveFailure(current, 'existing-tab');
             const updated = /** @type {WebAiSession} */ (getSession(sessionId));
             return {
                 mismatch: false,
@@ -528,7 +706,8 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
             const finalUrl = page.url();
             await waitForConversationReady(page, finalUrl);
             if (finalUrl !== current.conversationUrl && isProviderUrl(finalUrl)) {
-                updateSession(sessionId, { conversationUrl: finalUrl });
+                const binding = await updateRecoveryBinding(sessionId, { conversationUrl: finalUrl }, stillActive);
+                if (binding === DEADLINE_PASSED) return deadlineResolveFailure(current, 'existing-tab');
                 const updated = /** @type {WebAiSession} */ (getSession(sessionId));
                 return {
                     mismatch: false,
@@ -559,6 +738,22 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
 }
 
 /**
+ * Reconnect to the session's saved target without navigation or replacement.
+ * The caller must independently prove endpoint and target liveness first.
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @returns {Promise<ResolvedPage<unknown>>}
+ */
+export async function reattachSessionPage(deps, sessionId) {
+    const session = getSession(sessionId);
+    if (!session?.targetId) throw new Error(`Session ${sessionId} has no targetId for CDP reattach`);
+    const page = await getPageByTargetId(deps.getPort(), session.targetId);
+    if (!page) throw new Error(`Session ${sessionId} target ${session.targetId} unavailable after CDP reconnect`);
+    page.url();
+    return { page, targetId: session.targetId, session };
+}
+
+/**
  * Execute operation with session's bound page
  * GPT Pro recommendation: resolve page directly, don't use active tab routing
  * Catches page death mid-operation and retries once after recovery
@@ -569,16 +764,81 @@ export async function resolveSessionPage(deps, sessionId, options = {}) {
  * @returns {Promise<T>}
  */
 export async function withSessionPage(deps, sessionId, fn) {
-    const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true });
+    return withSessionPageGuarded(deps, sessionId, fn, {});
+}
+
+/**
+ * The deadline-aware form: watch, resume and MCP poll run under a stored
+ * deadline, and the recovery inside the resolver performs binding writes.
+ * `stillActive` is threaded down so those writes are refused under the store
+ * lock once the deadline has passed — the resolver's own pre-checks say
+ * nothing about the moment a contended write lands.
+ *
+ * @template T
+ * @param {RecoverDeps} deps
+ * @param {string} sessionId
+ * @param {(ctx: ResolvedPage<T>) => Promise<T> | T} fn
+ * @param {{ stillActive?: () => boolean }} [options]
+ * @returns {Promise<T>}
+ */
+export async function withSessionPageGuarded(deps, sessionId, fn, options = {}) {
+    const stillActive = options.stillActive;
+    const first = await resolveSessionPage(deps, sessionId, { allowNavigate: true, stillActive });
+    if (/** @type {any} */ (first).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, first);
     if (first.mismatch) throw new Error(`Session ${sessionId} resolver returned mismatch with allowNavigate=true`);
     try {
         return await fn(/** @type {ResolvedPage<T>} */ ({ page: first.page, targetId: first.targetId, session: first.session }));
     } catch (err) {
         if (!isPageDeathError(err)) throw err;
-        const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true });
+        const recovered = await resolveSessionPage(deps, sessionId, { allowNavigate: true, forceRecover: true, stillActive });
+        if (/** @type {any} */ (recovered).strategy === 'unverified') throw livenessUnverifiedError(sessionId, deps, recovered);
         if (recovered.mismatch) throw new Error(`Session ${sessionId} recovery resolver returned mismatch with allowNavigate=true`);
         return fn(/** @type {ResolvedPage<T>} */ ({ page: recovered.page, targetId: recovered.targetId, session: recovered.session }));
     }
+}
+
+/**
+ * The recovery predicate for a session bounded by a STORED deadline.
+ *
+ * Watch, resume and MCP poll do not hold a poller run token while the tab is
+ * being recovered — the authority there is the absolute `deadlineAt` on the
+ * session row. No deadline means always active (a session that never promised
+ * a bound cannot lose one).
+ *
+ * @param {{ deadlineAt?: string|null }|null|undefined} session
+ * @returns {() => boolean}
+ */
+export function storedDeadlineStillActive(session) {
+    const parsed = Date.parse(session?.deadlineAt || '');
+    if (!Number.isFinite(parsed)) return () => true;
+    return () => Date.now() < parsed;
+}
+
+/**
+ * A tab we could not observe is not a wrong tab. Falling through to the generic
+ * "resolver returned mismatch" error loses the one fact the caller needs: retry
+ * once the browser answers, rather than replace the tab.
+ *
+ * @param {string} sessionId
+ * @param {RecoverDeps} deps
+ * @param {any} resolved
+ * @returns {WebAiError}
+ */
+function livenessUnverifiedError(sessionId, deps, resolved) {
+    return new WebAiError({
+        errorCode: 'cdp.unreachable',
+        stage: 'target-resolution',
+        vendor: resolved?.session?.vendor || 'chatgpt',
+        retryHint: 'retry',
+        message: resolved?.warnings?.[0] || `session ${sessionId} tab liveness could not be verified`,
+        mutationAllowed: false,
+        evidence: {
+            sessionId,
+            targetId: resolved?.targetId || null,
+            port: Number(deps.getPort?.() || process.env.CDP_PORT || 9222),
+            liveness: 'unknown',
+        },
+    });
 }
 
 /**

@@ -1,0 +1,364 @@
+# 010 — WP2: 이슈 #87 잔여 갭 구현
+
+선행: WP1. WP3와는 서로 의존하지 않는다.
+판정 근거는 `002_pr89_delta_inventory.md`. 이 문서는 구현 diff만 담는다.
+
+대상은 두 갭이다. 갭 A는 capability probe가 family를 읽지 않는 것, 갭 B는 MCP가
+스키마상 유효한 family를 비-ChatGPT provider로 보낼 때 막지 않는 것이다.
+
+## 갭 A — `chatGptModelCapabilityProbe`에 family 계약 추가
+
+`web-ai/chatgpt-model.mjs:1725`의 probe는 `options.family`를 참조하지 않는다.
+호출부만 고치면 값이 버려지므로 probe 본문을 먼저 고친다.
+
+### 재사용할 실제 헬퍼
+
+자리표시자를 쓰지 않는다. `web-ai/chatgpt-model.mjs`에 이미 있는 심볼이다.
+
+| 심볼 | 위치 | 용도 | mutation |
+| --- | --- | --- | --- |
+| `openSimplifiedIntelligenceSubmenu(page, { forceFamily: true })` | `:891` | family 서브메뉴 열기 | hover/키/클릭 — 메뉴만 조작 |
+| `findOpenFamilySubmenu(page, familyLabels)` | `:986` | 열린 서브메뉴 locator 반환 | 없음 |
+| `readVisibleChatGptFamilyEvidence(page)` | `:1007` | 현재 선택된 family 증거 읽기 | 없음 |
+| `CHATGPT_FAMILY_OPTIONS` | `:244` | alias→라벨 맵 | — |
+| `menuTextHasExactLine(text, label)` | `:1611` | 라벨 정확 일치 | 없음 |
+| `selectChatGptFamily(page, family)` | `:950` | **선택을 실제로 바꾼다 — probe에서 쓰지 않는다** | 있음 |
+
+probe는 선택을 바꾸면 안 되므로 `selectChatGptFamily`를 부르지 않고, 서브메뉴를 연
+뒤 요청 라벨의 `[role="menuitemradio"]` 행이 존재하는지만 확인한다.
+
+### NEW `web-ai/chatgpt-model.mjs` — probe 전용 헬퍼
+
+```js
+/**
+ * 요청한 family가 현재 UI에서 선택 가능한지 확인한다. 선택은 바꾸지 않는다:
+ * probe가 `ok`를 돌려주면 호출자는 그것을 "이 family를 강제할 수 있다"는 증거로
+ * 읽으므로, 확인 자체가 상태를 바꾸면 안 된다 (#87).
+ * @param {Page} page
+ * @param {FamilyChoice} family
+ * @returns {Promise<boolean>}
+ */
+async function isChatGptFamilyOptionAvailable(page, family) {
+    const expected = CHATGPT_FAMILY_OPTIONS[family]?.label;
+    if (!expected) return false;
+    const familyLabels = Object.values(CHATGPT_FAMILY_OPTIONS).map(option => option.label);
+    await openSimplifiedIntelligenceSubmenu(page, { forceFamily: true }).catch(() => undefined);
+    const submenu = await findOpenFamilySubmenu(page, familyLabels);
+    if (!submenu) return false;
+    const rows = await submenu.locator('[role="menuitemradio"]').all().catch(() => []);
+    for (const row of rows) {
+        const text = (await row.innerText({ timeout: 500 }).catch(() => '')).trim();
+        if (!menuTextHasExactLine(text, expected)) continue;
+        // 라벨 일치만으로는 선택 가능을 증명하지 못한다. 숨겨졌거나 disabled인
+        // 행이 DOM에 남아 있으면 probe가 `ok`를 내고도 실제 강제 선택이 실패해,
+        // #87이 막으려던 거짓 성공이 그대로 남는다.
+        if (!(await row.isVisible().catch(() => false))) continue;
+        if (typeof row.isEnabled === 'function' && !(await row.isEnabled().catch(() => false))) continue;
+        return true;
+    }
+    return false;
+}
+```
+
+### MODIFY `web-ai/chatgpt-model.mjs:1706-1710` — typedef
+
+실제 형태는 `@typedef {Object}` + `@property` 목록이다.
+
+```diff
+ /**
+  * @typedef {Object} CapabilityProbeOptions
++ * @property {string} [family]
+  * @property {string} [effort]
+  * @property {string} [reasoningEffort]
+  */
+```
+
+### MODIFY `chatGptModelCapabilityProbe` (`:1725`)
+
+guard 순서는 다음과 같다. **미지원 alias 검사(family·model)가 먼저**, 그 다음
+effort 유효성, 마지막이 effort-model 호환이다. 미지원 family와 미지원 effort가
+동시에 오면 family가 먼저 `fail`한다 — 브라우저를 만지기 전에 끝내는 검사를
+앞에 두는 원칙이다. family 가용성 **확인**(메뉴를 여는 부분)은 effort 확인과
+나란히 뒤쪽에서 수행하므로, family+effort 조합에서 effort 검증이 건너뛰어지지
+않는다.
+
+```diff
+ export async function chatGptModelCapabilityProbe(page, model, options = {}) {
+     const requested = normalizeChatGptModelChoice(model);
+     const requestedEffort = normalizeChatGptEffortChoice(options.effort || options.reasoningEffort);
+-    if (!model && !(options.effort || options.reasoningEffort)) return { state: 'unknown', evidence: { requested: null, effort: null }, next: 'send' };
+-    if (!requested) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
+-    if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested, effort: options.effort || options.reasoningEffort }, next: 'model-fallback' };
+-    if (requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) return { state: 'fail', evidence: { requested, effort: requestedEffort }, next: 'model-fallback' };
++    const requestedFamily = normalizeChatGptFamilyChoice(options.family);
++    // 미지원 alias는 메뉴를 열기 전에 fail한다. probe가 `ok`를 돌려주면 호출자는
++    // 그것을 "요청한 family를 강제할 수 있다"는 증거로 읽는다 (#87).
++    if (options.family && !requestedFamily) {
++        return { state: 'fail', evidence: { requested: requested || null, effort: null, family: options.family }, next: 'model-fallback' };
++    }
++    if (!model && !(options.effort || options.reasoningEffort) && !options.family) {
++        return { state: 'unknown', evidence: { requested: null, effort: null, family: null }, next: 'send' };
++    }
++    // 명시된 model이 미지원이면 family 유효성과 무관하게 실패한다. 이 검사를
++    // family 허용 분기보다 먼저 두지 않으면, valid family가 invalid model을
++    // 가려 #87이 막으려던 무음 드롭을 model 축에 새로 만든다.
++    if (model && !requested) {
++        return { state: 'fail', evidence: { requested: model, family: requestedFamily || null }, next: 'model-fallback' };
++    }
++    // model을 아예 주지 않은 경우에만 family-only 경로가 열린다.
++    if (!requested && !requestedFamily) return { state: 'fail', evidence: { requested: model }, next: 'model-fallback' };
++    if ((options.effort || options.reasoningEffort) && !requestedEffort) return { state: 'fail', evidence: { requested: requested || null, effort: options.effort || options.reasoningEffort, family: requestedFamily || null }, next: 'model-fallback' };
++    // effort 지원 여부는 model 축에 걸린다. model이 없으면 현재 tier 기준이므로
++    // 여기서 판단하지 않는다 (CLI가 `rejectFutureScope`에서 이미 거른다).
++    if (requested && requestedEffort && !isChatGptEffortSupported(requested, requestedEffort)) {
++        return { state: 'fail', evidence: { requested, effort: requestedEffort, family: requestedFamily || null }, next: 'model-fallback' };
++    }
+```
+
+메뉴를 연 뒤 model/effort/family 세 축을 각각 확인한다.
+
+```diff
+-    const option = await findModelOption(page, requested).catch(() => null);
++    const option = requested ? await findModelOption(page, requested).catch(() => null) : null;
++    // family 서브메뉴 가용성은 model 옵션 존재와 독립이다. 세 축을 모두 확인해야
++    // `ok`가 "요청 전체를 강제할 수 있다"를 뜻한다.
++    let familyAvailable = true;
++    if (requestedFamily) {
++        familyAvailable = await isChatGptFamilyOptionAvailable(page, requestedFamily).catch(() => false);
++    }
+     /** @type {Locator | null} */
+     let effortOption = null;
+     if (option && requestedEffort) {
++        // family 확인이 서브메뉴를 열었을 수 있으므로 effort 메뉴는 여기서 다시
++        // 연다. `openEffortMenu`가 필요한 상태를 스스로 만든다.
+         try {
+             await openEffortMenu(page, requested, requestedEffort, usedFallbacks);
+```
+
+```diff
+-    const selectable = Boolean(option) && (!requestedEffort || Boolean(effortOption));
+-    const state = selectable ? (menuClosed ? 'ok' : 'warn') : 'fail';
+-    return { state, evidence: { requested, effort: requestedEffort || null, menuClosed, usedFallbacks }, next: state === 'ok' ? 'send' : 'model-fallback' };
++    const selectable = (requested ? Boolean(option) : true)
++        && (!requestedEffort || !requested || Boolean(effortOption))
++        && familyAvailable;
++    // model 없이 effort를 요청하면 effort는 "현재 tier" 기준이 된다. probe는
++    // family를 실제로 선택하지 않으므로 선택 후 tier와 effort의 조합을 증명할 수
++    // 없다. 증명하지 못한 것을 `ok`로 승인하면 #87이 고치려던 바로 그 착시가
++    // 다시 생긴다 — `warn`으로 낮춘다.
++    const unprovenEffortTier = Boolean(requestedEffort) && !requested;
++    const state = selectable
++        ? (menuClosed && !unprovenEffortTier ? 'ok' : 'warn')
++        : 'fail';
++    return {
++        state,
++        evidence: {
++            requested: requested || null,
++            effort: requestedEffort || null,
++            family: requestedFamily || null,
++            menuClosed,
++            ...(unprovenEffortTier ? { effortTierUnproven: true } : {}),
++            usedFallbacks,
++        },
++        next: state === 'ok' ? 'send' : 'model-fallback',
++    };
+```
+
+계약 정리:
+
+| 입력 | state | 근거 |
+| --- | --- | --- |
+| model만 | 기존과 동일 | — |
+| model + effort | 기존과 동일 | — |
+| family만 | 메뉴 정상 close 시 `ok`, close 실패 시 `warn` | 기존 `menuClosed` 규칙이 그대로 적용된다 |
+| family + effort, model 없음 | 최대 `warn` | effort는 현재 tier 기준인데 probe가 tier를 확정하지 못한다. Pro처럼 effort 컨트롤이 없는 tier도 있다(`web-ai/chatgpt-model.mjs:492-496`) |
+| effort만, model·family 없음 | `fail` | 위 guard가 그대로 걸러낸다. **기존 probe 동작을 유지하는 것이며 WP2 범위 밖이다.** CLI는 오히려 ChatGPT model-less effort를 허용하므로(`web-ai/cli.mjs:1779-1781`, `test/integration/web-ai-cli-contract.test.mjs:292`) probe와 CLI가 이 지점에서 어긋나 있다. 그 불일치는 이 유닛에서 건드리지 않는다 |
+| model + family (+effort) | 세 축 모두 확인 | — |
+| 미지원 family alias | `fail` | 메뉴 열기 전 |
+| 미지원 model + 유효 family | `fail` | 명시된 model이 미지원이면 family로 가릴 수 없다. 기존 동작 유지 |
+
+`warn`은 이 probe에서 이미 쓰이는 상태값이며(`CapabilityProbeResult.state`가
+`'ok'|'warn'|'fail'|'unknown'`, `web-ai/chatgpt-model.mjs:1712-1717`) "선택은 될
+것 같지만 확정하지 못했다"를 뜻한다. 여기 의미와 정확히 맞는다.
+
+런타임 소비 정책도 확인했다: `worstCapabilityState`가 상태를 집계하고
+(`web-ai/capability.mjs:41-70`), ChatGPT status는 `worst !== 'fail'`을 `ok`로
+보므로(`web-ai/chatgpt.mjs:149-152`) `warn`은 명령을 막지 않고 capability 행에
+남는다. 기존 호출자를 깨뜨리지 않으면서 "확정 못 했다"는 신호는 보존된다 —
+이 정책을 테스트 3b로 고정한다.
+
+3b. **`warn`이 status를 막지 않는다** — `statusWebAi`까지 태운다. 기존 fake는
+   `url()`을 노출하지 않는데(`test/unit/web-ai-chatgpt-model.test.mjs:925-953`)
+   `statusWebAi`는 마지막에 반드시 호출하므로(`web-ai/chatgpt.mjs:144-158`)
+   보강이 필요하다. 조건을 정확히 고정한다.
+
+   - fake page에 `url: () => 'https://chatgpt.com/'`를 더한다(래퍼로 감싸도 된다)
+   - 입력에 `probe: 'chatgpt-model-alias-selectable'`을 준다 — 생략하면 모든
+     capability가 실행되어(`web-ai/capability.mjs:41-48`) 이 fake가 지원하지 않는
+     probe가 `fail`을 만들고 테스트 의도가 오염된다
+   - `family: 'gpt-5.6-sol'`, `reasoningEffort: 'high'`, `model`은 생략
+   - 기대: `capabilityState === 'warn'`, `ok === true`, capability 행이 하나
+
+   `warn`을 `fail`처럼 다루는 회귀를 막는 가드다.
+
+기존 probe와 같이 `closeModelMenu`로 원복한다.
+
+### MODIFY `web-ai/chatgpt.mjs:120` — capability 정의
+
+```diff
+-    defineCapability('chatgpt-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, { effort: input.reasoningEffort })),
++    defineCapability('chatgpt-model-alias-selectable', async (/** @type {any} */ deps, /** @type {any} */ input) => chatGptModelCapabilityProbe(await deps.getPage(), input.model, {
++        family: input.family,
++        effort: input.reasoningEffort,
++    })),
+```
+
+## 갭 B — MCP에서 비-ChatGPT + family 조합 fail-closed
+
+스키마 enum(`web-ai/tool-schema.mjs:55`)이 `validateWebAiToolInput`
+(`web-ai/mcp-server.mjs:153`)에서 잘못된 alias를 이미 거부한다. handler에 도달하는
+것은 **스키마상 유효한 family**뿐이므로, 막아야 할 조합은 하나다: 유효한 family를
+Chat family 축이 없는 provider로 보내는 것.
+
+### MODIFY `web-ai/mcp-server.mjs` — `web_ai_submit_prompt` 분기
+
+기존 early-return(`:194-201`)의 `{ ok, code, tool, reason, retryHint }` 형태를 따른다.
+
+```diff
+     if (name === 'web_ai_submit_prompt') {
+         const provider = providerFromArgs(args);
+         if (args.surface === 'work') {
+             return {
+                 ok: false,
+                 code: 'capability.unsupported',
+                 tool: name,
+                 reason: 'Chat submit does not support Work surface; use web_ai_work_send.',
+                 retryHint: 'use-work-send',
+             };
+         }
++        // family는 ChatGPT 전용 축이다. 스키마는 alias 유효성만 보므로, 여기서
++        // 막지 않으면 Gemini/Grok으로 보낸 family가 조용히 무시된다 — CLI가
++        // `rejectFutureScope`로 거부하는 조합이다 (#87).
++        if (args.family && provider !== 'chatgpt') {
++            return {
++                ok: false,
++                code: 'capability.unsupported',
++                tool: name,
++                reason: `family selection is supported only for ChatGPT; ${provider} has no Chat family axis`,
++                retryHint: 'omit-family-or-use-chatgpt',
++            };
++        }
+```
+
+`sendByProvider` 호출부는 이미 `...args`로 family를 운반한다(`:214-220`). 명시
+전달을 추가하지 않는다 — 동작이 같고 의도만 흐려진다.
+
+## 테스트
+
+새 파일을 만들지 않고 **기존 스위트에 추가한다.** family 메뉴를 재현하는
+`createFakeModelPage`(`test/unit/web-ai-chatgpt-model.test.mjs:784`)가 export되지
+않은 파일-로컬 헬퍼라, 새 파일을 만들면 대형 page double을 복제하거나 계획에 없던
+헬퍼 추출을 하게 된다.
+
+- probe 테스트(1, 2, 3, 3a, 3c) → MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`
+  — `createFakeModelPage`를 **보강해서** 쓴다. 지금 fixture는 family 서브메뉴가
+  열렸는지를 모델링하지 않는다: model 메뉴만 열리면
+  `[role="menu"][data-state="open"]`이 즉시 열린 서브메뉴를 돌려주고(`:1020-1022`),
+  simplified 모드에서 family rows도 바로 노출되며(`:1031-1034`), `hover`/`focus`는
+  no-op이고(`:1086`) `ArrowRight`는 effort 메뉴를 연다(`:936`).
+
+  그대로 두면 `openSimplifiedIntelligenceSubmenu` 호출을 지워도 테스트가 통과한다 —
+  거짓 양성이다. 다음을 추가한다.
+
+  - state에 `familySubmenuOpen` 추가(초기값 `false`)
+  - `familyTrigger`의 `hover`/`focus`+`ArrowRight`/`click`이 그 플래그를 켠다
+  - `[role="menu"][data-state="open"]`과 family rows는 그 플래그가 켜졌을 때만
+    노출한다
+  - 선택 전후 `state.currentFamily`가 같은지 어서션으로 고정한다 — probe가
+    선택을 바꾸지 않는다는 계약의 증거다
+- `warn` 소비 정책(3b) → MODIFY `test/unit/web-ai-chatgpt-model.test.mjs`
+  — `worstCapabilityState`의 `warn` 집계는 이미
+  `test/unit/web-ai-capability.test.mjs:53`이 고정하고 있고, 그 함수는 문자열만
+  돌려준다(`web-ai/capability.mjs:66`). 실제 `ok: worst !== 'fail'` 소비는
+  `statusWebAi`(`web-ai/chatgpt.mjs:149`)에 있으므로 거기까지 태워야 새 회귀를
+  잡는다. `createFakeModelPage`를 쓸 수 있는 파일에서 `statusWebAi`를 호출해
+  `capabilityState: 'warn'`과 `ok: true`를 함께 확인한다
+- MCP 테스트(4, 5) → MODIFY `test/integration/web-ai-mcp-server.test.mjs`
+  — 이미 `handleMcpMessage`를 JSON-RPC로 호출하는 패턴이 있다(`:32`, `:36`)
+
+테스트 목록:
+
+1. **probe가 미지원 family에 fail** — `chatGptModelCapabilityProbe(page, 'thinking',
+   { family: 'gpt-5.6-luna' })`가 `state: 'fail'`이고 evidence에 family가 담긴다.
+   페이지 메뉴는 열리지 않는다. 기존 fake에는 호출 카운터가 없으므로, 메뉴 조작
+   메서드에 `vi.fn()` spy를 걸거나 호출 시 throw하는 page를 써서 mutation 0을
+   증명한다(테스트 3c도 같은 방식).
+2. **probe가 family 미가용 시 fail** — model 옵션은 찾지만 family 서브메뉴가 없는
+   page double에서 `state: 'fail'`.
+3. **probe가 family 가용 시 ok** — model과 family를 둘 다 찾으면 `state: 'ok'`이고
+   `evidence.family === 'gpt-5.6-sol'`. 서브메뉴가 실제로 열린 뒤에만 통과해야
+   하며, 호출 전후 `state.currentFamily`가 동일하다.
+2b. **hidden/disabled family는 fail** — 요청 라벨의 행이 DOM에 있지만
+   `isVisible()`이 false이거나 disabled면 `state: 'fail'`. 라벨 일치만으로
+   `ok`를 내지 않는다는 가드다.
+3a. **model 없는 family+effort는 warn** — `{ family: 'gpt-5.6-sol', effort: 'high' }`
+   에 model 없이 호출하면 `state: 'warn'`이고 `evidence.effortTierUnproven === true`.
+   `ok`가 아니어야 한다 — 증명하지 못한 조합을 승인하지 않는다.
+3c. **미지원 model은 유효 family로 가려지지 않는다** — `{ model: 'bogus',
+   family: 'gpt-5.6-sol' }`이 `state: 'fail'`이고 메뉴가 열리지 않는다(mutation 0).
+   이 회귀 가드가 없으면 새 family 분기가 model 검증을 우회한다.
+4. **MCP가 gemini + family를 거부** — `callMcpTool`은 export되지 않으므로
+   (`web-ai/mcp-server.mjs:134`) 공개 경계인 `handleMcpMessage`(`:387`)로 JSON-RPC
+   `tools/call`을 보낸다.
+
+   ```js
+   const response = await handleMcpMessage({
+       jsonrpc: '2.0', id: 1, method: 'tools/call',
+       params: { name: 'web_ai_submit_prompt', arguments: { provider: 'gemini', family: 'gpt-5.6-sol', prompt: 'x' } },
+   }, deps);
+   ```
+
+   `jsonResult`(`web-ai/mcp-server.mjs:64-69`)가 payload를 `structuredContent`에
+   담고 `jsonResponse`가 `result`로 감싸므로(`:404`), 어서션은 다음과 같다.
+
+   ```js
+   expect(response.result.structuredContent.code).toBe('capability.unsupported');
+   expect(getPageCalls).toBe(0);   // 브라우저 mutation 0
+   ```
+5. **MCP 스키마가 미지원 alias를 handler 전에 거부** — 반환에서
+   `result.isError === true`, `structuredContent` 부재, `getPage` 호출 0회까지
+   확인한다. 같은 경로로
+   `family: 'gpt-5.6-luna'`를 보내면 `validateWebAiToolInput`
+   (`web-ai/tool-schema.mjs:200-205`) 단계에서 거부된다. 기존 동작 확인이며
+   회귀 가드다.
+
+테스트 5는 수정 전에도 통과한다. 회귀 가드로 명시하고 새 동작의 증거로 쓰지 않는다.
+
+실행만 하는 기존 스위트: `test/unit/web-ai-chatgpt-model.test.mjs`,
+`test/unit/web-ai-tool-schema.test.mjs`, `test/integration/web-ai-cli-contract.test.mjs`.
+
+## 활성화 관측 (C-ACTIVATION-GROUNDING-01)
+
+| 새 분기 | 트리거 | 관측 |
+| --- | --- | --- |
+| probe 미지원 family fail | 테스트 1 | `state:'fail'` + `evidence.family` + 메뉴 미개방 |
+| probe family 미가용 fail | 테스트 2 | `state:'fail'` |
+| probe hidden/disabled family fail | 테스트 2b | `state:'fail'` — 라벨은 있으나 선택 불가 |
+| probe family 가용 ok | 테스트 3 | `state:'ok'` + `evidence.family` |
+| probe 미증명 effort tier → warn | 테스트 3a | `state:'warn'` + `evidence.effortTierUnproven` |
+| MCP 비-ChatGPT + family | 테스트 4 | `result.structuredContent.code === 'capability.unsupported'` + `getPage` 0회 |
+
+"스위트 green"은 근거가 아니다. 위 어서션이 각 분기의 발화 증거다.
+
+## 범위 경계
+
+- IN: `web-ai/chatgpt-model.mjs`(probe), `web-ai/chatgpt.mjs:120`,
+  `web-ai/mcp-server.mjs`(submit_prompt 분기), 기존 테스트 3파일,
+  `structure/str_func.md`.
+
+`structure/str_func.md`는 `npm run fix:counts && npm run docs:counts`로 갱신·검증
+한다. `scripts/`와 `test/unit/` 드리프트는 `c7e87c1` baseline에도 있는 선행
+상태이고(별도 worktree로 확인), `fix:counts`가 그 행까지 함께 고친다. 이 유닛이
+만든 드리프트가 아니므로 커밋 메시지에 그 사실을 적는다 — 조용히 섞지 않는다.
+- OUT: `selectChatGptModel` 본문(이미 family를 처리한다), family alias 목록,
+  CLI 파서, `web_ai_work_send` 경로.

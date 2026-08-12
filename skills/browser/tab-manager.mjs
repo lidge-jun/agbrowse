@@ -387,18 +387,46 @@ export async function getTabInfo(port, targetId) {
 }
 
 /**
- * Check if a tab is still alive
+ * Probe whether a tab is still alive.
+ *
+ * Reports `'unknown'` when the tab list could not be read at all — that is a
+ * FAILED OBSERVATION, not evidence the tab is gone. `listTabs` is a single
+ * `fetch` to the CDP port, so one transient failure would otherwise mark every
+ * tab dead at once and callers would act destructively on all of them.
+ *
+ * There is no exception for connection errors. A refused connection says the
+ * endpoint was not listening at that instant, which is not the same fact as
+ * "this target no longer exists" — and acting on it destructively is exactly
+ * the failure this probe exists to prevent. Only a SUCCESSFUL list that omits
+ * the target proves it is gone. Reclaiming leases after a real browser exit
+ * needs browser-lifecycle evidence, not a single failed fetch.
+ *
+ * @param {number} port - CDP port
+ * @param {string} targetId - Tab target ID
+ * @returns {Promise<'alive'|'gone'|'unknown'>}
+ */
+export async function probeTabAlive(port, targetId) {
+    let tabs;
+    try {
+        tabs = await listTabs(port);
+    } catch {
+        return 'unknown';
+    }
+    return tabs.some(t => t.id === targetId) ? 'alive' : 'gone';
+}
+
+/**
+ * Boolean view of {@link probeTabAlive}, kept for callers that genuinely only
+ * need "can I use this tab right now". `'unknown'` reads as false here, so any
+ * caller that takes a DESTRUCTIVE action on false must use `probeTabAlive`
+ * directly and handle the third state.
+ *
  * @param {number} port - CDP port
  * @param {string} targetId - Tab target ID
  * @returns {Promise<boolean>}
  */
 export async function isTabAlive(port, targetId) {
-    try {
-        const tabs = await listTabs(port);
-        return tabs.some(t => t.id === targetId);
-    } catch {
-        return false;
-    }
+    return (await probeTabAlive(port, targetId)) === 'alive';
 }
 
 /**

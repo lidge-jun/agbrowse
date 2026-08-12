@@ -516,6 +516,21 @@ const GATES = {
             }
         },
     },
+    'no-new-blocking-io': {
+        description: 'G3 partial (#88): enumerated Sync/Atomics/CDP ingress forms are ratcheted against a committed baseline',
+        async check() {
+            // Ratchet, not a cleanup: the existing calls are grandfathered by the
+            // committed manifest, and only ADDITIONS fail. Enumerating stall
+            // boundaries was tried twice and disproved (see devlog 021), so this
+            // watches for growth instead of trying to know them all.
+            try {
+                const mod = await import('./blocking-io-gate.mjs');
+                return await mod.runBlockingIoGate(repoRoot);
+            } catch (err) {
+                return { ok: false, detail: `blocking-io gate threw: ${(err && err.message) || err}` };
+            }
+        },
+    },
     'eval-adapters-no-score-claims': {
         description: 'G08 experimental: eval adapters carry no leaderboard/score claims; dry-run outputs scoreClaim=null',
         async check() {

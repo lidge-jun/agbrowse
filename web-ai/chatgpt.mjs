@@ -10,19 +10,27 @@ import { INPUT_SELECTORS as CHATGPT_COMPOSER_SELECTORS } from './chatgpt-compose
 import {
     bindSessionToTab,
     createSession,
+    DEADLINE_PASSED,
     findActiveSession,
     getBaseline,
     getLatestBaseline,
     getSession,
     markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
+    resolveFileArtifactPolicy,
     resolveTimeoutBudgetSec,
     saveBaseline,
     sessionToBaseline,
+    storedDeadlineRemainderMs,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
+import { mutateSessionAsync, readSessionAsync, sessionStoreReadWasCorrupt } from './session-store.mjs';
 import { WebAiError } from './errors.mjs';
+import { POLL_EXPIRED, monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
+import { detectInterstitial, INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER } from './interstitial.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { saveAssistantDownloadableFiles } from './chatgpt-files.mjs';
 import { observeAssistantResponse, recoverAssistantResponse } from './chatgpt-response-observer.mjs';
@@ -33,6 +41,7 @@ import {
     attachLocalFileLive,
     attachLocalFilesLive,
     fileInfoFromPath,
+    preflightAttachment,
     sendButtonTimeoutMs,
     UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_SELECTORS,
     verifySentTurnAttachmentLive,
@@ -43,7 +52,7 @@ import { captureCopiedResponseText, CHATGPT_COPY_SELECTORS, preferCopiedText } f
 import { withAnswerArtifact } from './answer-artifact.mjs';
 import { resolveTargetForIntent } from './target-resolver.mjs';
 import { createTraceContext, getSessionTrace, recordTraceStep, summarizeTraceSteps } from './action-trace.mjs';
-import { appendTraceToSession } from './trace-persistence.mjs';
+import { appendTraceToSession, appendTraceToSessionAsync } from './trace-persistence.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
 import { waitForConversationReady, isProviderUrl, shouldNavigateToRequestedProviderUrl, waitForPageUrl } from './navigation-ready.mjs';
 import { collectImages, isImageOnlyGeneratedImageChromeText } from './chatgpt-images.mjs';
@@ -54,11 +63,35 @@ import { buildTargetMismatchResult } from './session-target-guard.mjs';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
     CHATGPT_STOP_SELECTORS,
-    readTopLevelAssistantTexts,
+    CHATGPT_TURN_SELECTORS,
+    probeStopButton,
+    isActiveState,
+    readAssistantSnapshotSources,
+    readAssistantTurnOrderingInPage,
+    readChatGptStreamingState,
+    readTopLevelAssistantSnapshots,
     readTopLevelAssistantTextsFromLocators,
+    resolveTopLevelAssistantTurns,
 } from './chatgpt-response-dom.mjs';
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
+/**
+ * Budget handed to the post-deadline recovery path, carved OUT of `--timeout`
+ * rather than added to it. The caller's bound stays exactly what they asked for.
+ */
+const RECOVERY_RESERVE_MS = 2_000;
+const MAX_RECOVERY_RESERVE_RATIO = 0.25;
+/** Never starve the loop below one tick, even on a tiny timeout. */
+const MIN_LOOP_BUDGET_MS = 500;
+/** One poll tick. */
+const PACING_INTERVAL_MS = 500;
+/**
+ * How long the reported clock may sit at ONE value before the hard deadline
+ * gives up on it, as a multiple of the budget.
+ *
+ * Only reachable when `Date.now` has stopped moving entirely.
+ */
+
 const ASSISTANT_SELECTORS = CHATGPT_ASSISTANT_SELECTORS;
 const FINISHED_ACTIONS_SELECTOR = [
     'button[data-testid="copy-turn-action-button"]',
@@ -83,6 +116,7 @@ const PLACEHOLDER_PATTERNS = [
     /^searching\.{0,3}$/i,
     /^browsing\.{0,3}$/i,
     /^\s*$/,
+    /^chatgpt said:\s*answer now\s*$/i,
 ];
 
 /**
@@ -155,11 +189,135 @@ export async function statusWebAi(deps, input = {}) {
 }
 
 /**
+ * @param {string[]} uploadPaths
+ * @param {any} input
+ */
+function preflightChatGptUploadFiles(uploadPaths, input) {
+    return uploadPaths.map((uploadPath) => {
+        let file;
+        try {
+            file = fileInfoFromPath(uploadPath);
+        } catch (cause) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: `attachment preflight failed for ${uploadPath}: ${String((/** @type {any} */ (cause))?.message || cause)}`,
+                mutationAllowed: false,
+                cause,
+            });
+        }
+        const preflight = preflightAttachment(file, {
+            maxUploadBytes: input.maxUploadFileSize,
+        });
+        if (preflight.ok !== true) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: `${file.basename}: ${preflight.rejectedReason || 'preflight rejected'}`,
+                mutationAllowed: false,
+            });
+        }
+        return file;
+    });
+}
+
+const CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS = [
+    'form:has(textarea)',
+    'form:has([contenteditable="true"])',
+    'main form',
+];
+
+const CHATGPT_REPOMIX_ATTACHMENT_COUNT_SELECTORS = [
+    'button[aria-label*="Remove file" i]',
+    'button[aria-label*="Remove attachment" i]',
+    '.group\\/file-tile',
+    '[data-testid*="attachment" i]',
+].map(selector => CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS
+    .map(root => `${root} ${selector}`)
+    .join(', '));
+
+const CHATGPT_REPOMIX_UPLOAD_PROGRESS_SELECTORS = [
+    '[role="progressbar"]',
+    '[aria-label*="uploading" i]',
+    '[aria-label*="processing" i]',
+    '[data-testid*="upload-progress" i]',
+].map(selector => CHATGPT_REPOMIX_COMPOSER_ROOT_SELECTORS
+    .map(root => `${root} ${selector}`)
+    .join(', '));
+
+/**
+ * Repomix may add several artifacts alongside existing user/code attachments.
+ * Count visible chips instead of matching basenames so duplicate names remain
+ * allowed without letting one accepted file stand in for several requested
+ * files. This strict gate is intentionally not used by the legacy raw path.
+ * @param {any} page
+ * @param {number} expectedCount
+ * @param {{timeoutMs?:number}} [options]
+ */
+export async function waitForChatGptRepomixAttachmentCount(page, expectedCount, options = {}) {
+    const deadline = Date.now() + Math.max(0, Number(options.timeoutMs ?? 8_000));
+    let observedCount = 0;
+    let progressCount = 0;
+    do {
+        const [attachmentCounts, progressCounts] = await Promise.all([
+            Promise.all(CHATGPT_REPOMIX_ATTACHMENT_COUNT_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
+            Promise.all(CHATGPT_REPOMIX_UPLOAD_PROGRESS_SELECTORS.map(selector => page.locator(selector).count().catch(() => 0))),
+        ]);
+        // Each surface may represent only part of a mixed attachment batch.
+        // Prefer any complete surface, then retain the largest partial count
+        // for diagnostics without summing cross-selector duplicates.
+        const exactCount = attachmentCounts.find(count => count === expectedCount);
+        observedCount = exactCount ?? Math.max(0, ...attachmentCounts);
+        progressCount = progressCounts.reduce((total, count) => total + count, 0);
+        if (progressCount === 0 && observedCount === expectedCount) {
+            return { ok: true, expectedCount, observedCount };
+        }
+        if (Date.now() >= deadline) break;
+        await page.waitForTimeout(250).catch(() => undefined);
+    } while (Date.now() <= deadline);
+    return {
+        ok: false,
+        expectedCount,
+        observedCount,
+        error: `ChatGPT accepted ${observedCount}/${expectedCount} expected attachments before submit`,
+    };
+}
+
+/**
  * @param {any} deps
  * @param {any} input
  */
 export async function sendWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
+    const repomixMode = String(input.contextTransform || '').trim().toLowerCase() === 'repomix'
+        || input.preparedContextPack?.contextTransform === 'repomix';
+    let contextPack = repomixMode
+        ? input.preparedContextPack || await prepareContextForBrowser(input)
+        : null;
+    let contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    // input.filePaths preserves the caller's upload order. In code mode that
+    // order is the dev-agent context zip followed by caller-provided files.
+    const requestedPaths = Array.isArray(input.filePaths) && input.filePaths.length
+        ? input.filePaths
+        : (input.filePath ? [input.filePath] : []);
+    /** @type {string[]} */
+    let uploadPaths = [];
+    /** @type {any[]} */
+    let uploadFiles = [];
+    const strictRepomixUpload = repomixMode && contextAttachments.length > 0;
+    if (repomixMode) {
+        uploadPaths = [
+            ...requestedPaths,
+            ...contextAttachments.map((/** @type {any} */ attachment) => attachment.path),
+        ];
+        // Repomix/config/artifact failures must precede provider-page mutation.
+        uploadFiles = preflightChatGptUploadFiles(uploadPaths, input);
+    }
+
     if (input.url) {
         const page = await deps.getPage();
         const currentUrl = await waitForPageUrl(page, { state: 'load' });
@@ -173,12 +331,26 @@ export async function sendWebAi(deps, input = {}) {
         }
     }
     const page = await requireChatGptPage(deps);
-    const contextPack = await prepareContextForBrowser(input);
+    if (!repomixMode) {
+        // Preserve the raw workflow's existing navigation and mutation order.
+        contextPack = await prepareContextForBrowser(input);
+        contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    }
     const rendered = contextPack
         ? contextPack.transport === 'inline'
             ? renderQuestionEnvelopeWithContext(envelope, contextPack.composerText)
             : renderQuestionEnvelope(envelope)
         : renderQuestionEnvelope(envelope);
+    /** @type {string[]} */
+    const surfaceWarnings = [];
+    if (input.normalizeSurface === true) {
+        // Must run BEFORE selectChatGptModel: its surface guard rejects a Work
+        // surface, which is exactly the state this flag exists to fix. Dynamic
+        // import mirrors the existing pattern that avoids a static cycle.
+        const { ensureChatSurface } = await import('./chatgpt-work-picker.mjs');
+        const normalized = await ensureChatSurface(page);
+        if (normalized.switched) surfaceWarnings.push('composer surface normalized: work -> chat');
+    }
     const selectedModel = await selectChatGptModel(page, input.model, {
         effort: input.reasoningEffort,
         family: input.family,
@@ -186,6 +358,10 @@ export async function sendWebAi(deps, input = {}) {
 
     await waitForStableAssistantCount(page);
     const assistantCount = await countAssistantMessages(page);
+    // Sending without a countable baseline poisons every later poll on this
+    // session: 0 would re-admit the whole conversation as new candidates. Fail
+    // before the prompt goes out rather than after.
+    if (assistantCount === null) throw baselineSnapshotError();
     const baseline = saveBaseline({
         vendor: envelope.vendor,
         url: page.url(),
@@ -227,7 +403,7 @@ export async function sendWebAi(deps, input = {}) {
         },
     };
     const readinessAdapter = createChatGptEditorAdapter(page, editorOptions);
-    await readinessAdapter.waitForReady();
+    await waitForChatGptComposerReady(page, readinessAdapter);
     const selectedTools = await selectChatGptComposerTools(page, input);
     const traceCtx = createTraceContext(session.sessionId);
     let tracePersisted = false;
@@ -243,30 +419,30 @@ export async function sendWebAi(deps, input = {}) {
         let attachmentWarnings = [];
         /** @type {any[]} */
         let usedFallbacks = [];
-        const contextAttachmentPath = contextPack?.attachments?.[0]?.path;
-        // input.filePaths (repeatable --file) takes precedence; fall back to the
-        // legacy single input.filePath, then the context-package attachment.
-        const requestedPaths = Array.isArray(input.filePaths) && input.filePaths.length
-            ? input.filePaths
-            : (input.filePath ? [input.filePath] : []);
-        if (contextAttachmentPath && requestedPaths.length) {
-            throw new WebAiError({
-                errorCode: 'provider.attachment-preflight',
-                stage: 'attachment-preflight',
-                vendor: 'chatgpt',
-                retryHint: 'inline-only-or-file',
-                message: 'context package upload and --file upload cannot be combined yet',
-            });
+        if (!repomixMode) {
+            const contextAttachmentPath = contextAttachments[0]?.path;
+            if (contextAttachmentPath && requestedPaths.length) {
+                throw new WebAiError({
+                    errorCode: 'provider.attachment-preflight',
+                    stage: 'attachment-preflight',
+                    vendor: 'chatgpt',
+                    retryHint: 'inline-only-or-file',
+                    message: 'context package upload and --file upload cannot be combined yet',
+                });
+            }
+            uploadPaths = requestedPaths.length
+                ? requestedPaths
+                : (contextAttachmentPath ? [contextAttachmentPath] : []);
         }
-        const uploadPaths = requestedPaths.length ? requestedPaths : (contextAttachmentPath ? [contextAttachmentPath] : []);
+        if (!repomixMode) uploadFiles = uploadPaths.map(fileInfoFromPath);
         if (uploadPaths.length) {
             const uploadResolution = await resolveOptionalChatGptUploadTarget(page, traceCtx);
-            const upload = await attachLocalFilesLive(page, uploadPaths.map(fileInfoFromPath), {
+            const upload = await attachLocalFilesLive(page, uploadFiles, {
                 uploadTarget: /** @type {any} */ (uploadResolution?.target || null),
                 maxUploadBytes: input.maxUploadFileSize,
                 attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
             });
-            if (!upload.ok) throw new WebAiError({
+            if (repomixMode ? upload.ok !== true : !upload.ok) throw new WebAiError({
                 errorCode: 'provider.attachment-evidence-missing',
                 stage: 'attachment-verify',
                 vendor: 'chatgpt',
@@ -277,22 +453,42 @@ export async function sendWebAi(deps, input = {}) {
             attachmentWarnings = upload.warnings || [];
             usedFallbacks = upload.usedFallbacks || [];
         }
+        if (strictRepomixUpload) {
+            const attachmentCount = await waitForChatGptRepomixAttachmentCount(page, uploadFiles.length);
+            if (attachmentCount.ok !== true) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'chatgpt',
+                retryHint: 're-upload',
+                message: attachmentCount.error,
+                mutationAllowed: true,
+                evidence: {
+                    expectedCount: attachmentCount.expectedCount,
+                    observedCount: attachmentCount.observedCount,
+                },
+            });
+        }
         const sendResolution = await resolveOptionalChatGptSendTarget(page, traceCtx);
-        const submitTimeoutMs = sendButtonTimeoutMs(uploadPaths);
-        await adapter.submitPrompt({
+        const totalUploadBytes = uploadFiles.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0);
+        const submitTimeoutMs = sendButtonTimeoutMs(uploadPaths, totalUploadBytes);
+        const submitResult = await adapter.submitPrompt({
             sendTarget: /** @type {any} */ (sendResolution?.target || null),
             sendButtonTimeoutMs: submitTimeoutMs,
+            requireEnabledSendButton: uploadPaths.length > 0,
         });
+        if (submitResult.failure === 'send-button-disabled') {
+            throw new WebAiError({
+                errorCode: 'provider.send-click',
+                stage: 'send-click',
+                vendor: 'chatgpt',
+                retryHint: 'retry-send',
+                message: 'send button never became enabled while attachments were pending',
+            });
+        }
         await adapter.verifyPromptCommitted(rendered.composerText, commitBaseline, {
             timeoutMs: submitTimeoutMs,
         });
-        for (const uploadPath of uploadPaths) {
-            const sentAttachment = await verifySentTurnAttachmentLive(page, fileInfoFromPath(uploadPath));
-            if (!sentAttachment.ok) {
-                usedFallbacks.push('sent-attachment-evidence-unavailable');
-                attachmentWarnings.push(`sent attachment evidence unavailable after submit (${fileInfoFromPath(uploadPath).basename}): ${sentAttachment.error}`);
-            }
-        }
+        await verifySentAttachments(page, uploadFiles, { usedFallbacks, attachmentWarnings });
         const finalUrl = page.url();
         if (session && finalUrl !== session.conversationUrl) {
             updateSession(session.sessionId, { conversationUrl: finalUrl });
@@ -312,7 +508,10 @@ export async function sendWebAi(deps, input = {}) {
             warnings: [
                 ...rendered.warnings,
                 ...(contextPack?.warnings || []),
-                ...(contextAttachmentPath ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
+                ...surfaceWarnings,
+                ...(repomixMode
+                    ? contextAttachments.map((/** @type {any} */ attachment) => `context package attached: ${attachment.displayPath || attachment.path}`)
+                    : (contextAttachments[0]?.path ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : [])),
                 ...attachmentWarnings,
                 ...(selectedModel?.warnings || []),
                 ...(selectedTools?.warnings || []),
@@ -329,30 +528,344 @@ export async function sendWebAi(deps, input = {}) {
 }
 
 /**
+ * Preserve the composer readiness error unless a bounded ChatGPT-scoped probe
+ * identifies a provider interstitial.
+ * @param {any} page
+ * @param {{ waitForReady: () => Promise<void> }} readinessAdapter
+ * @param {{ detect?: typeof detectInterstitial }} [options]
+ */
+export async function waitForChatGptComposerReady(page, readinessAdapter, { detect = detectInterstitial } = {}) {
+    try {
+        await readinessAdapter.waitForReady();
+    } catch (cause) {
+        const verdict = await detect(page, { shellSelectors: INTERSTITIAL_SHELL_SELECTORS_BY_PROVIDER.chatgpt });
+        if (verdict.kind !== 'none') {
+            throw new WebAiError({
+                errorCode: 'provider.interstitial',
+                stage: 'provider-interstitial',
+                vendor: 'chatgpt',
+                retryHint: verdict.retryHint,
+                message: `ChatGPT interstitial blocked composer readiness: ${verdict.kind}`,
+                evidence: verdict,
+                cause,
+            });
+        }
+        throw cause;
+    }
+}
+
+/**
+ * @param {Page} page
+ * @param {Array<{basename: string}>} uploadFiles
+ * @param {{usedFallbacks: string[], attachmentWarnings: string[]}} evidence
+ * @param {(page: Page, file: any) => Promise<any>} [verifyAttachment]
+ */
+export async function verifySentAttachments(page, uploadFiles, evidence, verifyAttachment = verifySentTurnAttachmentLive) {
+    for (const file of uploadFiles) {
+        const sentAttachment = await verifyAttachment(page, file);
+        if (sentAttachment.ok) continue;
+        const underlyingError = sentAttachment.error || 'unknown verification failure';
+        if (process.env.AGBROWSE_SENT_ATTACHMENT_POLICY === 'warn') {
+            evidence.usedFallbacks.push('sent-attachment-evidence-unavailable');
+            evidence.attachmentWarnings.push(`sent attachment evidence unavailable after submit (${file.basename}): ${underlyingError}`);
+            continue;
+        }
+        throw new WebAiError({
+            errorCode: 'provider.sent-attachment-missing',
+            stage: 'attachment-verify',
+            vendor: 'chatgpt',
+            retryHint: 're-upload',
+            mutationAllowed: true,
+            message: `sent attachment missing after submit (${file.basename}): ${underlyingError}`,
+        });
+    }
+}
+
+/**
+ * Node-side wrapper: read the assistant/user turn ordering verdict.
+ *
+ * Evaluation failure reports `'unknown'` — NOT `'ordered'`. Treating a failed
+ * read as "verified ordered" disabled this gate exactly when it was needed: a
+ * stalled DOM could no longer be checked, so stale text passed as fresh.
+ *
+ * @param {any} page
+ * @returns {Promise<'ordered'|'stale'|'unverifiable'|'unknown'>}
+ */
+async function readAssistantTurnOrdering(page) {
+    let verdict;
+    try {
+        verdict = await page.evaluate(readAssistantTurnOrderingInPage, CHATGPT_TURN_SELECTORS);
+    } catch {
+        return 'unknown';
+    }
+    // A page double that cannot honour the callback returns null/undefined or
+    // something else entirely. That is an unobserved gate, not a passed one.
+    return verdict === 'ordered' || verdict === 'stale' || verdict === 'unverifiable'
+        ? verdict
+        : 'unknown';
+}
+
+/**
+ * Record a failed activity observation.
+ *
+ * Fail-closed sentinels are worthless if they vanish silently: the caller must
+ * be able to see that the poll could not read the page.
+ *
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptActivityState} activity
+ * @param {Set<string>} observations
+ */
+function recordActivityObservation(activity, observations) {
+    if (activity?.strength === 'unknown') observations.add('activity-read-unverified');
+}
+
+/**
+ * Read whether the current tab still is the session's bound target.
+ *
+ * A FAILED read reports `'unknown'`, never a silent pass. The old
+ * `.catch(() => null)` made an unreadable target indistinguishable from a
+ * matching one, so the mismatch check switched itself off exactly when CDP was
+ * unstable — the moment the tab is most likely to have changed.
+ *
+ * `null` is also `'unknown'`: the reason differs from a throw, but neither is
+ * evidence that this tab is the session's target.
+ *
+ * Returns `actualTargetId` from the SAME read, because the mismatch envelope
+ * needs it as evidence and re-probing would race.
+ *
+ * @param {any} deps
+ * @param {any} session
+ * @returns {Promise<{ verdict: 'verified'|'mismatch'|'unknown', actualTargetId: string|null }>}
+ */
+async function readTargetIdentity(deps, session) {
+    let actualTargetId;
+    try {
+        actualTargetId = await deps.getTargetId?.() ?? null;
+    } catch {
+        return { verdict: 'unknown', actualTargetId: null };
+    }
+    if (!actualTargetId) return { verdict: 'unknown', actualTargetId: null };
+    return {
+        verdict: actualTargetId === session.targetId ? 'verified' : 'mismatch',
+        actualTargetId,
+    };
+}
+
+/**
+ * Merge the poll's observation ledger into a result envelope.
+ *
+ * Applied at every result-envelope CONSTRUCTION, not at every `return`: warnings
+ * also escape through `withAnswerArtifact` (which copies them at call time),
+ * `buildDeferredPollingResult` (which persists them to the session), and
+ * `finalizeProviderTab` (which runs before the return). Merging late would leave
+ * those three disagreeing with what the caller sees.
+ *
+ * @template {{ warnings?: string[] }} T
+ * @param {T} result
+ * @param {Set<string>} observations
+ * @returns {T}
+ */
+function mergeObservationWarnings(result, observations) {
+    if (!observations.size) return result;
+    return { ...result, warnings: mergeObservationList(result?.warnings, observations) };
+}
+
+/**
+ * @param {string[]|undefined} warnings
+ * @param {Set<string>} observations
+ * @returns {string[]}
+ */
+function mergeObservationList(warnings, observations) {
+    const merged = Array.isArray(warnings) ? [...warnings] : [];
+    for (const observation of observations) {
+        if (!merged.includes(observation)) merged.push(observation);
+    }
+    return merged;
+}
+
+/**
+ * Poll for an answer, guaranteeing the CALLER gets a result within `--timeout`.
+ *
+ * The loop's own deadline is only checked between ticks, so a `page.evaluate`
+ * that never settles used to hold the caller past the timeout indefinitely —
+ * issue #88. This wrapper races the whole run against a hard deadline.
+ *
+ * Scope, stated precisely: containment starts once the deadline is armed, so it
+ * covers the poll loop and the recovery path but NOT pre-poll setup. It bounds
+ * the RETURN, not the stall — the losing `evaluate` stays pending, because
+ * cancelling it needs a primitive this codebase does not yet have.
+ *
  * @param {any} deps
  * @param {any} input
  */
 export async function pollWebAi(deps, input = {}) {
+    // Start the clock BEFORE anything that can block. Resolving the budget may
+    // read the session store, which takes a synchronous lock with a blocking
+    // retry; measuring from after that read would let lock contention run
+    // outside the bound the caller was promised.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
+    // Resolve the SAME budget the inner loop resolves. The CLI builds its
+    // envelope with `timeout: undefined` (cli.mjs:730-738) so a stored session
+    // deadline can be inherited; falling back to 1s here capped those calls at
+    // a second, and the wrapper's bound wins over whatever the loop computes.
+    //
+    // Only direct `poll` actually arrives here without a timeout
+    // (cli.mjs:1269). `watch` resolves one first (watcher.mjs:635) and so does
+    // `resume` (cli-sessions.mjs:130), so both take the explicit path below.
+    //
+    // An explicit timeout needs no store read at all, so the common path never
+    // touches the lock.
+    const explicitTimeoutSec = Number(input.timeout);
+    /** @type {number} */
+    let timeoutMs;
+    /**
+     * Resolved once, up front, so the expiry callback never has to read the
+     * store. That callback runs at the moment the deadline fires; taking the
+     * synchronous lock there stalls the very timer that just fired — measured
+     * at 6,231ms on a contended lock, during which a 50ms timer did not run.
+     *
+     * @type {'best-effort'|'require-all'}
+     */
+    let filePolicyAtArm = 'best-effort';
+    if (explicitTimeoutSec > 0) {
+        timeoutMs = explicitTimeoutSec * 1000;
+        // An explicit timeout deliberately avoids the store read; the policy
+        // then comes from the input alone, which is what a caller passing one
+        // has already told us.
+        filePolicyAtArm = resolveFileArtifactPolicy(input, null);
+    } else {
+        const session = input.session ? getSession(input.session) : null;
+        filePolicyAtArm = resolveFileArtifactPolicy(input, session);
+        // A stored deadline is read in MILLISECONDS here. The budget resolver
+        // floors its answer at one second, which is right for a polling budget
+        // and wrong for a hard bound: 400ms left would become 1000ms, and an
+        // already-expired deadline would become a fresh second. The bound the
+        // caller was promised cannot be rounded up.
+        const remainderMs = storedDeadlineRemainderMs(session, started);
+        if (remainderMs !== null) {
+            if (remainderMs <= 0) {
+                // Already past. Return before touching the browser at all —
+                // opening a page to immediately abandon it is work nobody is
+                // waiting for, and the observation ledger is empty either way.
+                //
+                // The ledger is empty of BROWSER observations, but the file
+                // policy still applies: `require-all` gates every path that can
+                // report an outcome, and returning early must not be the one
+                // way to escape it.
+                /** @type {Set<string>} */
+                const expiredObservations = new Set();
+                if (filePolicyAtArm === 'require-all') {
+                    expiredObservations.add('file-artifact-unverified');
+                }
+                return buildHardTimeoutResult(input, expiredObservations);
+            }
+            timeoutMs = remainderMs;
+        } else {
+            // No stored deadline: fall back to the tier/vendor default, which
+            // the resolver owns. Anchored at `started` rather than its own
+            // clock so a slow store read is not charged twice — once inside the
+            // resolver and again by the earlier anchor.
+            const timeoutSec = resolveTimeoutBudgetSec(input, session, input.vendor || 'chatgpt', started);
+            timeoutMs = Math.max(1, Number(timeoutSec) > 0 ? Number(timeoutSec) : 1) * 1000;
+        }
+    }
+    // Shared with the inner run so a hard-deadline return still reports what the
+    // poll managed to observe. Losing those warnings would make an expired poll
+    // indistinguishable from a clean one.
+    /** @type {Set<string>} */
+    const observations = new Set();
+    return withPollDeadline(
+        (hardDeadline, runToken) => runPollWebAi(deps, input, hardDeadline, observations, runToken),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            onExpired: () => {
+                // Added to the SHARED ledger before the envelope is built: a
+                // warning pushed by the loser after this point would never
+                // reach the caller.
+                // Captured at arm time. Reading the store here would take the
+                // blocking lock inside the expiry callback itself.
+                if (filePolicyAtArm === 'require-all') {
+                    observations.add('file-artifact-unverified');
+                }
+                return buildHardTimeoutResult(input, observations);
+            },
+        },
+    );
+}
+
+/**
+ * The timeout envelope the hard deadline returns.
+ *
+ * Deliberately free of session writes: see the timer comment above.
+ *
+ * @param {any} input
+ */
+function buildHardTimeoutResult(input, observations) {
+    return {
+        ok: false,
+        vendor: input.vendor || 'chatgpt',
+        status: 'timeout',
+        ...(input.session ? { sessionId: input.session } : {}),
+        answerText: '',
+        usedFallbacks: [],
+        warnings: mergeObservationList(['poll-deadline-exceeded'], observations),
+        recoverable: true,
+        // Every other typed failure carries a code; without one here a caller
+        // has to branch on the message string for this envelope alone.
+        errorCode: 'provider.poll-timeout',
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {number} hardDeadlineAt
+ * @param {Set<string>} [sharedObservations]
+ * @param {{ expired: boolean, hardDeadline: number }} [sharedRun] commit token owned by the wrapper
+ */
+async function runPollWebAi(deps, input = {}, hardDeadlineAt = Number.POSITIVE_INFINITY, sharedObservations, sharedRun) {
     const vendor = input.vendor || 'chatgpt';
+    // Read through the awaited lock: this runs inside the armed deadline, and
+    // the blocking form suspends the timer enforcing it.
     const timeout = Math.max(1, Number(input.timeout) > 0
         ? Number(input.timeout)
-        : (() => {
-            const session = input.session ? getSession(input.session) : null;
-            return resolveTimeoutBudgetSec(input, session, vendor);
-        })(),
+        : resolveTimeoutBudgetSec(
+            input,
+            input.session ? await readSessionAsync(input.session) : null,
+            vendor,
+        ),
     );
     const page = await requireChatGptPage(deps);
     const url = page.url();
     const session = input.session
-        ? getSession(input.session)
+        ? await readSessionAsync(input.session)
         : findActiveSession({
             vendor,
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: url,
         });
-    const baseline = (session && sessionToBaseline(session))
-        || getBaseline(vendor, url)
-        || getLatestBaseline(vendor, { sameHostUrl: url });
+    // B23: a corrupt store collapses to an empty one, so a failed read looks
+    // exactly like "no session". The flag is read HERE, right after the lookup,
+    // so the observation is about this read and not some later one.
+    const sessionLookupCorrupt = sessionStoreReadWasCorrupt();
+    // Observation ledger: records reads the poll could NOT make. Every result
+    // envelope merges it, so a fail-closed sentinel never disappears silently.
+    // Declared before baseline resolution because that step can already record.
+    /** @type {Set<string>} */
+    const observations = sharedObservations || new Set();
+    if (sessionLookupCorrupt && !session) observations.add('session-store-read-failed');
+    let baseline = (session && sessionToBaseline(session)) || getBaseline(vendor, url);
+    if (!baseline) {
+        // Last resort: the newest baseline for this HOST, which may belong to a
+        // different conversation. A corrupt store lands here too, but it is now
+        // reported separately above — this warning is only about the borrow.
+        baseline = getLatestBaseline(vendor, { sameHostUrl: url });
+        if (baseline) observations.add('baseline-inferred-from-host');
+    }
     if (!baseline) throw new WebAiError({
         errorCode: 'provider.poll-timeout',
         stage: 'poll',
@@ -360,13 +873,111 @@ export async function pollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send or query first.',
     });
+    // Monotonic: a stored require-all is not relaxed by a poll that omits the
+    // flag, since poll/watch/resume never repeat it.
+    const filePolicy = resolveFileArtifactPolicy(input, session);
     const copyTraceCtx = session && input.allowCopyMarkdownFallback === true
         ? createTraceContext(session.sessionId)
         : null;
 
-    const deadline = Date.now() + timeout * 1000;
+    // Two deadlines. `--timeout` is the HARD upper bound the caller is promised;
+    // the loop stops earlier so the post-deadline recovery path has budget left.
+    // Spending the whole timeout in the loop meant recovery ran at or past the
+    // bound, which is how a stalled read outlived `--timeout` entirely.
+    const hardDeadline = Number.isFinite(hardDeadlineAt)
+        ? hardDeadlineAt
+        : Date.now() + timeout * 1000;
+    // Derive from the hard deadline actually in force, not from `timeout`: the
+    // wrapper owns the bound and may have armed it slightly earlier.
+    const budgetMs = Math.max(0, hardDeadline - Date.now());
+    // Reserve is carved OUT of the budget so recovery runs inside the caller's
+    // bound rather than past it. It costs the loop its final tick, which is the
+    // point: that tick previously ran up to the deadline and left recovery to
+    // start already expired.
+    //
+    // Never more than a quarter of the budget: a small poll must not lose half
+    // its loop to a reserve, and the post-loop path is cheap when it is reached
+    // at all.
+    //
+    // The `budgetMs % PACING_INTERVAL_MS` term used to sit inside a
+    // `Math.max(PACING_INTERVAL_MS, ...)`, which is ALWAYS exactly
+    // PACING_INTERVAL_MS — the remainder is smaller than the interval by
+    // definition. That pinned the reserve to one tick and made
+    // RECOVERY_RESERVE_MS unreachable at every budget. The ratio and
+    // minimum-loop terms already keep small budgets safe, so the dead term is
+    // gone and the constant means what it says.
+    const reserveMs = Math.min(
+        RECOVERY_RESERVE_MS,
+        Math.max(0, Math.floor(budgetMs * MAX_RECOVERY_RESERVE_RATIO)),
+        Math.max(0, budgetMs - MIN_LOOP_BUDGET_MS),
+    );
+    const deadline = hardDeadline - reserveMs;
     const startedAt = Date.now();
+    /**
+     * Owned by THIS invocation. Deliberately not module-level: a second poll on
+     * another session must not expire this one, and single-flight is explicitly
+     * out of scope for this change.
+     *
+     * Handed down by the wrapper when there is one, so the wrapper can flip
+     * `expired` on the run it just abandoned. The standalone object is the
+     * fallback for direct calls in tests.
+     *
+     * @type {{ expired: boolean, hardDeadline: number }}
+     */
+    const run = sharedRun || { expired: false, hardDeadline };
+    /**
+     * Refuse to START a new side effect once the hard deadline has passed.
+     *
+     * Checks the clock as well as the flag: the timer callback may not have run
+     * yet even though wall time is past the deadline, because a promise
+     * continuation can be scheduled ahead of it.
+     *
+     * Throws rather than returning a sentinel — a caller that ignored the
+     * sentinel could still build a `complete` envelope and win the race after
+     * the deadline, which keeps the side effect out but breaks the time
+     * contract.
+     *
+     * @template T
+     * @param {() => T} fn
+     * @returns {T}
+     */
+    const commitIfActive = (fn) => {
+        if (run.expired || Date.now() >= run.hardDeadline) throw POLL_EXPIRED;
+        return fn();
+    };
+    /**
+     * The gate's predicate, for callers that must SKIP rather than throw.
+     *
+     * @returns {boolean}
+     */
+    const isActiveRun = () => !(run.expired || Date.now() >= run.hardDeadline);
+    /**
+     * Async form of the gate, for side effects that await.
+     *
+     * Checked once BEFORE starting: a side effect that has already begun cannot
+     * be un-started, so the gate's job is to refuse the start, not to undo it.
+     *
+     * @template T
+     * @param {() => Promise<T>} fn
+     * @returns {Promise<T>}
+     */
+    const commitAsyncIfActive = async (fn) => commitIfActive(fn);
+    /**
+     * Wait out one tick without overrunning the loop budget.
+     *
+     * @param {Promise<unknown>|null} [wake] observer promise, tail call only
+     * @returns {Promise<boolean>} false when the budget is spent
+     */
+    const paceTick = async (wake) => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        const waited = page.waitForTimeout(Math.min(PACING_INTERVAL_MS, remaining));
+        if (wake) await Promise.race([waited, wake]);
+        else await waited;
+        return true;
+    };
     let stableText = '';
+    let stableSnapshot = null;
     let stableSince = 0;
     let lastHeartbeat = 0;
     // 33 short-circuit: a MutationObserver wakes the loop as soon as the response
@@ -377,55 +988,149 @@ export async function pollWebAi(deps, input = {}) {
     let observerWake = observerBudgetMs > 1_000
         ? observeAssistantResponse(page, { baselineAssistantCount: baseline.assistantCount, timeoutMs: observerBudgetMs })
         : null;
-    while (Date.now() <= deadline) {
+    while (Date.now() < deadline) {
         try {
+        let identityOk = true;
         if (session?.targetId) {
-            const currentTargetId = await deps.getTargetId?.().catch(() => null);
-            if (currentTargetId && currentTargetId !== session.targetId) {
-                return buildTargetMismatchResult({
+            const identity = await readTargetIdentity(deps, session);
+            if (identity.verdict === 'mismatch') {
+                return mergeObservationWarnings(buildTargetMismatchResult({
                     vendor,
                     session,
-                    actualTargetId: currentTargetId,
+                    actualTargetId: /** @type {string} */ (identity.actualTargetId),
                     port: deps.getPort?.() || 9222,
                     url: page.url(),
                     baseline,
-                });
+                }), observations);
             }
+            // Unverified identity disqualifies the candidate, like a failed
+            // ordering read. This branch skips the conversation-URL check in the
+            // `else`, so without this the tick has no identity evidence at all
+            // and a stable answer from the wrong tab would complete.
+            identityOk = identity.verdict === 'verified';
+            if (identity.verdict === 'unknown') observations.add('target-identity-unverified');
         } else {
             const currentUrl = page.url();
             const baselineConvoId = extractConversationId(baseline.url);
             const currentConvoId = extractConversationId(currentUrl);
             if (baselineConvoId !== currentConvoId || (!baselineConvoId && !currentConvoId && baseline.url !== currentUrl)) {
-                return {
+                return mergeObservationWarnings({
                     ok: false, vendor, status: 'conversation-mismatch',
                     url: currentUrl, answerText: '', baseline, usedFallbacks: [],
                     warnings: [`conversation changed: ${baselineConvoId || 'none'} → ${currentConvoId || 'none'}`],
                     error: 'conversation changed during poll',
-                };
+                }, observations);
             }
         }
-        const answers = await readAssistantMessages(page);
-        const newAnswers = answers.slice(baseline.assistantCount).filter(isFinalAnswer);
-        const latest = newAnswers.at(-1) || '';
-        const streaming = await isStreaming(page);
+        const split = await readAssistantSnapshotsSplit(page);
+        // Only a FAILED acquisition falls back. A successful empty read means the
+        // page genuinely has nothing yet, and must keep polling rather than have a
+        // legacy reader invent candidates.
+        let wrapped = split.wrapped;
+        if (!split.ok) {
+            const fallbackRead = await readAssistantSnapshots(page);
+            // Both readers failed: there is no candidate set to reason about, so
+            // reset stability and let the shared pacing below run. Skipping the
+            // wait would spin the loop and, on the virtual clock, never reach the
+            // deadline.
+            if (!fallbackRead.ok) {
+                observations.add('assistant-read-unverified');
+                stableText = '';
+                stableSnapshot = null;
+                stableSince = 0;
+                // Same budget cap as the tail: a flat 500ms here would eat the
+                // recovery reserve whenever both readers keep failing.
+                if (!await paceTick()) break;
+                continue;
+            }
+            wrapped = fallbackRead.snapshots.map((sample, index) => ({
+                ...sample, source: 'wrapped', domOrder: index,
+            }));
+        }
+        const wrapperless = split.wrapperless;
+        // Wrapped turns are positional: slice against the pre-send count.
+        // Wrapperless blocks are already correlated by DOM-following the latest
+        // user node, so slicing them against a stale count would drop the answer.
+        // Merge by DOM order so `.at(-1)` means "last in the document".
+        const newSnapshots = [...wrapped.slice(baseline.assistantCount), ...wrapperless]
+            .sort((a, b) => (a.domOrder ?? 0) - (b.domOrder ?? 0))
+            .filter(sample => isFinalAnswer(sample.text));
+        const latestSnapshot = newSnapshots.at(-1) || null;
+        const latest = latestSnapshot?.text || '';
+        const activity = await readActivityState(page);
+        recordActivityObservation(activity, observations);
+        // `streaming` now means STRONG evidence only. Weak activity — a mounted
+        // sidecar still reading "Thinking", or a growing "Thought for 2s: …"
+        // trace — no longer freezes the stability window; it only demands a
+        // longer quiet period before we accept completion.
+        const streaming = activity.strength === 'strong';
+        // An unobserved verdict buys the same longer quiet window as weak
+        // activity: we cannot claim the page went quiet if we could not read it.
+        const weakActive = activity.strength === 'weak' || activity.strength === 'unknown';
         const now = Date.now();
         if ((streaming || latest) && now - lastHeartbeat >= 30_000) {
             const elapsed = Math.round((now - startedAt) / 1000);
-            process.stderr.write(`[poll] ${elapsed}s — ${streaming ? 'streaming' : 'stabilizing'}...\n`);
+            const phase = streaming ? 'streaming' : weakActive ? 'settling' : 'stabilizing';
+            // Caller-visible output. A loser printing progress after its poll
+            // already returned `timeout` narrates a run nobody is waiting for.
+            if (isActiveRun()) process.stderr.write(`[poll] ${elapsed}s — ${phase}...\n`);
             lastHeartbeat = now;
         }
-        const finished = !streaming && latest ? await isResponseFinished(page) : false;
-        if (latest && !streaming) {
+        // The image shortcut returns on the FIRST detected image with no terminal
+        // evidence, so it requires true quiet: weak activity is still activity.
+        if (activity.strength === 'none' && latestSnapshot && session && input.outputImage !== undefined
+            && isImageOnlyGeneratedImageChromeText(latest)) {
+            const imageResult = await commitAsyncIfActive(() => collectGeneratedImageAnswer(deps, input, session, baseline, isActiveRun));
+            if (imageResult) {
+                const imageWarnings = mergeObservationList(imageResult.warnings, observations);
+                const imageFileCapture = await captureFileArtifacts({
+                    deps, input, session, baseline, filePolicy, warnings: imageWarnings,
+                    commitAsyncIfActive, isActiveRun,
+                });
+                if (imageFileCapture?.failed) return imageFileCapture;
+                if (!input.skipFinalize) {
+                    await commitAsyncIfActive(() => finalizeProviderTab(deps, {
+                        vendor, session: /** @type {any} */ (session), page,
+                        answerText: imageResult.answerText,
+                        warnings: imageWarnings,
+                        archiveFlag: input.archiveFlag,
+                        stillActive: isActiveRun,
+                    }));
+                }
+                return withAnswerArtifact({
+                    ok: true, vendor, status: 'complete', url: page.url(), sessionId: session.sessionId,
+                    ...(imageFileCapture?.artifacts ? { artifacts: imageFileCapture.artifacts } : {}),
+                    answerText: imageResult.answerText, baseline, usedFallbacks: ['generated-image'],
+                    warnings: imageWarnings, responseStableMs: 0,
+                });
+            }
+        }
+        const completion = !streaming && latestSnapshot
+            ? await isResponseFinished(page, latestSnapshot, baseline.assistantCount)
+            : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+        const finished = completion.finished === true;
+        // G5: Turn ordering — ensure latest assistant turn follows latest user turn
+        // before accepting as stable. Prevents stale historical text from being returned.
+        // A wrapperless candidate was ADMITTED only because it DOM-follows the latest
+        // user node, so it already carries the exact evidence this gate checks — and
+        // the gate structurally cannot see it, since it only knows turn wrappers.
+        let orderingOk = true;
+        if (latest && !streaming && latestSnapshot?.source !== 'wrapperless') {
+            const ordering = await readAssistantTurnOrdering(page);
+            // `unknown` disqualifies the candidate exactly like `stale`. It does NOT
+            // `continue`: that would skip the pacing wait below, spinning the loop
+            // and — on the virtual clock, which only advances inside
+            // `waitForTimeout` — never reaching the deadline at all.
+            orderingOk = ordering === 'ordered' || ordering === 'unverifiable';
+            if (ordering === 'unknown') observations.add('assistant-ordering-unverified');
+        }
+        if (latest && !streaming && orderingOk && identityOk) {
             if (latest === stableText) {
                 const elapsedStable = Date.now() - stableSince;
-                const textLen = latest.length;
-                const minStableMs = finished
-                    ? 1000
-                    : textLen < 16 ? 8000
-                    : textLen < 40 ? 3000
-                    : textLen < 500 ? 2000
-                    : 3000;
-                if (elapsedStable >= minStableMs) {
+                // A weak signal demands a longer quiet window before we treat it as
+                // stale, so a genuinely slow reasoning phase is never cut short.
+                const minStableMs = weakActive ? 5_000 : 1_000;
+                if (finished && elapsedStable >= minStableMs) {
                     const usedFallbacks = [];
                     const warnings = [];
                     let answerText = latest;
@@ -435,7 +1140,7 @@ export async function pollWebAi(deps, input = {}) {
                         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
                             copyTarget: /** @type {any} */ (copyResolution?.target || null),
                         });
-                        traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
+                        traceSummary = await persistResolverTraceForSessionAsync(session, copyTraceCtx, isActiveRun);
                         const copiedText = preferCopiedText(latest, copied);
                         if (copiedText) {
                             answerText = cleanAssistantText(copiedText);
@@ -456,12 +1161,13 @@ export async function pollWebAi(deps, input = {}) {
                             });
                         }
                         try {
-                            const imgResult = await collectImages(cdp, {
+                            const imgResult = await commitAsyncIfActive(() => collectImages(cdp, {
                                 baselineAssistantCount: baseline?.assistantCount || 0,
                                 outputPath: input.outputImage || null,
                                 sessionId: input.outputImage ? null : session.sessionId,
                                 waitTimeoutMs: 60_000,
-                            });
+                                stillActive: isActiveRun,
+                            }));
                             warnings.push(...(imgResult.warnings || []));
                             if (imgResult.errors?.length) {
                                 throw new WebAiError({
@@ -485,32 +1191,24 @@ export async function pollWebAi(deps, input = {}) {
                             await cdp.detach?.().catch(() => undefined);
                         }
                     }
+                    const fileCapture = await captureFileArtifacts({
+                        deps, input, session, baseline, filePolicy, warnings,
+                        commitAsyncIfActive, isActiveRun,
+                    });
+                    if (fileCapture?.failed) return mergeObservationWarnings(fileCapture, observations);
+                    // Merge BEFORE the finalizer runs: it persists this array to the
+                    // session, so merging afterwards would leave the stored warnings
+                    // disagreeing with the returned ones.
+                    for (const observation of observations) {
+                        if (!warnings.includes(observation)) warnings.push(observation);
+                    }
                     if (session && !input.skipFinalize) {
-                        // Capture generic assistant-turn downloadable files (CSV/PDF/ZIP/...)
-                        // before archive. Separate from code-mode ZIP (code-artifact.mjs,
-                        // not on this path) and generated images (handled above). Never
-                        // throws past its boundary; only adds warnings.
-                        try {
-                            const fileCdp = await deps.getCdpSession?.();
-                            if (fileCdp) {
-                                try {
-                                    const fileResult = await saveAssistantDownloadableFiles(fileCdp, deps, {
-                                        sessionId: session.sessionId,
-                                        baselineAssistantCount: baseline?.assistantCount || 0,
-                                    });
-                                    if (fileResult.warnings?.length) warnings.push(...fileResult.warnings);
-                                } finally {
-                                    await fileCdp.detach?.().catch(() => undefined);
-                                }
-                            }
-                        } catch (err) {
-                            warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
-                        }
-                        await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag });
+                        await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
                     }
                     return withAnswerArtifact({
                         ok: true,
                         vendor,
+                        ...(fileCapture?.artifacts ? { artifacts: fileCapture.artifacts } : {}),
                         status: 'complete',
                         url: page.url(),
                         ...(session ? { sessionId: session.sessionId } : {}),
@@ -524,33 +1222,38 @@ export async function pollWebAi(deps, input = {}) {
                 }
             } else {
                 stableText = latest;
+                stableSnapshot = latestSnapshot;
                 stableSince = Date.now();
             }
         } else {
             stableText = '';
+            stableSnapshot = null;
             stableSince = 0;
         }
-        if (observerWake) {
-            // Wake early when the observer signals settle; else cap at 500ms.
-            // Once it resolves, stop racing it (plain polling thereafter).
-            await Promise.race([
-                page.waitForTimeout(500),
-                observerWake.then(() => { observerWake = null; }, () => { observerWake = null; }),
-            ]);
-        } else {
-            await page.waitForTimeout(500);
-        }
+        // Wake early when the observer signals settle; else cap at whatever is
+        // left of the loop budget. Once it resolves, stop racing it.
+        const wake = observerWake
+            ? observerWake.then(() => { observerWake = null; }, () => { observerWake = null; })
+            : null;
+        if (!await paceTick(wake)) break;
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) updateSession(session.sessionId, { status: 'crashed' });
-                return {
+                if (session) {
+                    // Awaited form: the sync write took the blocking lock, so a
+                    // contended acquire froze the deadline timer, and the gate
+                    // taken BEFORE the wait said nothing about the moment the
+                    // write landed. The predicate is re-checked under the lock.
+                    const crashed = await updateSessionAsync(session.sessionId, { status: 'crashed' }, isActiveRun);
+                    if (crashed === DEADLINE_PASSED) throw POLL_EXPIRED;
+                }
+                return mergeObservationWarnings({
                     ok: false, vendor, status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
                     answerText: '', baseline, usedFallbacks: [],
                     warnings: ['tab-crashed-during-poll'],
                     error: String((/** @type {any} */ (pollErr))?.message || pollErr),
                     recoverable: true,
-                };
+                }, observations);
             }
             throw pollErr;
         }
@@ -560,46 +1263,102 @@ export async function pollWebAi(deps, input = {}) {
     // assistant turn once — recovers a final answer the loop missed (e.g. a late
     // DOM settle). Session polls only (recovery persists to the session).
     if (session) {
+        // Capture the STRUCTURED verdict of the read recovery performs. Boolean
+        // `isStreaming` throws that away, and the ledger needs to know whether the
+        // page could be read at all. `recoverAssistantResponse` invokes this
+        // exactly once when a candidate exists.
+        /** @type {import('./chatgpt-response-dom.mjs').ChatGptActivityState|null} */
+        let recoveryActivity = null;
         const recovered = await recoverAssistantResponse(page, {
             baselineAssistantCount: baseline.assistantCount,
             isFinalAnswer,
-            readStreaming: () => isStreaming(page),
-            readFinished: () => isResponseFinished(page),
+            readStreaming: async () => {
+                recoveryActivity = await readActivityState(page);
+                recordActivityObservation(recoveryActivity, observations);
+                return isActiveState(recoveryActivity);
+            },
+            readFinished: async sample => {
+                const completion = await isResponseFinished(page, sample, baseline.assistantCount);
+                return completion.finished === true;
+            },
         });
         if (recovered?.text) {
             if (recovered.streaming === true) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: recovered.text,
                     usedFallbacks: ['recovery'],
                     warning: 'recovery-deferred-streaming',
                     streamingState: 'streaming',
+                    observations,
+                    stillActive: isActiveRun,
                 });
             }
-            const canComplete = recovered.finished === true || Number(recovered.responseStableMs || 0) > 0;
+            // This path does not collect images. When the caller asked for a
+            // concrete file, returning TEXT as `complete` reports success for an
+            // artifact that was never produced — the public contract
+            // (devlog/_fin/260508_oracle_parity/11_generated_images_public_contract.md)
+            // requires a failure, not a warning-decorated success. Text content is
+            // irrelevant here: substantive markdown satisfies the image request no
+            // better than the `Edit` chrome does.
+            const imageOutputUnsatisfied = input.outputImage !== undefined;
+            // Recovery must honour the ordering gate too. Without this the loop
+            // refuses a stale answer for the whole budget and then recovery hands
+            // back that same text as `complete` — the veto would be decorative.
+            const recoveredOrdering = await readAssistantTurnOrdering(page);
+            if (recoveredOrdering === 'unknown') observations.add('assistant-ordering-unverified');
+            const orderingOk = recoveredOrdering === 'ordered' || recoveredOrdering === 'unverifiable';
+            // Same reasoning for target identity: a candidate the loop rejected
+            // must not be restored here.
+            let identityOk = true;
+            if (session.targetId) {
+                const identity = await readTargetIdentity(deps, session);
+                if (identity.verdict === 'mismatch') {
+                    return mergeObservationWarnings(buildTargetMismatchResult({
+                        vendor,
+                        session,
+                        actualTargetId: /** @type {string} */ (identity.actualTargetId),
+                        port: deps.getPort?.() || 9222,
+                        url: page.url(),
+                        baseline,
+                    }), observations);
+                }
+                identityOk = identity.verdict === 'verified';
+                if (identity.verdict === 'unknown') observations.add('target-identity-unverified');
+            }
+            const canComplete = recovered.finished === true && orderingOk && identityOk && !imageOutputUnsatisfied;
             if (!canComplete) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: recovered.text,
                     usedFallbacks: ['recovery'],
                     warning: 'recovery-deferred-unverified',
                     streamingState: 'unknown',
+                    observations,
+                    stillActive: isActiveRun,
                 });
             }
             const answerText = recovered.text;
+            const warnings = mergeObservationList(['response-recovered-after-timeout'], observations);
+            const recoveryFileCapture = await captureFileArtifacts({
+                deps, input, session, baseline, filePolicy, warnings,
+                commitAsyncIfActive, isActiveRun,
+            });
+            if (recoveryFileCapture?.failed) return recoveryFileCapture;
             if (!input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,
                 vendor,
+                ...(recoveryFileCapture?.artifacts ? { artifacts: recoveryFileCapture.artifacts } : {}),
                 status: 'complete',
                 url: page.url(),
                 sessionId: session.sessionId,
                 answerText,
                 baseline,
                 usedFallbacks: ['recovery'],
-                warnings: ['response-recovered-after-timeout'],
+                warnings,
                 responseStableMs: Math.max(1, Number(recovered.responseStableMs || 0)),
             });
         }
@@ -608,26 +1367,53 @@ export async function pollWebAi(deps, input = {}) {
     // 34 diagnostics: on the timeout path (recovery already failed), capture a
     // DOM snapshot + screenshot when gated. Fire-and-forget; never throws.
     if (session && diagnosticsEnabled(input)) {
-        await captureFailureDiagnostics(deps, { sessionId: session.sessionId, context: 'response-timeout', page });
+        await commitAsyncIfActive(() => captureFailureDiagnostics(deps, { sessionId: session.sessionId, context: 'response-timeout', page }));
     }
 
     if (input.allowCopyMarkdownFallback === true && stableText) {
-        const streaming = await isStreaming(page);
+        const copyActivity = await readActivityState(page);
+        recordActivityObservation(copyActivity, observations);
+        const streaming = isActiveState(copyActivity);
         const responseStableMs = stableSince ? Date.now() - stableSince : 0;
         if (streaming) {
             if (session) {
-                return buildDeferredPollingResult({
+                return await buildDeferredPollingResult({
                     vendor, page, session, baseline,
                     answerText: stableText,
                     usedFallbacks: ['copy-markdown'],
                     warning: 'copy-markdown-deferred-streaming',
                     streamingState: 'streaming',
+                    observations,
+                    stillActive: isActiveRun,
                 });
             }
             stableText = '';
+            stableSnapshot = null;
         }
         if (responseStableMs <= 0) {
             stableText = '';
+            stableSnapshot = null;
+        }
+        const completion = stableSnapshot
+            ? await isResponseFinished(page, stableSnapshot, baseline.assistantCount)
+            : { finished: false };
+        // Same invariant as recovery: this path collects no images, so an
+        // explicit `--output-image` request cannot be satisfied here regardless of
+        // how substantive the copied text is.
+        if (completion.finished !== true || input.outputImage !== undefined) {
+            if (session) {
+                return await buildDeferredPollingResult({
+                    vendor, page, session, baseline,
+                    answerText: stableText,
+                    usedFallbacks: ['copy-markdown'],
+                    warning: 'copy-markdown-deferred-unverified',
+                    streamingState: 'unknown',
+                    observations,
+                    stillActive: isActiveRun,
+                });
+            }
+            stableText = '';
+            stableSnapshot = null;
         }
     }
 
@@ -636,31 +1422,43 @@ export async function pollWebAi(deps, input = {}) {
         const copied = await captureCopiedResponseText(page, CHATGPT_COPY_SELECTORS, {
             copyTarget: /** @type {any} */ (copyResolution?.target || null),
         });
-        const traceSummary = persistResolverTraceForSession(session, copyTraceCtx);
+        const traceSummary = await persistResolverTraceForSessionAsync(session, copyTraceCtx, isActiveRun);
         const copiedText = preferCopiedText(stableText, copied);
         if (copiedText) {
             const answerText = cleanAssistantText(copiedText);
+            const warnings = mergeObservationList([], observations);
+            const copyFileCapture = await captureFileArtifacts({
+                deps, input, session, baseline, filePolicy, warnings,
+                commitAsyncIfActive, isActiveRun,
+            });
+            if (copyFileCapture?.failed) return copyFileCapture;
             if (session && !input.skipFinalize) {
-                await finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, archiveFlag: input.archiveFlag });
+                await commitAsyncIfActive(() => finalizeProviderTab(deps, { vendor, session: /** @type {any} */ (session), page, answerText, warnings, archiveFlag: input.archiveFlag, stillActive: isActiveRun }));
             }
             return withAnswerArtifact({
                 ok: true,
                 vendor,
+                ...(copyFileCapture?.artifacts ? { artifacts: copyFileCapture.artifacts } : {}),
                 status: 'complete',
                 url: page.url(),
                 ...(session ? { sessionId: session.sessionId } : {}),
                 answerText,
                 baseline,
                 usedFallbacks: ['copy-markdown'],
-                warnings: [],
+                warnings,
                 ...(traceSummary ? { traceSummary } : {}),
                 responseStableMs: Date.now() - stableSince,
             });
         }
-        const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+        // Awaited + post-lock gated: the sync form decided before the blocking
+        // lock, so a loser could still record a timeout after its caller
+        // returned. DEADLINE_PASSED keeps the throw semantics of the old gate.
+        const timedOutRow = session ? await markSessionTimeoutAsync(session.sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-        }) : null;
-        return {
+        }, isActiveRun) : null;
+        if (timedOutRow === DEADLINE_PASSED) throw POLL_EXPIRED;
+        const timedOutSession = timedOutRow === DEADLINE_PASSED ? null : timedOutRow;
+        return mergeObservationWarnings({
             ok: false,
             vendor,
             status: 'timeout',
@@ -675,12 +1473,15 @@ export async function pollWebAi(deps, input = {}) {
             recoverable: true,
             retryHint: 'poll-or-resume',
             error: 'timed out waiting for answer',
-        };
+        }, observations);
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
+    // Same contract as the copy-markdown branch above: gate under the lock.
+    const timedOutRow = session ? await markSessionTimeoutAsync(session.sessionId, {
         lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for answer' },
-    }) : null;
-    return {
+    }, isActiveRun) : null;
+    if (timedOutRow === DEADLINE_PASSED) throw POLL_EXPIRED;
+    const timedOutSession = timedOutRow === DEADLINE_PASSED ? null : timedOutRow;
+    return mergeObservationWarnings({
         ok: false,
         vendor,
         status: 'timeout',
@@ -694,45 +1495,121 @@ export async function pollWebAi(deps, input = {}) {
         recoverable: true,
         retryHint: 'poll-or-resume',
         error: 'timed out waiting for answer',
-    };
+    }, observations);
+}
+
+/**
+ * Read the current activity verdict.
+ *
+ * A FAILED observation reports `'unknown'`, never `'none'`. Collapsing the two
+ * meant a stalled page read as "quiet", which is the completion signal — so a
+ * stall disguised itself as a finished answer.
+ *
+ * @param {any} page
+ * @returns {Promise<import('./chatgpt-response-dom.mjs').ChatGptActivityState>}
+ */
+async function readActivityState(page) {
+    // The composer-scoped stop probe runs FIRST: it is the strongest, cheapest
+    // signal, and a page double whose `evaluate` cannot honor the options object
+    // would otherwise report `none` while a stop button is plainly visible.
+    try {
+        const stop = await probeStopButton(page);
+        if (stop === 'visible') return { strength: 'strong', evidence: 'stop-button' };
+        // Could not look. Falling through to the DOM probe would let a
+        // successful "nothing here" read stand in for evidence we never had.
+        if (stop === 'unknown') return { strength: 'unknown', evidence: 'stop-probe-failed' };
+    } catch { /* fall through to the DOM probe */ }
+    let state;
+    try {
+        state = await page.evaluate(
+            readChatGptStreamingState,
+            {
+                assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
+                stopSelectors: CHATGPT_STOP_SELECTORS,
+                resolverSource: resolveTopLevelAssistantTurns.toString(),
+            },
+        );
+    } catch {
+        // Page may be navigating, stalled, or lack a complete DOM context. We do
+        // not know whether it is generating.
+        return { strength: 'unknown', evidence: 'read-failed' };
+    }
+    // Whitelist the known verdicts. `typeof strength === 'string'` would let
+    // `{strength:'bogus'}` through this `page.evaluate` boundary untouched.
+    if (state && typeof state === 'object'
+        && (state.strength === 'strong' || state.strength === 'weak' || state.strength === 'none')) {
+        return state;
+    }
+    // A legacy boolean from a stubbed page still means "strong or nothing".
+    if (typeof state === 'boolean') {
+        return state ? { strength: 'strong', evidence: 'stop-button' } : { strength: 'none', evidence: '' };
+    }
+    return { strength: 'unknown', evidence: 'read-malformed' };
 }
 
 /**
  * @param {any} page
  */
 async function isStreaming(page) {
-    for (const selector of ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]']) {
-        const first = page.locator(selector).first();
-        if (typeof first.isVisible === 'function' && await first.isVisible().catch(() => false)) return true;
-    }
-    return false;
+    return isActiveState(await readActivityState(page));
 }
 
 /**
  * @param {any} page
+ * @param {import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot | import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot} sample
+ * @param {number} minTurnIndex
+ * @returns {Promise<{ finished: boolean, messageId: string|null, turnId: string|null, turnIndex: number }>}
  */
-async function isResponseFinished(page) {
+async function isResponseFinished(page, sample, minTurnIndex) {
     try {
-        return await page.evaluate(
-            /** @param {string} finishedSelector */
-            (finishedSelector) => {
-            const ASSISTANT_TURN_SELECTORS = [
-                '[data-message-author-role="assistant"]',
-                '[data-turn="assistant"]',
-                'article[data-testid^="conversation-turn"]',
-            ];
-            const CONVERSATION_TURN = 'article[data-testid^="conversation-turn"], div[data-testid^="conversation-turn"], section[data-testid^="conversation-turn"]';
-            const turns = Array.from(document.querySelectorAll(CONVERSATION_TURN));
-            for (let i = turns.length - 1; i >= 0; i--) {
-                const turn = turns[i];
-                const isAssistant = ASSISTANT_TURN_SELECTORS.some(s => turn.matches?.(s) || turn.querySelector(s));
-                if (!isAssistant) continue;
-                return Boolean(turn.querySelector(finishedSelector));
+        const result = await page.evaluate(
+            ({ finishedSelector, sample, minTurnIndex, resolverSource, selectors }) => {
+            const resolver = (0, eval)(`(${resolverSource})`);
+            const turns = resolver(selectors);
+            for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
+                const turn = turns[turnIndex];
+                const messageNode = turn.matches?.('[data-message-id]') ? turn : turn.querySelector?.('[data-message-id]');
+                const turnNode = turn.matches?.('[data-testid^="conversation-turn"]')
+                    ? turn
+                    : turn.querySelector?.('[data-testid^="conversation-turn"]');
+                const messageId = messageNode?.getAttribute?.('data-message-id') || null;
+                const turnId = turnNode?.getAttribute?.('data-testid') || null;
+                const hasIdentity = Boolean(sample.messageId || sample.turnId);
+                const identityMatches = (!sample.messageId || sample.messageId === messageId)
+                    && (!sample.turnId || sample.turnId === turnId);
+                if (hasIdentity ? !identityMatches : turnIndex < minTurnIndex) continue;
+                return { finished: Boolean(turn.querySelector(finishedSelector)), messageId, turnId, turnIndex };
             }
-            return false;
-        }, FINISHED_ACTIONS_SELECTOR);
+            return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+        }, {
+            finishedSelector: FINISHED_ACTIONS_SELECTOR,
+            sample,
+            minTurnIndex,
+            resolverSource: resolveTopLevelAssistantTurns.toString(),
+            selectors: CHATGPT_ASSISTANT_SELECTORS,
+        });
+        if (result === true) {
+            return {
+                finished: true,
+                messageId: sample.messageId || null,
+                turnId: sample.turnId || null,
+                turnIndex: sample.turnIndex,
+            };
+        }
+        if (result && typeof result === 'object' && result.turnIndex >= 0) return result;
+        // A wrapperless candidate has no turn to carry terminal actions, so
+        // completion rests on text stability. The DOM-following filter applied at
+        // acquisition is what makes that safe: an old answer or a user echo never
+        // becomes a candidate. `in` narrowing keeps the recovery caller — which
+        // passes a base snapshot — on the ordinary path.
+        if ('source' in sample && sample.source === 'wrapperless') {
+            return { finished: true, messageId: null, turnId: null, turnIndex: minTurnIndex };
+        }
+        return result && typeof result === 'object'
+            ? result
+            : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
     } catch {
-        return false;
+        return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
     }
 }
 
@@ -748,6 +1625,9 @@ export async function queryWebAi(deps, input = {}) {
         session: sent.sessionId,
         allowCopyMarkdownFallback: input.allowCopyMarkdownFallback === true,
         outputImage: input.outputImage,
+        // Without this the requirement given to `send`/`query` would be dropped
+        // at the poll that actually enforces it.
+        fileArtifactPolicy: input.fileArtifactPolicy,
         archiveFlag: input.archiveFlag,
         skipFinalize: input.skipFinalize,
     });
@@ -770,6 +1650,11 @@ export async function deepResearchWebAi(deps, input = {}) {
     const envelope = normalizeEnvelope(input);
     const page = await requireChatGptPage(deps);
     const assistantCount = await countAssistantMessages(page);
+    // Before `createSession` and `recordActiveLease` on purpose: this value is
+    // stored in `envelopeSummary` and later read back by `sessionToBaseline`,
+    // where `Number(null) || 0` would resurrect the false zero. Stopping here
+    // leaves no session or lease behind.
+    if (assistantCount === null) throw baselineSnapshotError();
     const targetId = await deps.getTargetId?.().catch(() => null) || null;
     const session = createSession(envelope, {
         targetId,
@@ -998,6 +1883,25 @@ function persistResolverTrace(sessionId, traceCtx) {
 }
 
 /**
+ * The awaited form, for the poll path: the sync form's store read and write
+ * both take the blocking lock, which freezes the deadline timer while it is
+ * contended. `stillActive` is re-checked under the lock; a losing run gets no
+ * trace write and a summary built from its own steps only.
+ *
+ * @param {any} sessionId
+ * @param {any} traceCtx
+ * @param {() => boolean} [stillActive]
+ */
+async function persistResolverTraceAsync(sessionId, traceCtx, stillActive) {
+    const steps = getSessionTrace(traceCtx);
+    if (!steps.length) return null;
+    const row = await appendTraceToSessionAsync(sessionId, steps, stillActive);
+    if (row === DEADLINE_PASSED) throw POLL_EXPIRED;
+    const trace = /** @type {any} */ (row && typeof row === 'object' ? row.trace : null);
+    return summarizeTraceSteps(sessionId, /** @type {any} */ (trace?.length ? trace : steps));
+}
+
+/**
  * @param {any} session
  * @param {any} traceCtx
  */
@@ -1007,10 +1911,55 @@ function persistResolverTraceForSession(session, traceCtx) {
 }
 
 /**
+ * @param {any} session
+ * @param {any} traceCtx
+ * @param {() => boolean} [stillActive]
+ */
+async function persistResolverTraceForSessionAsync(session, traceCtx, stillActive) {
+    if (!session?.sessionId || !traceCtx) return null;
+    return persistResolverTraceAsync(session.sessionId, traceCtx, stillActive);
+}
+
+/**
  * @param {any} page
  */
+/**
+ * The baseline could not be read.
+ *
+ * Reuses the registered `snapshot.unavailable` rather than inventing a code:
+ * this is literally "a snapshot could not be captured", the same meaning it
+ * carries in `ax-snapshot.mjs`. `provider.commit-not-verified` would be wrong —
+ * that says a prompt was submitted but unconfirmed, and would tell the caller a
+ * duplicate send might be in flight when nothing has been sent at all.
+ *
+ * @returns {WebAiError}
+ */
+function baselineSnapshotError() {
+    return new WebAiError({
+        errorCode: 'snapshot.unavailable',
+        stage: 'baseline-snapshot',
+        vendor: 'chatgpt',
+        retryHint: 're-snapshot',
+        message: 'assistant baseline could not be read; refusing to start with an unknown turn count',
+    });
+}
+
 async function countAssistantMessages(page) {
-    return (await readAssistantMessages(page)).length;
+    // WRAPPED only: `baseline.assistantCount` is a positional count, and
+    // wrapperless blocks are correlated by DOM position instead, so counting them
+    // here would make the baseline incomparable across sends.
+    //
+    // A successful empty read returns 0 — falling back to the legacy locator
+    // reader there would count a user turn as an assistant message and shift the
+    // baseline by one, silently dropping the next real answer.
+    //
+    // `null` means the count is UNKNOWN, which is not the same as 0. Recording 0
+    // for a page we could not read makes every later slice start from the
+    // beginning of the conversation.
+    const split = await readAssistantSnapshotsSplit(page);
+    if (split.ok) return split.wrapped.length;
+    const legacy = await readAssistantMessages(page);
+    return legacy.ok ? legacy.messages.length : null;
 }
 
 /**
@@ -1022,8 +1971,11 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
     let previous = -1;
     let stableReads = 0;
     while (Date.now() < deadline) {
-        const count = await countAssistantMessages(page).catch(() => 0);
-        if (count === previous) stableReads += 1;
+        const count = await countAssistantMessages(page).catch(() => null);
+        // An unreadable count is not a stable count. Reset rather than let two
+        // consecutive failures look like a settled page.
+        if (count === null) stableReads = 0;
+        else if (count === previous) stableReads += 1;
         else stableReads = 0;
         previous = count;
         if (stableReads >= 2) return;
@@ -1033,26 +1985,157 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
 
 /**
  * @param {any} page
+ * @returns {Promise<{ ok: boolean, messages: string[] }>}
  */
 async function readAssistantMessages(page) {
-    const evaluated = await page.evaluate(readTopLevelAssistantTexts, ASSISTANT_SELECTORS).catch(() => []);
-    if (Array.isArray(evaluated) && evaluated.length) return evaluated.map(cleanAssistantText).filter(Boolean);
+    // Either reader actually observing the page is enough; the result is only
+    // unknown when NEITHER could read it.
+    const snapshots = await readAssistantSnapshots(page);
+    if (snapshots.snapshots.length) {
+        return { ok: true, messages: snapshots.snapshots.map(sample => cleanAssistantText(sample.text)).filter(Boolean) };
+    }
     const fallback = await readTopLevelAssistantTextsFromLocators(page, ASSISTANT_SELECTORS);
-    return fallback.map(cleanAssistantText).filter(Boolean);
+    if (fallback.ok) return { ok: true, messages: fallback.texts.map(cleanAssistantText).filter(Boolean) };
+    return { ok: snapshots.ok, messages: [] };
+}
+
+/**
+ * @param {any} page
+ * @returns {Promise<{ ok: boolean, snapshots: import('./chatgpt-response-dom.mjs').ChatGptAssistantSnapshot[] }>}
+ */
+async function readAssistantSnapshots(page) {
+    // Reports whether the read HAPPENED. An empty result from a working page and
+    // a read that never completed used to be the same `[]`, and that value feeds
+    // `baseline.assistantCount` — the positional slice point for every later
+    // poll. A failed read therefore rewrote the baseline to 0 and re-admitted
+    // every historical answer as a fresh candidate.
+    //
+    // A non-array result counts as a failed attempt, not an empty page: nothing
+    // was actually read.
+    const attempt = async (/** @type {any} */ arg) => {
+        try {
+            const result = await page.evaluate(readTopLevelAssistantSnapshots, arg);
+            return Array.isArray(result) ? result : null;
+        } catch {
+            return null;
+        }
+    };
+    const normalize = (/** @type {any[]} */ rows) => rows.map((sample, turnIndex) => typeof sample === 'string'
+        ? { text: sample, messageId: null, turnId: null, turnIndex }
+        : sample);
+
+    const first = await attempt(ASSISTANT_SELECTORS);
+    if (first && first.length) return { ok: true, snapshots: normalize(first) };
+
+    const second = await attempt({
+        selectors: ASSISTANT_SELECTORS,
+        resolverSource: resolveTopLevelAssistantTurns.toString(),
+    });
+    if (second) return { ok: true, snapshots: normalize(second) };
+    // The first attempt succeeding-but-empty is still a real observation: the
+    // second attempt failing adds no information.
+    if (first) return { ok: true, snapshots: [] };
+    return { ok: false, snapshots: [] };
+}
+
+/**
+ * Read both snapshot sources in ONE page evaluation so they share a document-order
+ * coordinate space. Fails closed to empty lists — a probe failure must never look
+ * like "no answer yet AND no history", and a PARTIAL result would enter polling
+ * with a single coordinate source, which is what the shared pass exists to prevent.
+ *
+ * @param {any} page
+ * @returns {Promise<{ ok: boolean, wrapped: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[], wrapperless: import('./chatgpt-response-dom.mjs').ChatGptCorrelatedSnapshot[] }>}
+ */
+async function readAssistantSnapshotsSplit(page) {
+    // `ok:false` means the acquisition FAILED — distinct from a successful read
+    // that found nothing. Only the failure case may fall back to a legacy reader.
+    const failed = { ok: false, wrapped: [], wrapperless: [] };
+    try {
+        const result = await page.evaluate(readAssistantSnapshotSources, {
+            assistantSelectors: ASSISTANT_SELECTORS,
+            resolverSource: resolveTopLevelAssistantTurns.toString(),
+        });
+        if (!result || typeof result !== 'object'
+            || !Array.isArray(result.wrapped)
+            || !Array.isArray(result.wrapperless)) return failed;
+        return { ok: result.ok === true, wrapped: result.wrapped, wrapperless: result.wrapperless };
+    } catch {
+        return failed;
+    }
+}
+
+/**
+ * Image-only assistant turns may never mount text action controls. Collection
+ * itself supplies the positive generated-image evidence for this path.
+ * @param {any} deps
+ * @param {any} input
+ * @param {any} session
+ * @param {any} baseline
+ * @returns {Promise<{ answerText: string, warnings: string[] } | null>}
+ */
+async function collectGeneratedImageAnswer(deps, input, session, baseline, stillActive) {
+    const cdp = await deps.getCdpSession?.();
+    if (!cdp) throw new WebAiError({
+        errorCode: 'provider.image-output',
+        stage: 'image-output',
+        vendor: 'chatgpt',
+        retryHint: 'start-headed',
+        message: 'CDP session unavailable for explicit generated-image output',
+    });
+    try {
+        const result = await collectImages(cdp, {
+            baselineAssistantCount: baseline?.assistantCount || 0,
+            outputPath: input.outputImage || null,
+            sessionId: input.outputImage ? null : session.sessionId,
+            waitTimeoutMs: 60_000,
+            stillActive,
+        });
+        if (result.errors?.length) throw new WebAiError({
+            errorCode: 'provider.image-output',
+            stage: 'image-output',
+            vendor: 'chatgpt',
+            retryHint: 'check-generated-image-or-disable-output-image',
+            message: result.errors.join('; '),
+            mutationAllowed: true,
+        });
+        if (!result.savedPaths.length) return null;
+        const label = result.images.length === 1
+            ? 'Generated image.'
+            : `Generated ${result.images.length} images.`;
+        return { answerText: label + result.markdownSuffix, warnings: result.warnings || [] };
+    } finally {
+        await cdp.detach?.().catch(() => undefined);
+    }
 }
 
 /**
  * @param {{ vendor: string, page: any, session: any, baseline: any, answerText: string, usedFallbacks: string[], warning: string, streamingState: string }} input
  */
-function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState }) {
-    const current = getSession(session.sessionId) || session;
-    updateSession(session.sessionId, {
-        status: 'polling',
-        answer: null,
-        completedAt: null,
-        lastStreamingState: streamingState,
-        warnings: appendUniqueWarningLocal(current.warnings || [], warning),
-    });
+async function buildDeferredPollingResult({ vendor, page, session, baseline, answerText, usedFallbacks, warning, streamingState, observations, stillActive }) {
+    const warnings = observations
+        ? mergeObservationList([warning], observations)
+        : [warning];
+    // Gated like every other post-deadline write: a loser reaching this path
+    // after the wrapper returned would otherwise move the session back to
+    // `polling` under a caller who was already told the poll timed out. The
+    // gate runs INSIDE the awaited lock — a pre-acquire check said nothing
+    // about the moment the write landed. The warning merge is made against the
+    // row read INSIDE that same lock — a pre-lock read let a warning appended
+    // between the two locks be erased by this write.
+    const written = await mutateSessionAsync(session.sessionId, (current) => {
+        let storedWarnings = current.warnings || [];
+        for (const entry of warnings) storedWarnings = appendUniqueWarningLocal(storedWarnings, entry);
+        return {
+            status: 'polling',
+            answer: null,
+            completedAt: null,
+            lastStreamingState: streamingState,
+            warnings: storedWarnings,
+            updatedAt: new Date().toISOString(),
+        };
+    }, stillActive);
+    if (written === DEADLINE_PASSED) throw POLL_EXPIRED;
     return {
         ok: true,
         vendor,
@@ -1062,10 +2145,95 @@ function buildDeferredPollingResult({ vendor, page, session, baseline, answerTex
         answerText,
         baseline,
         usedFallbacks,
-        warnings: [warning],
+        warnings,
         recoverable: true,
         retryHint: 'watch-or-poll',
     };
+}
+
+/**
+ * Retry hints differ by cause; a single hint would send every caller to the
+ * same wrong remedy.
+ *
+ * @type {Record<string, string>}
+ */
+const FILE_ARTIFACT_RETRY_HINTS = {
+    'cdp-unavailable': 'start-headed',
+    'detection-malformed': 'poll-or-resume',
+    'no-candidates': 'retry-without-require',
+    'fetch-timeout': 'poll-or-resume',
+    'fetch-failed': 'poll-or-resume',
+    'save-failed': 'check-artifact-storage',
+    'save-incomplete': 'check-artifact-storage',
+    'rollback-failed': 'check-artifact-storage',
+    'deadline-exceeded': 'poll-or-resume',
+    'no-session': 'poll-or-resume',
+};
+
+/**
+ * Capture downloadable files for a completing poll.
+ *
+ * Shared by every `status:'complete'` return. Wiring only the ordinary one
+ * would let the recovery and copy paths hand back a success that never ran the
+ * contract at all.
+ *
+ * @returns {Promise<any|null>} a typed failure envelope, or null to continue
+ */
+async function captureFileArtifacts({ deps, input, session, baseline, filePolicy, warnings, commitAsyncIfActive, isActiveRun }) {
+    if (!session || input.skipFinalize) return null;
+    const strict = filePolicy === 'require-all';
+    /** @type {any[]} */
+    let captured = [];
+    /** @param {string} reason @param {any[]} [errors] */
+    const failure = (reason, errors) => ({
+        // Distinguishes a failure envelope from the `{ artifacts }` result the
+        // success path returns; callers branch on this, not on truthiness.
+        failed: true,
+        ok: false,
+        vendor: input.vendor || 'chatgpt',
+        status: 'file-artifact-unsatisfied',
+        sessionId: session.sessionId,
+        answerText: '',
+        usedFallbacks: [],
+        warnings,
+        recoverable: true,
+        errorCode: 'provider.file-artifact',
+        stage: 'file-artifact',
+        retryHint: FILE_ARTIFACT_RETRY_HINTS[reason] || 'poll-or-resume',
+        evidence: { reason, ...(errors?.length ? { errors } : {}) },
+        error: `required file artifacts unavailable: ${reason}`,
+    });
+    try {
+        const fileCdp = await deps.getCdpSession?.();
+        if (!fileCdp) {
+            // Opportunistic capture tolerates this; a caller who asked for the
+            // files cannot be told the answer is complete without them.
+            if (strict) return failure('cdp-unavailable');
+            warnings.push('file-artifact-cdp-unavailable');
+            return null;
+        }
+        try {
+            const fileResult = await commitAsyncIfActive(() => saveAssistantDownloadableFiles(fileCdp, deps, {
+                sessionId: session.sessionId,
+                baselineAssistantCount: baseline?.assistantCount || 0,
+                strict,
+                stillActive: isActiveRun,
+            }));
+            if (fileResult.warnings?.length) warnings.push(...fileResult.warnings);
+            if (strict && !fileResult.ok) {
+                return failure(fileResult.errors?.[0]?.reason || 'save-incomplete', fileResult.errors);
+            }
+            // Surfaced on the success envelope: a caller who required the files
+            // has to be told where they landed.
+            if (fileResult.files?.length) captured = fileResult.files;
+        } finally {
+            await fileCdp.detach?.().catch(() => undefined);
+        }
+    } catch (err) {
+        if (strict) return failure('save-failed', [{ reason: 'save-failed', message: /** @type {any} */ (err)?.message }]);
+        warnings.push(`file-artifact-capture-failed:${/** @type {any} */ (err)?.message || 'unknown'}`);
+    }
+    return captured.length ? { artifacts: captured } : null;
 }
 
 /**
@@ -1103,13 +2271,24 @@ function cleanAssistantText(text) {
  * @param {any} contextPack
  */
 function summarizeContextPack(contextPack) {
-    return {
-        files: contextPack.files.map((/** @type {any} */ file) => ({
+    const summary = {
+        files: (contextPack.files || []).map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
         })),
         excluded: contextPack.excluded,
         budget: contextPack.budget,
+    };
+    if (contextPack.contextTransform !== 'repomix') return summary;
+    return {
+        ...summary,
+        transport: contextPack.transport,
+        contextTransform: 'repomix',
+        attachments: (contextPack.attachments || []).map((/** @type {any} */ attachment) => ({
+            displayPath: attachment.displayPath,
+            sizeBytes: attachment.sizeBytes,
+        })),
+        ...(contextPack.repomix ? { repomix: contextPack.repomix } : {}),
     };
 }

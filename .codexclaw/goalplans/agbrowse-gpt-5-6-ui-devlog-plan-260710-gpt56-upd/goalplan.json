@@ -1,0 +1,125 @@
+{
+  "objective": "agbrowse GPT-5.6 UI 업데이트 대응: devlog/_plan/260710_gpt56_update 유닛 생성, ChatGPT UI 변경(Extended effort 제거, Pro 기본 추론 40분) 라이브 프로브 검증, 모델/effort 계약 전 표면 분석, 00 인덱스 + 01~09 diff-level 패치 준비 문서 작성. 코드 패치 적용은 OUT — 문서까지만.",
+  "slug": "agbrowse-gpt-5-6-ui-devlog-plan-260710-gpt56-upd",
+  "createdAt": "2026-07-10T01:02:05.447Z",
+  "updatedAt": "2026-07-10T01:02:05.448Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp1",
+      "title": "WP1 — 라이브 프로브 + 표면 전수 분석 (sol 팬아웃)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "인앱 브라우저로 chatgpt.com 모델 피커/effort 서브메뉴/Pro 라벨 DOM 실측 캡처",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "sol 레인 A: chatgpt-model.mjs + cli.mjs 모델/effort 계약 전수 맵 (path:line)",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t3",
+          "title": "sol 레인 B: 추론/스트리밍 타임아웃 상수 전수 맵 (Pro 40분 영향 분석)",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t4",
+          "title": "sol 레인 C: SKILL.md/docs/structure SoT 문서 표면 맵",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t5",
+          "title": "sol 레인 D: test/unit + test/integration effort/model 테스트 커버리지 맵",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t7",
+          "title": "devlog/_plan/260710_gpt56_update/ 유닛 생성 + 00_index.md 골격",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c1",
+        "c2"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "WP2 — 01~09 diff-level 패치 준비 문서 작성",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "01~09 문서 슬라이스 맵 확정 (표면별 배분, 의존 순서)",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "각 문서 before/after diff-level 작성 (sol 병렬 작성 + 메인 통합)",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c3"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "WP3 — 교차검증 + 품질 게이트",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "리뷰어 서브에이전트로 01~09 문서 대 실코드 교차검증",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "cxc loop validate 통과 + 00_index 최종화",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c4"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c1",
+      "scenario": "'Extended 제거'와 'Pro 기본 추론 40분' 주장 각각에 대해 라이브 프로브 기반 확인/반증/미확인 판정이 devlog에 정직하게 기록된다 (host goal C1 원문: 확인 불가면 확인-불가와 이유 기록 — 미확인 판정도 이유가 명시되면 충족)",
+      "expectedEvidence": "인앱 브라우저 DOM 텍스트/스크린샷 캡처 인용이 담긴 devlog 문서 경로",
+      "capturedEvidence": "devlog/_plan/260710_gpt56_update/01_ui_contract_evidence.md §4 판정표: Extended 제거=확인, testid 소멸=확인, GPT-5.6 롤아웃=확인, Pro 40분=미확인(DOM 무증거, 이유 §5 기록) + assets/*.png 3장",
+      "status": "met"
+    },
+    {
+      "id": "c2",
+      "scenario": "모델/effort 계약 표면 전수 맵이 rg 근거(path:line)로 작성되고 누락이 교차검증된다",
+      "expectedEvidence": "rg 검색어+히트 수가 기록된 표면 맵 문서 경로",
+      "capturedEvidence": "sol 탐색 4레인 검색 로그(각 문서에 인용: 02~09) + C게이트 R1 커버리지 축 교차검증(잔여 표면 skills/browser/browser.mjs help 발견→08 편입, R2에서 커버리지 PASS 판정, 리뷰어 Herschel: 'browser.mjs:3371-3386,3416-3424 verbatim 편입 확인')",
+      "status": "met"
+    },
+    {
+      "id": "c3",
+      "scenario": "01~09 문서가 각각 before/after diff-level로 존재하여 다음 세션이 문서만으로 패치 실행 가능",
+      "expectedEvidence": "ls devlog/_plan/260710_gpt56_update/ 출력 + 각 문서의 diff 블록 존재",
+      "capturedEvidence": "ls devlog/_plan/260710_gpt56_update/ = 00~09 전부 존재 (총 ~7400줄); C게이트 축1 인용 정확성 PASS(03/05/06 표본 15블록 verbatim 일치, 생략 placeholder 0건), 축3 실행 가능성은 R2 blocker 2건 수리 후 R3 PASS",
+      "status": "met"
+    },
+    {
+      "id": "c4",
+      "scenario": "리뷰어 교차검증 통과 + cxc loop validate 통과",
+      "expectedEvidence": "리뷰어 VERDICT 라인 + cxc loop validate 출력",
+      "capturedEvidence": "A게이트 4라운드(최종 PASS, Aquinas) + C게이트 3라운드(최종 PASS, Goodall: R2-B1/B2+residual 2건 전부 해소 확인, path:line 근거) + 수리 evidence receipts 9건 (.codexclaw/evidence/260710_*)",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": false,
+    "armedAt": null,
+    "source": "none"
+  }
+}

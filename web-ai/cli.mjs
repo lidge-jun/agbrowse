@@ -7,10 +7,17 @@
 import { parseArgs } from 'node:util';
 import { renderWebAi, statusWebAi, sendWebAi, pollWebAi, queryWebAi, stopWebAi, deepResearchWebAi } from './chatgpt.mjs';
 import { codeWebAi, extractCodeArtifacts } from './code-mode.mjs';
+import { buildCodeModePrompt } from './code-mode-prompt.mjs';
 import { geminiStatusWebAi, geminiSendWebAi, geminiPollWebAi, geminiQueryWebAi, geminiStopWebAi } from './gemini-live.mjs';
 import { grokStatusWebAi, grokSendWebAi, grokPollWebAi, grokQueryWebAi, grokStopWebAi } from './grok-live.mjs';
 import { isWorkSession, pollWorkSession, submitWorkPrompt } from './chatgpt-work-picker.mjs';
-import { buildContextPackageResult, prepareContextForBrowser, renderContextDryRunReport } from './context-pack/index.mjs';
+import {
+    buildContextPackageResult,
+    hasContextPackaging,
+    normalizeContextTransformMode,
+    prepareContextForBrowser,
+    renderContextDryRunReport,
+} from './context-pack/index.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import { runDoctor } from './doctor.mjs';
 import { maybeRecordChurn } from './churn-log.mjs';
@@ -22,7 +29,7 @@ import { createTab, listManagedTabs, waitForPageByTargetId } from '../skills/bro
 import { cleanupIdleTabs, isPinned, DEFAULT_MAX_TABS } from '../skills/browser/tab-lifecycle.mjs';
 import { resolveSessionPage, withSessionPage } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { listSessions, getSession, resolveTimeoutDefaultSec } from './session.mjs';
+import { listSessions, getSession, resolvePollTimeoutSec, resolveTimeoutDefaultSec, expiredSessionTimeoutResult } from './session.mjs';
 import { resolveImplicitSessionSelection } from './session-target-guard.mjs';
 import { listLeases } from './tab-lease-store.mjs';
 import { cleanupPoolTabs, getPooledTab } from './tab-pool.mjs';
@@ -55,6 +62,8 @@ const COMMANDS = new Set([
     'work',
 ]);
 
+/** Commands whose completion path can honour a require-all file artifact contract. */
+const FILE_ARTIFACT_COMMANDS = new Set(['send', 'query', 'poll', 'watch']);
 const BROWSER_REQUIRED_COMMANDS = new Set(['status', 'send', 'poll', 'query', 'stop', 'watch', 'snapshot', 'doctor', 'project-sources', 'code', 'code-extract']);
 const BROWSER_REQUIRED_SESSION_COMMANDS = new Set(['resume', 'reattach', 'doctor']);
 export const WEB_AI_USAGE = `
@@ -111,6 +120,8 @@ Commands:
 Provider:
   --vendor <name>     chatgpt | gemini | grok (default: chatgpt)
   --url <url>         Navigate or verify the provider URL before mutation
+  --normalize-surface Switch a ChatGPT composer from Work to Chat before sending
+                      (opt-in; default off, so sends stay zero-touch)
   --model <alias>     Provider model alias; aliases below
                         ChatGPT: instant, thinking, pro
                         Gemini  models: flash-lite, flash, pro
@@ -165,6 +176,13 @@ Attachments and context:
   --output-image <path>             Save generated ChatGPT images. If several
                                     images are returned, siblings are written
                                     as out.png, out-2.png, out-3.png.
+  --require-file-artifacts          Fail the command unless at least one
+                                    downloadable file is detected in the answer
+                                    AND every detected file is saved. Without
+                                    it, file capture stays best-effort and a
+                                    failure only adds a warning. ChatGPT only;
+                                    send/query/poll/watch. poll/watch need
+                                    --session.
   --follow-up <text>                Repeatable ChatGPT batch follow-up prompt
                                     in the same command. For a later follow-up
                                     in an existing conversation, use query
@@ -180,16 +198,26 @@ Attachments and context:
                                     Timeout for browser file handoff before the
                                     provider processes the upload. Env fallback:
                                     AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS.
+                                    Acceptance waits auto-scale with file size;
+                                    AGBROWSE_ATTACHMENT_ACCEPT_TIMEOUT_MS sets a
+                                    floor. Missing sent-turn attachment evidence
+                                    fails the send unless
+                                    AGBROWSE_SENT_ATTACHMENT_POLICY=warn.
   --max-context-file-size <bytes>   Preferred name for per-file context budget.
   --context-from-files <glob|path>  Add files to a context package; repeatable
   --context-exclude <glob>          Exclude from the package; repeatable
   --context-file <path>             Use a prebuilt context package file
   --context-transport <upload|inline>
+  --context-transform <raw|repomix> Use raw context packaging (default: raw), or
+                                    upload Repomix artifacts produced from its
+                                    effective config. Without file selectors,
+                                    repomix packs cwd and executes trusted
+                                    config/processors like the local CLI.
   --max-input <chars>               Inline prompt budget
   --max-file-size <bytes>           Legacy alias for --max-context-file-size
   --files-report                    Include file report metadata
   --allow-copy-markdown-fallback    Explicitly permit provider Copy button capture after DOM response
-  --allow-grok-context-pack         Override Grok hard-gate (Grok prefers inline + single --file)
+  --allow-grok-context-pack         Override Grok raw-context hard-gate (Repomix remains unsupported)
   --require-source-audit            Fail closed when completed answers lack inline sources
   --source-audit-ratio <0..1>       Required sourced claim ratio (default 1)
   --source-audit-scope <text>       Checked scope for absence/no-result claims
@@ -299,6 +327,7 @@ Failure envelope (when --json or AGBROWSE_JSON_ERRORS=1):
          watcher.session-missing | watcher.already-running |
          snapshot.unavailable | snapshot.ref-stale |
          context.over-budget | context.symlink-rejected |
+         context.transform-invalid | context.transform-failed |
          code-mode.vendor-unsupported | code-mode.prompt-missing |
          code-mode.output-conflict | code-mode.conversation-id-missing |
          code-extract.conversation-id-missing |
@@ -380,6 +409,10 @@ Optional inputs:
   --context-exclude <glob>
   --context-file <path>
   --context-transport <upload|inline>
+  --context-transform <raw|repomix>
+                        Default: raw. repomix uploads config-driven Repomix
+                        artifacts; without selectors it packs cwd. Config and
+                        processors execute with local CLI privileges.
   --context-refresh     Re-upload the dev-agent context zip on a continuation
                         turn. By default it is attached only on the FIRST turn
                         of a conversation; continuation turns (--url /
@@ -551,6 +584,7 @@ async function runWebAiCliInner(argv = [], deps) {
         args: argv.slice(1),
         options: {
             vendor: { type: 'string', default: 'chatgpt' },
+            'normalize-surface': { type: 'boolean', default: false },
             url: { type: 'string' },
             prompt: { type: 'string' },
             system: { type: 'string' },
@@ -578,6 +612,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'web-search': { type: 'boolean', default: false },
             'auto-tools': { type: 'boolean', default: false },
             'output-image': { type: 'string' },
+            'require-file-artifacts': { type: 'boolean', default: false },
             'output-zip': { type: 'string' },
             'output-dir': { type: 'string' },
             'multi-zip': { type: 'boolean', default: false },
@@ -601,6 +636,7 @@ async function runWebAiCliInner(argv = [], deps) {
             'attachment-upload-timeout-ms': { type: 'string' },
             'files-report': { type: 'boolean', default: false },
             'context-transport': { type: 'string' },
+            'context-transform': { type: 'string', default: 'raw' },
             'trace-dir': { type: 'string' },
             policy: { type: 'string' },
             'unsafe-allow': { type: 'string', multiple: true },
@@ -635,12 +671,51 @@ async function runWebAiCliInner(argv = [], deps) {
         strict: false,
     });
 
+    values['context-transform'] = normalizeContextTransformMode(values['context-transform']);
     applyVendorDefaults(values, command);
     rejectFutureScope(values);
     const vendorExplicit = argv.slice(1).includes('--vendor') || argv.slice(1).some((/** @type {any} */ a) => a.startsWith('--vendor='));
-    const hasContextPackage = Boolean(values['context-file'] || (Array.isArray(values['context-from-files']) && values['context-from-files'].length > 0));
+    const contextTransform = values.research === 'deep' && ['render', 'send', 'query', 'code'].includes(command)
+        ? 'raw'
+        : values['context-transform'];
+    // Ask the canonical predicate rather than restating it. This was a
+    // hand-written copy, and copies of it have been wrong three times: the
+    // 'raw' default read as a source, `--context-file` dropped, and `--file`
+    // admitted when the canonical one rejects it. `contextTransform` is passed
+    // post-normalisation (see the assignment above) and after the deep-research
+    // override, so the argument reflects what this command will actually do.
+    const hasContextPackage = hasContextPackaging({
+        contextFile: values['context-file'],
+        contextFromFiles: values['context-from-files'],
+        contextTransform,
+    });
     // --file may repeat → parseArgs yields an array; normalize to a path list.
     const filePaths = (Array.isArray(values.file) ? values.file : (values.file ? [values.file] : [])).filter((value) => typeof value === 'string');
+    // context-dry-run and context-render exist to inspect a context package, so
+    // no context source is a user input error — not a crash. Both used to reach
+    // the packing code with nothing to pack and surface `internal.unhandled`
+    // with `retryHint: report`, telling the user to file a bug for a missing
+    // flag. Follows the `code-mode.prompt-missing` precedent below.
+    //
+    // The condition is exactly `hasContextPackage`, with no extra term. Adding
+    // `filePaths.length` here made the guard disagree with
+    // `hasContextPackaging` (builder.mjs:172), which recognises only
+    // --context-file, --context-from-files, and repomix. `--file` alone then
+    // passed this guard, `prepareContextForBrowser` returned null, and the
+    // report renderer crashed on `result.files.length` — the exact
+    // internal.unhandled this guard exists to prevent.
+    //
+    // `--file` is an upload path ("Upload a file", cli.mjs:158), not a context
+    // package, so the two predicates agreeing on that is the correct outcome.
+    if (isContextCommand(command) && !hasContextPackage) {
+        throw new WebAiError({
+            errorCode: 'input.context-source-missing',
+            stage: 'input-preflight',
+            retryHint: 'add-context-source',
+            message: `web-ai ${command} requires a context package: pass --context-from-files <glob> or --context-file <path> (--file uploads a file, it does not build a context package)`,
+            mutationAllowed: false,
+        });
+    }
     if (['send', 'query'].includes(command) && !values['inline-only'] && filePaths.length === 0 && !hasContextPackage) {
         throw new WebAiError({
             errorCode: 'provider.attachment-preflight',
@@ -652,6 +727,7 @@ async function runWebAiCliInner(argv = [], deps) {
 
     const input = {
         vendor: (command === 'watch' && !vendorExplicit) ? null : values.vendor,
+        normalizeSurface: values['normalize-surface'] === true,
         url: values.url,
         prompt: values.prompt,
         system: values.system,
@@ -682,6 +758,9 @@ async function runWebAiCliInner(argv = [], deps) {
         webSearch: values['web-search'] === true,
         autoTools: values['auto-tools'] === true,
         outputImage: values['output-image'],
+        // 'require-all' means the caller asked for the attachments, so a capture
+        // that cannot be proven fails the command instead of adding a warning.
+        fileArtifactPolicy: values['require-file-artifacts'] === true ? 'require-all' : 'best-effort',
         outputZip: values['output-zip'],
         outputDir: values['output-dir'],
         multiZip: values['multi-zip'] === true,
@@ -703,6 +782,7 @@ async function runWebAiCliInner(argv = [], deps) {
         attachmentUploadTimeoutMs: values['attachment-upload-timeout-ms'] || process.env.AGBROWSE_ATTACHMENT_UPLOAD_TIMEOUT_MS,
         filesReport: values['files-report'],
         contextTransport: values['context-transport'],
+        contextTransform,
         inlineOnly: values['inline-only'],
         allowCopyMarkdownFallback: values['allow-copy-markdown-fallback'] === true,
         allowGrokContextPack: values['allow-grok-context-pack'] === true,
@@ -735,7 +815,42 @@ async function runWebAiCliInner(argv = [], deps) {
     };
 
     validateCodeModeCliInput(command, input);
-    await enforceCliPolicy(command, input);
+    const repomixContextProvider = (
+        ['render', 'send', 'query', 'code'].includes(command) &&
+        input.contextTransform === 'repomix'
+    )
+        ? (input.session
+            ? getSession(input.session)?.vendor || input.vendor || 'chatgpt'
+            : input.vendor || 'chatgpt')
+        : null;
+    if (repomixContextProvider && !['chatgpt', 'gemini'].includes(repomixContextProvider)) {
+        throw new WebAiError({
+            errorCode: 'capability.unsupported',
+            stage: 'context-transform',
+            vendor: repomixContextProvider,
+            retryHint: 'use-raw-or-supported-provider',
+            message: '--context-transform repomix supports only ChatGPT and Gemini',
+            mutationAllowed: false,
+            evidence: { contextTransform: 'repomix', supportedVendors: ['chatgpt', 'gemini'] },
+        });
+    }
+    await enforceCliPolicy(
+        command,
+        repomixContextProvider ? { ...input, vendor: repomixContextProvider } : input,
+    );
+    enforceFileArtifactSupport(command, input, values, argv);
+    if (['send', 'query', 'code'].includes(command) && repomixContextProvider) {
+        // Resolve config, run Repomix, and validate its staged artifacts before
+        // browser startup or tab selection can mutate provider state.
+        input.preparedContextPack = await prepareContextForBrowser({
+            ...input,
+            vendor: repomixContextProvider,
+            prompt: command === 'code'
+                ? buildCodeModePrompt(input.prompt, { multiZip: input.multiZip === true })
+                : input.prompt,
+            inlineOnly: command === 'code' ? false : input.inlineOnly,
+        });
+    }
     await ensureHeadedBrowserForWebAi(deps, command, argv);
 
     if (values['control-summary'] && !values.json && BROWSER_REQUIRED_COMMANDS.has(command)) {
@@ -921,6 +1036,80 @@ export function parseSourceAuditRatio(value) {
 }
 
 /**
+ * Reject `--require-file-artifacts` where it cannot be honoured.
+ *
+ * Called BEFORE `ensureHeadedBrowserForWebAi`, because a flag that silently
+ * does nothing on an unsupported command is the same fail-open this contract
+ * exists to remove — and reporting it after the prompt has been sent would
+ * already have mutated provider state.
+ *
+ * @param {string} command
+ * @param {any} input
+ * @param {Record<string, any>} values
+ * @param {string[]} argv
+ */
+function enforceFileArtifactSupport(command, input, values, argv = []) {
+    if (input.fileArtifactPolicy !== 'require-all') return;
+    /** @param {string} reason @param {Record<string, unknown>} [evidence] */
+    const reject = (reason, evidence) => {
+        throw new WebAiError({
+            errorCode: 'capability.unsupported',
+            stage: 'preflight',
+            vendor: input.vendor || 'chatgpt',
+            retryHint: 'drop-require-file-artifacts',
+            message: reason,
+            mutationAllowed: false,
+            ...(evidence ? { evidence } : {}),
+        });
+    };
+    // `sessions resume` is a supported surface, but the command here is just
+    // `sessions`; the subcommand lives in argv.
+    const sessionsSub = command === 'sessions' ? String(argv[1] || '') : '';
+    // Must resolve the SAME id the command will actually use. `sessions resume`
+    // prefers its positional argument over `--session` (cli-sessions.mjs), so
+    // preferring `--session` here let a caller pass both and have the guard
+    // inspect one session while the resume ran the other.
+    const resumePositional = command === 'sessions' && sessionsSub === 'resume' ? argv[2] : null;
+    if (resumePositional && input.session && resumePositional !== input.session) {
+        reject('--require-file-artifacts cannot resolve two different sessions', {
+            positional: resumePositional,
+            flag: input.session,
+        });
+    }
+    const sessionId = resumePositional || input.session;
+    const stored = sessionId ? getSession(sessionId) : null;
+    // The STORED vendor decides whenever there is one. The parser defaults
+    // `--vendor` to `chatgpt`, so reading the input alone let a Gemini session
+    // through; trusting an explicit `--vendor chatgpt` does the same, because
+    // the session's own vendor is restored after the browser is up.
+    const vendor = stored?.vendor || input.vendor || 'chatgpt';
+    if (vendor !== 'chatgpt') {
+        reject('--require-file-artifacts is only supported for chatgpt', { vendor });
+    }
+    if (stored?.researchMode === 'deep') {
+        reject('--require-file-artifacts is not supported with deep research');
+    }
+    const supported = FILE_ARTIFACT_COMMANDS.has(command)
+        || (command === 'sessions' && sessionsSub === 'resume');
+    if (!supported) {
+        reject(`--require-file-artifacts is not supported for "${command}"`, {
+            supportedCommands: [...FILE_ARTIFACT_COMMANDS, 'sessions resume'],
+        });
+    }
+    if (input.research === 'deep' || values?.research === 'deep') {
+        reject('--require-file-artifacts is not supported with deep research');
+    }
+    if (input.followUps?.length) {
+        reject('--require-file-artifacts is not supported with follow-ups');
+    }
+    // poll/watch need a session to read the stored policy from and to own the
+    // artifact directory the files are written into.
+    if (['poll', 'watch'].includes(command) && !input.session) {
+        reject('--require-file-artifacts requires --session on this command');
+    }
+}
+
+/**
  * @param {any} command
  * @param {any} input
  */
@@ -928,11 +1117,13 @@ async function enforceCliPolicy(command, input) {
     const mutating = ['send', 'query', 'stop'].includes(command);
     const provider = input.vendor || input.provider || 'chatgpt';
     const policyUrl = input.url || (/** @type {any} */ (VENDOR_DEFAULT_URLS))[input.vendor || 'chatgpt'];
+    const repomixContext = input.contextTransform === 'repomix';
+    const contextFileAccess = Boolean(input.contextFile || input.contextFromFiles?.length || repomixContext);
     const action = {
         url: policyUrl,
-        upload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
-        explicitUpload: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
-        fileAccess: Boolean(input.filePath || input.contextFile || input.contextFromFiles?.length),
+        upload: Boolean(input.filePath || contextFileAccess),
+        explicitUpload: Boolean(input.filePath || contextFileAccess),
+        fileAccess: Boolean(input.filePath || contextFileAccess),
         clipboardWriteIntercept: input.allowCopyMarkdownFallback === true,
         explicitClipboardWriteIntercept: input.allowCopyMarkdownFallback === true,
         evaluate: false,
@@ -1154,7 +1345,19 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
         return runSessionStopInterrupt(deps, input, stopFn);
     }
     if (command === 'poll' && input.session) {
+        // Refuse an expired session BEFORE resolving its page. The clamp keeps
+        // a positive minimum so providers cannot read it as "no budget", which
+        // means an expired session would otherwise still open a tab and take at
+        // least one probe — and Gemini's placeholder branch waits five seconds.
+        // `pollWebAi` already refuses on its own; this covers every vendor.
+        const expiredBeforeLock = expiredSessionTimeoutResult(input.session, input.vendor || 'chatgpt');
+        if (expiredBeforeLock) return expiredBeforeLock;
         return withSessionCommandLock(input.session, async () => {
+            // Re-checked inside the lock. Acquiring it retries 200 times at
+            // 25ms, so a session with 150ms left can expire while waiting and
+            // the pre-lock check alone would still open a tab.
+            const expiredInLock = expiredSessionTimeoutResult(input.session, input.vendor || 'chatgpt');
+            if (expiredInLock) return expiredInLock;
             return withCommandSessionPage(command, deps, input, async ({ page, targetId, session }) => {
                 const effectivePollFn = isWorkSession(session) ? pollWorkSession : pollFn;
                 const sessionDeps = {
@@ -1164,7 +1367,18 @@ async function runBoundCommand(command, deps, input, pollFn, stopFn) {
                     getCdpSession: async () => (/** @type {any} */ (page)).context().newCDPSession(page),
                 };
                 return withWebAiActiveCommand(command, sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId }, async () => {
-                    const result = await effectivePollFn(sessionDeps, { ...input, vendor: session.vendor, session: session.sessionId });
+                    const result = await effectivePollFn(sessionDeps, {
+                        ...input,
+                        vendor: session.vendor,
+                        session: session.sessionId,
+                        // Bounded like every other resume surface. Forwarding the
+                        // raw input meant an omitted timeout fell through to a
+                        // provider default — 1200s for Gemini, 600s for Grok —
+                        // and an explicit one was never clamped to the stored
+                        // deadline. ChatGPT reads `deadlineAt` itself, but the
+                        // other providers do not.
+                        timeout: resolvePollTimeoutSec(input, session, session.vendor || 'chatgpt'),
+                    });
                     if (isRecoverableTabCrash(result)) {
                         throw new Error(result.error || 'target closed during session-bound web-ai command');
                     }
@@ -1253,6 +1467,29 @@ async function runSessionStopInterrupt(deps, input, stopFn) {
 function sessionResolutionError(command, deps, input, resolved) {
     const vendor = input.vendor || resolved.session?.vendor || 'chatgpt';
     const sessionId = input.session || resolved.session?.sessionId || null;
+    // Unverified liveness is a transient read failure, not a wrong tab. Calling
+    // it a target mismatch tells the user to navigate — which replaces a tab
+    // that may be perfectly fine.
+    if (resolved.strategy === 'unverified') {
+        // Reuses the registered `cdp.unreachable` code rather than minting an
+        // unregistered one: the browser did not answer. What must differ is the
+        // ADVICE — retry, not navigate — plus `liveness` evidence so callers can
+        // tell this apart from a genuinely wrong tab.
+        return new WebAiError({
+            errorCode: 'cdp.unreachable',
+            stage: 'target-resolution',
+            vendor,
+            retryHint: 'retry',
+            message: resolved.warnings?.[0] || `session ${sessionId} tab liveness could not be verified`,
+            mutationAllowed: false,
+            evidence: {
+                sessionId,
+                targetId: resolved.session?.targetId || resolved.targetId || null,
+                port: Number(deps.getPort?.() || process.env.CDP_PORT || 9222),
+                liveness: 'unknown',
+            },
+        });
+    }
     const expectedTargetId = resolved.session?.targetId || resolved.targetId || null;
     const actualTargetId = resolved.url ? (resolved.targetId || null) : null;
     const port = Number(deps.getPort?.() || process.env.CDP_PORT || 9222);

@@ -8,22 +8,26 @@ import { normalizeEnvelope, renderQuestionEnvelope, renderQuestionEnvelopeWithCo
 import {
     bindSessionToTab,
     createSession,
-    findActiveSession,
+    findActiveSessionAsync,
     getBaseline,
     getLatestBaseline,
     getSession,
-    markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
 import { hasContextPackaging, prepareContextForBrowser } from './context-pack/index.mjs';
 import { WebAiError } from './errors.mjs';
+import { readSessionAsync } from './session-store.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
+import { classifyComposerInterstitial } from './composer-interstitial.mjs';
 
 export const GROK_CONTEXT_PACK_WARNING = 'grok-context-pack-not-recommended: prefer inline prompts plus optional --file uploads for Grok; ChatGPT or Gemini handle context packages more reliably.';
 import { attachLocalFileLive, fileInfoFromPath } from './chatgpt-attachments.mjs';
@@ -152,14 +156,21 @@ export async function grokSendWebAi(deps, input = {}) {
 
     await openFreshGrokChat(page, warnings);
     const composerSel = await findFirstSelector(page, COMPOSER_SELECTORS, 10_000);
-    if (!composerSel) throw new WebAiError({
-        errorCode: 'provider.composer-not-visible',
-        stage: 'composer-prereq',
-        vendor: 'grok',
-        retryHint: 're-snapshot',
-        message: 'grok composer not visible',
-        selectorsTried: COMPOSER_SELECTORS,
-    });
+    if (!composerSel) {
+        const notVisible = new WebAiError({
+            errorCode: 'provider.composer-not-visible',
+            stage: 'composer-prereq',
+            vendor: 'grok',
+            retryHint: 're-snapshot',
+            message: 'grok composer not visible',
+            selectorsTried: COMPOSER_SELECTORS,
+        });
+        // A challenge or login wall is why the composer never appeared;
+        // `re-snapshot` would be the wrong instruction for both.
+        throw (await classifyComposerInterstitial(page, 'grok', notVisible, {
+            detect: deps?.detectInterstitial,
+        })) || notVisible;
+    }
     const selectedModel = await selectGrokModel(page, input.model);
 
     const assistantCount = await countResponses(page);
@@ -240,7 +251,73 @@ export async function grokSendWebAi(deps, input = {}) {
  * @param {Input} [input]
  */
 export async function grokPollWebAi(deps, input = {}) {
+    // Thin wrapper over a hard deadline — see gemini-live.mjs. The loop checks
+    // the clock only BETWEEN awaited probes, so one never-settling locator or
+    // evaluate defeated `--timeout` (measured at 353ms against a 50ms budget).
+    // A stalled probe cannot be cancelled; the race stops the CALLER waiting.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const timeoutMs = Math.max(1, Number(input.timeout || input.thinkingTime || 600) * 1000);
+    /** @type {{ page: any, session: any, baseline: any, sessionId: string|null }} */
+    const ctx = { page: null, session: null, baseline: null, sessionId: null };
+    // The id is carried SYNCHRONOUSLY so an expiry can always name the session,
+    // even one that fires before the loop has read anything. The read itself
+    // happens inside the race: doing it here cost real wall time before the
+    // deadline timer was armed — a contended store made the whole poll 3s late
+    // on a 1s budget, which is the same unbounded failure wearing a new hat.
+    ctx.sessionId = input.session || null;
+    return withPollDeadline(
+        (hardDeadline, token) => runGrokPollWebAi(deps, input, ctx, token),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            // The SAME builder the loop's own timeout uses, so the two paths
+            // cannot drift apart in shape.
+            onExpired: () => buildGrokTimeoutResult(ctx, { persist: false }),
+        },
+    );
+}
+
+/**
+ * The timeout envelope, from whatever the poll had established when it ran out.
+ *
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+async function buildGrokTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
+    // `persist` is false on the RACE path so the expiry envelope remains
+    // write-free. The natural timeout owns its outcome and awaits the async
+    // store lock without a loser predicate.
+    const timedOutSession = (persist && session) ? await markSessionTimeoutAsync(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'grok',
+        status: 'timeout',
+        url: page?.url?.() || baseline?.url || session?.conversationUrl || '',
+        ...((session?.sessionId || sessionId) ? { sessionId: session?.sessionId || sessionId } : {}),
+        ...((timedOutSession?.deadlineAt || session?.deadlineAt) ? { deadlineAt: timedOutSession?.deadlineAt || session?.deadlineAt } : {}),
+        ...((timedOutSession?.conversationUrl || session?.conversationUrl) ? { conversationUrl: timedOutSession?.conversationUrl || session?.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for grok response',
+    };
+}
+
+/**
+ * @param {Deps} deps
+ * @param {Input} [input]
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+async function runGrokPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null, sessionId: null }, runToken = null) {
+    // False once the caller has been answered — see gemini-live.mjs.
+    const stillActive = () => isGrokRunActive(runToken);
     const page = await deps.getPage();
+    ctx.page = page;
     if (!isGrokUrl(page.url())) throw new WebAiError({
         errorCode: 'cdp.target-mismatch',
         stage: 'connect',
@@ -249,13 +326,21 @@ export async function grokPollWebAi(deps, input = {}) {
         message: `active tab is not grok.com (${page.url()})`,
         evidence: { url: page.url() },
     });
+    // Reuses the ASYNC read the wrapper already did. Calling blocking
+    // `getSession` here put the synchronous store lock back inside the race,
+    // and that lock stops the event loop — the deadline timer cannot fire while
+    // it waits, so a contended store defeated the bound entirely.
     const session = input.session
-        ? getSession(input.session)
-        : findActiveSession({
+        ? await readSessionAsync(input.session).catch(() => null)
+        // Async for the same reason as the read above: the synchronous form
+        // lists sessions under a lock whose wait stops the event loop, so the
+        // deadline timer could not fire while the implicit lookup ran.
+        : await findActiveSessionAsync({
             vendor: 'grok',
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: page.url(),
         });
+    ctx.session = session;
     const baseline = (session && sessionToBaseline(session))
         || getBaseline('grok', page.url())
         || getLatestBaseline('grok');
@@ -266,7 +351,10 @@ export async function grokPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor grok first.',
     });
-    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 600)) * 1000;
+    ctx.baseline = baseline;
+    // Fractional — see gemini-live.mjs. Flooring seconds undid the caller's
+    // clamp; the floor is on milliseconds so sub-second budgets survive.
+    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 600) * 1000);
     const deadline = Date.now() + timeout;
     let stableText = '';
     let stableSince = 0;
@@ -292,7 +380,7 @@ export async function grokPollWebAi(deps, input = {}) {
                         }
                     }
                     if (session) {
-                        await finalizeProviderTab(deps, { vendor: 'grok', session: /** @type {any} */ (session), page, answerText, warnings });
+                        await finalizeProviderTab(deps, { vendor: 'grok', session: /** @type {any} */ (session), page, answerText, warnings, stillActive });
                     }
                     return withAnswerArtifact({
                         ok: true,
@@ -315,10 +403,11 @@ export async function grokPollWebAi(deps, input = {}) {
             stableText = '';
             stableSince = 0;
         }
-        await page.waitForTimeout(500).catch(() => undefined);
+        // Capped by what is left; the loop condition is checked before it.
+        await page.waitForTimeout(Math.max(1, Math.min(500, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) updateSession(session.sessionId, { status: 'crashed' });
+                if (session) await updateSessionAsync(session.sessionId, { status: 'crashed' }, stillActive);
                 return {
                     ok: false, vendor: 'grok', status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -331,24 +420,15 @@ export async function grokPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
-        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for grok response' },
-    }) : null;
-    return {
-        ok: false,
-        vendor: 'grok',
-        status: 'timeout',
-        url: page.url(),
-        ...(session ? { sessionId: session.sessionId } : {}),
-        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
-        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
-        baseline,
-        warnings: [],
-        usedFallbacks: [],
-        recoverable: true,
-        retryHint: 'poll-or-resume',
-        error: 'timed out waiting for grok response',
-    };
+    return await buildGrokTimeoutResult(ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isGrokRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**

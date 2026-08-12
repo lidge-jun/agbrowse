@@ -12,6 +12,7 @@ import {
     UPLOAD_BUTTON_SELECTORS,
 } from '../../web-ai/chatgpt-attachments.mjs';
 import { resolveAttachmentUploadTimeoutMs } from '../../web-ai/chatgpt-upload-surface.mjs';
+import { waitForChatGptRepomixAttachmentCount } from '../../web-ai/chatgpt.mjs';
 
 describe('ChatGPT attachment upload surface', () => {
     it('tracks the current ChatGPT plus button label for upload capability probes', () => {
@@ -114,6 +115,71 @@ describe('ChatGPT attachment upload surface', () => {
         expect(result.stage).toBe('attachment-preflight');
     });
 
+    it('requires the exact visible chip count before a Repomix batch can submit', async () => {
+        const partial = await waitForChatGptRepomixAttachmentCount(
+            createStrictAttachmentCountPage(1),
+            3,
+            { timeoutMs: 0 },
+        );
+        const complete = await waitForChatGptRepomixAttachmentCount(
+            createStrictAttachmentCountPage(3),
+            3,
+            { timeoutMs: 0 },
+        );
+
+        expect(partial).toMatchObject({ ok: false, expectedCount: 3, observedCount: 1 });
+        expect(complete).toMatchObject({ ok: true, expectedCount: 3, observedCount: 3 });
+    });
+
+    it('accepts a complete fallback chip surface when an earlier surface is partial', async () => {
+        const result = await waitForChatGptRepomixAttachmentCount({
+            locator: selector => ({
+                count: async () => {
+                    if (/progressbar|uploading|processing|upload-progress/i.test(selector)) return 0;
+                    if (selector.includes('Remove file')) return 1;
+                    if (selector.includes('Remove attachment')) return 2;
+                    if (selector.includes('.group\\/file-tile')) return 3;
+                    return 0;
+                },
+            }),
+            waitForTimeout: async () => undefined,
+        }, 3, { timeoutMs: 0 });
+
+        expect(result).toMatchObject({ ok: true, expectedCount: 3, observedCount: 3 });
+    });
+
+    it('reports the largest partial surface when no attachment count is exact', async () => {
+        const result = await waitForChatGptRepomixAttachmentCount({
+            locator: selector => ({
+                count: async () => {
+                    if (/progressbar|uploading|processing|upload-progress/i.test(selector)) return 0;
+                    if (selector.includes('Remove file')) return 1;
+                    if (selector.includes('Remove attachment')) return 2;
+                    return 0;
+                },
+            }),
+            waitForTimeout: async () => undefined,
+        }, 3, { timeoutMs: 0 });
+
+        expect(result).toMatchObject({ ok: false, expectedCount: 3, observedCount: 2 });
+    });
+
+    it('runs the Repomix count gate after upload acceptance and before submit', () => {
+        const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
+        const sendBody = chatgptSrc.slice(
+            chatgptSrc.indexOf('export async function sendWebAi'),
+            chatgptSrc.indexOf('export async function pollWebAi'),
+        );
+
+        expect(sendBody.indexOf('attachLocalFilesLive(page, uploadFiles')).toBeLessThan(
+            sendBody.indexOf('waitForChatGptRepomixAttachmentCount(page, uploadFiles.length)'),
+        );
+        expect(sendBody.indexOf('waitForChatGptRepomixAttachmentCount(page, uploadFiles.length)')).toBeLessThan(
+            sendBody.indexOf('await adapter.submitPrompt'),
+        );
+        expect(sendBody).toContain('const strictRepomixUpload = repomixMode && contextAttachments.length > 0');
+    });
+
     it('keeps polling when ChatGPT hides sent-turn attachment evidence after upload acceptance', () => {
         const chatgptSrc = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
 
@@ -198,6 +264,19 @@ function createUploadPage(options = {}) {
         locator: selector => createUploadLocator(page, selector),
     };
     return page;
+}
+
+function createStrictAttachmentCountPage(attachmentCount) {
+    return {
+        locator: selector => ({
+            count: async () => {
+                if (/progressbar|uploading|processing|upload-progress/i.test(selector)) return 0;
+                if (selector.includes('button[aria-label*="Remove file" i]')) return attachmentCount;
+                return 0;
+            },
+        }),
+        waitForTimeout: async () => undefined,
+    };
 }
 
 function createUploadLocator(page, selector) {

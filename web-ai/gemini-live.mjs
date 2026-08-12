@@ -10,16 +10,17 @@ import { normalizeEnvelope, renderQuestionEnvelope, renderQuestionEnvelopeWithCo
 import {
     bindSessionToTab,
     createSession,
-    findActiveSession,
+    findActiveSessionAsync,
     getBaseline,
     getLatestBaseline,
     getSession,
-    markSessionTimeout,
+    markSessionTimeoutAsync,
     resolveDeadlineAt,
     saveBaseline,
     sessionToBaseline,
     summarizeEnvelope,
     updateSession,
+    updateSessionAsync,
 } from './session.mjs';
 import { prepareContextForBrowser } from './context-pack/index.mjs';
 import { captureCopiedResponseText, GEMINI_COPY_SELECTORS, preferCopiedText } from './copy-markdown.mjs';
@@ -28,10 +29,13 @@ import { selectGeminiModel, geminiModelCapabilityProbe } from './gemini-model.mj
 import { preflightAttachment } from './chatgpt-attachments.mjs';
 import { resolveAttachmentUploadTimeoutMs } from './chatgpt-upload-surface.mjs';
 import { WebAiError } from './errors.mjs';
+import { readSessionAsync } from './session-store.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import { finalizeProviderTab } from './tab-finalizer.mjs';
 import { recordActiveLease } from './tab-lease-store.mjs';
 import { defineCapability, probeFirstVisibleSelector, probeHostMatches, runCapabilities, worstCapabilityState } from './capability.mjs';
 import { isPageDeathError } from './tab-recovery.mjs';
+import { classifyComposerInterstitial } from './composer-interstitial.mjs';
 
 const GEMINI_HOSTS = new Set(['gemini.google.com']);
 const INPUT_SELECTORS = [
@@ -77,6 +81,16 @@ const GEMINI_UPLOAD_ITEM_SELECTOR = [
     '[role="menuitem"]:has-text("파일 업로드")',
     'button:has-text("파일 업로드")',
     '[data-test-id="local-images-files-uploader-button"]',
+].join(', ');
+const GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR = [
+    'input-area-v2 button[aria-label^="Remove file" i]',
+    'input-area-v2 button[aria-label^="close " i]',
+    'input-area-v2 .gem-attachment-close-button button',
+].join(', ');
+const GEMINI_COMPOSER_UPLOAD_PROGRESS_SELECTOR = [
+    'input-area-v2 [role="progressbar"]:visible',
+    'input-area-v2 [aria-label*="uploading" i]:visible',
+    'input-area-v2 [aria-label*="processing" i]:visible',
 ].join(', ');
 
 export const geminiCapabilities = [
@@ -128,6 +142,29 @@ export async function geminiStatusWebAi(deps, input = {}) {
  * @param {any} input
  */
 export async function geminiSendWebAi(deps, input = {}) {
+    const repomixMode = String(input.contextTransform || '').trim().toLowerCase() === 'repomix'
+        || input.preparedContextPack?.contextTransform === 'repomix';
+    let envelope = repomixMode ? normalizeEnvelope({ ...input, vendor: 'gemini' }) : null;
+    let contextPack = repomixMode
+        ? input.preparedContextPack || await prepareContextForBrowser({ ...input, vendor: 'gemini' })
+        : null;
+    let contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+    /** @type {any[]} */
+    let contextUploadAttachments = repomixMode ? contextAttachments : [];
+    let strictRepomixUpload = repomixMode && contextUploadAttachments.length > 0;
+    /** @type {string[]} */
+    let uploadPaths = [];
+    /** @type {any[]} */
+    let uploadFiles = [];
+    if (repomixMode) {
+        assertGeminiContextFileCombination(contextAttachments, input);
+        uploadPaths = input.filePath
+            ? [input.filePath]
+            : contextUploadAttachments.map((/** @type {any} */ attachment) => attachment.path);
+        uploadFiles = preflightGeminiUploadFiles(uploadPaths, input);
+        assertGeminiUploadPresent(envelope, uploadPaths);
+    }
+
     const page = await deps.getPage();
     if (input.url) {
         await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -140,25 +177,19 @@ export async function geminiSendWebAi(deps, input = {}) {
         message: `active tab is not gemini.google.com (${page.url()})`,
         evidence: { url: page.url() },
     });
-    const envelope = normalizeEnvelope({ ...input, vendor: 'gemini' });
-    const contextPack = await prepareContextForBrowser({ ...input, vendor: 'gemini' });
-    if (contextPack?.attachments?.[0] && input.filePath) {
-        throw new WebAiError({
-            errorCode: 'provider.attachment-preflight',
-            stage: 'attachment-preflight',
-            vendor: 'gemini',
-            retryHint: 'inline-only-or-file',
-            message: 'context package upload and --file upload cannot be combined yet',
-        });
-    }
-    if (envelope.attachmentPolicy !== 'inline-only' && !input.filePath && !contextPack?.attachments?.[0]) {
-        throw new WebAiError({
-            errorCode: 'provider.attachment-preflight',
-            stage: 'attachment-preflight',
-            vendor: 'gemini',
-            retryHint: 'inline-only-or-file',
-            message: 'gemini upload requested without a file or context package attachment',
-        });
+
+    if (!repomixMode) {
+        // Preserve raw context preparation and file validation ordering.
+        envelope = normalizeEnvelope({ ...input, vendor: 'gemini' });
+        contextPack = await prepareContextForBrowser({ ...input, vendor: 'gemini' });
+        contextAttachments = Array.isArray(contextPack?.attachments) ? contextPack.attachments : [];
+        assertGeminiContextFileCombination(contextAttachments, input);
+        contextUploadAttachments = contextAttachments.slice(0, 1);
+        uploadPaths = input.filePath
+            ? [input.filePath]
+            : contextUploadAttachments.map((/** @type {any} */ attachment) => attachment.path);
+        assertGeminiUploadPresent(envelope, uploadPaths);
+        strictRepomixUpload = false;
     }
     const rendered = contextPack
         ? contextPack.transport === 'inline'
@@ -171,14 +202,21 @@ export async function geminiSendWebAi(deps, input = {}) {
 
     await openFreshGeminiChat(page, warnings);
     const inputSel = await findFirstSelector(page, INPUT_SELECTORS, 10_000);
-    if (!inputSel) throw new WebAiError({
-        errorCode: 'provider.composer-not-visible',
-        stage: 'composer-prereq',
-        vendor: 'gemini',
-        retryHint: 're-snapshot',
-        message: 'gemini composer not visible',
-        selectorsTried: INPUT_SELECTORS,
-    });
+    if (!inputSel) {
+        const notVisible = new WebAiError({
+            errorCode: 'provider.composer-not-visible',
+            stage: 'composer-prereq',
+            vendor: 'gemini',
+            retryHint: 're-snapshot',
+            message: 'gemini composer not visible',
+            selectorsTried: INPUT_SELECTORS,
+        });
+        // A challenge or login wall is why the composer never appeared;
+        // `re-snapshot` would be the wrong instruction for both.
+        throw (await classifyComposerInterstitial(page, 'gemini', notVisible, {
+            detect: deps?.detectInterstitial,
+        })) || notVisible;
+    }
 
     const selectedModel = await selectGeminiModel(page, input.model);
     if (selectedModel) {
@@ -200,7 +238,7 @@ export async function geminiSendWebAi(deps, input = {}) {
 
     const turnsBefore = await countResponses(page);
     await dismissBlockingOverlays(page, warnings);
-    await clearGeminiComposerAttachments(page, warnings);
+    await clearGeminiComposerAttachments(page, warnings, { repomixMode });
     await page.locator(inputSel).first().click({ timeout: 5_000 });
     await page.evaluate((/** @type {{selector:string,text:string}} */ {selector, text}) => {
         const el = document.querySelector(selector);
@@ -213,11 +251,12 @@ export async function geminiSendWebAi(deps, input = {}) {
             target.dispatchEvent(new InputEvent('input', { data: text, bubbles: true }));
         }
     }, { selector: inputSel, text: rendered.composerText });
-    const uploadPath = input.filePath || contextPack?.attachments?.[0]?.path;
-    if (uploadPath) {
-        const uploaded = await attachGeminiLocalFileLive(page, fileInfoFromPath(uploadPath), {
+    if (!repomixMode) uploadFiles = uploadPaths.map(fileInfoFromPath);
+    for (const uploadFile of uploadFiles) {
+        const uploaded = await attachGeminiLocalFileLive(page, uploadFile, {
             maxUploadBytes: input.maxUploadFileSize,
             attachmentUploadTimeoutMs: input.attachmentUploadTimeoutMs,
+            requireChipCountIncrease: strictRepomixUpload,
         });
         if (!uploaded.ok) throw new WebAiError({
             errorCode: 'provider.attachment-evidence-missing',
@@ -229,6 +268,21 @@ export async function geminiSendWebAi(deps, input = {}) {
         });
         usedFallbacks.push(...uploaded.usedFallbacks);
         warnings.push(...(/** @type {any[]} */ (uploaded.warnings)));
+    }
+    if (strictRepomixUpload) {
+        const attachmentCount = await waitForGeminiRepomixAttachmentCount(page, uploadFiles.length);
+        if (attachmentCount.ok !== true) throw new WebAiError({
+            errorCode: 'provider.attachment-evidence-missing',
+            stage: 'attachment-verify',
+            vendor: 'gemini',
+            retryHint: 're-upload',
+            message: attachmentCount.error,
+            mutationAllowed: true,
+            evidence: {
+                expectedCount: attachmentCount.expectedCount,
+                observedCount: attachmentCount.observedCount,
+            },
+        });
     }
 
     const sendSel = await findFirstSelector(page, SEND_SELECTORS, 5_000);
@@ -242,16 +296,32 @@ export async function geminiSendWebAi(deps, input = {}) {
         mutationAllowed: true,
     });
     await page.locator(sendSel).first().click({ timeout: 5_000 });
-    if (uploadPath) {
-        const sentAttachment = await verifyGeminiSentTurnAttachment(page, fileInfoFromPath(uploadPath));
-        if (!sentAttachment.ok) throw new WebAiError({
-            errorCode: 'provider.attachment-evidence-missing',
-            stage: 'attachment-verify',
-            vendor: 'gemini',
-            retryHint: 're-upload',
-            message: sentAttachment.error,
-            mutationAllowed: true,
-        });
+    // Repomix already passed an exact composer-scoped count before submit;
+    // post-submit preview counts can include attachments from older turns.
+    if (!repomixMode) {
+        for (const uploadPath of uploadPaths) {
+            const sentAttachment = await verifyGeminiSentTurnAttachment(page, fileInfoFromPath(uploadPath));
+            if (!sentAttachment.ok) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: sentAttachment.error,
+                mutationAllowed: true,
+            });
+        }
+    } else if (!strictRepomixUpload) {
+        for (const uploadFile of uploadFiles) {
+            const sentAttachment = await verifyGeminiSentTurnAttachment(page, uploadFile);
+            if (!sentAttachment.ok) throw new WebAiError({
+                errorCode: 'provider.attachment-evidence-missing',
+                stage: 'attachment-verify',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: sentAttachment.error,
+                mutationAllowed: true,
+            });
+        }
     }
 
     const baseline = saveBaseline({
@@ -290,9 +360,72 @@ export async function geminiSendWebAi(deps, input = {}) {
         contextPack: contextPack ? summarizeContextPack(contextPack) : undefined,
         warnings: [
             ...warnings,
-            ...(contextPack?.attachments?.[0] ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : []),
+            ...(repomixMode
+                ? contextUploadAttachments.map((/** @type {any} */ attachment) => `context package attached: ${attachment.displayPath || attachment.path}`)
+                : (contextPack?.attachments?.[0] ? [`context package attached: ${contextPack.attachments[0].displayPath}`] : [])),
         ],
     };
+}
+
+/** @param {any[]} contextAttachments @param {any} input */
+function assertGeminiContextFileCombination(contextAttachments, input) {
+    if (!contextAttachments.length || !input.filePath) return;
+    throw new WebAiError({
+        errorCode: 'provider.attachment-preflight',
+        stage: 'attachment-preflight',
+        vendor: 'gemini',
+        retryHint: 'inline-only-or-file',
+        message: 'context package upload and --file upload cannot be combined yet',
+    });
+}
+
+/** @param {any} envelope @param {string[]} uploadPaths */
+function assertGeminiUploadPresent(envelope, uploadPaths) {
+    if (envelope.attachmentPolicy === 'inline-only' || uploadPaths.length > 0) return;
+    throw new WebAiError({
+        errorCode: 'provider.attachment-preflight',
+        stage: 'attachment-preflight',
+        vendor: 'gemini',
+        retryHint: 'inline-only-or-file',
+        message: 'gemini upload requested without a file or context package attachment',
+    });
+}
+
+/**
+ * @param {string[]} uploadPaths
+ * @param {any} input
+ */
+function preflightGeminiUploadFiles(uploadPaths, input) {
+    return uploadPaths.map((uploadPath) => {
+        let file;
+        try {
+            file = fileInfoFromPath(uploadPath);
+        } catch (cause) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: `attachment preflight failed for ${uploadPath}: ${String((/** @type {any} */ (cause))?.message || cause)}`,
+                mutationAllowed: false,
+                cause,
+            });
+        }
+        const preflight = preflightAttachment(file, {
+            maxUploadBytes: input.maxUploadFileSize,
+        });
+        if (preflight.ok !== true) {
+            throw new WebAiError({
+                errorCode: 'provider.attachment-preflight',
+                stage: 'attachment-preflight',
+                vendor: 'gemini',
+                retryHint: 're-upload',
+                message: `${file.basename}: ${preflight.rejectedReason || 'preflight rejected'}`,
+                mutationAllowed: false,
+            });
+        }
+        return file;
+    });
 }
 
 /**
@@ -307,7 +440,7 @@ function fileInfoFromPath(filePath) {
 /**
  * @param {any} page
  * @param {any} file
- * @param {{ maxUploadBytes?: number|string|null, attachmentUploadTimeoutMs?: number|string|null }} [options]
+ * @param {{ maxUploadBytes?: number|string|null, attachmentUploadTimeoutMs?: number|string|null, requireChipCountIncrease?: boolean }} [options]
  */
 async function attachGeminiLocalFileLive(page, file, options = {}) {
     /** @type {any[]} */
@@ -316,13 +449,16 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
     const preflight = preflightAttachment(file, {
         maxUploadBytes: options.maxUploadBytes,
     });
-    if (!preflight.ok) {
+    if (options.requireChipCountIncrease === true ? preflight.ok !== true : !preflight.ok) {
         return { ok: false, error: preflight.rejectedReason || 'preflight rejected', usedFallbacks };
     }
     warnings.push(...preflight.softWarnings);
     const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
     const uploadButton = await findFirstSelector(page, GEMINI_UPLOAD_SELECTORS, 5_000);
     if (!uploadButton) return { ok: false, error: 'gemini upload file menu button not visible', usedFallbacks };
+    const chipCountBefore = options.requireChipCountIncrease === true
+        ? await countGeminiComposerAttachmentChips(page)
+        : 0;
     try {
         await page.keyboard.press('Escape').catch(() => undefined);
         await page.locator(uploadButton).first().click({ timeout: 5_000, force: true });
@@ -336,7 +472,9 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
         usedFallbacks.push(`gemini-filechooser-failed:${(/** @type {any} */ (e)).message}`);
         return { ok: false, error: `gemini file chooser upload failed: ${(/** @type {any} */ (e)).message}`, usedFallbacks };
     }
-    const accepted = await waitForGeminiAttachmentAccepted(page, file);
+    const accepted = await waitForGeminiAttachmentAccepted(page, file, chipCountBefore, {
+        requireChipCountIncrease: options.requireChipCountIncrease === true,
+    });
     if (!accepted.ok) return { ok: false, error: accepted.error, usedFallbacks };
     return { ok: true, usedFallbacks, warnings };
 }
@@ -344,12 +482,25 @@ async function attachGeminiLocalFileLive(page, file, options = {}) {
 /**
  * @param {any} page
  * @param {any} expectedFile
+ * @param {number} chipCountBefore
+ * @param {{requireChipCountIncrease?:boolean}} [options]
  */
-async function waitForGeminiAttachmentAccepted(page, expectedFile) {
+async function waitForGeminiAttachmentAccepted(page, expectedFile, chipCountBefore, options = {}) {
     const deadline = Date.now() + 45_000;
+    if (options.requireChipCountIncrease !== true) {
+        while (Date.now() < deadline) {
+            if (await hasGeminiAttachmentEvidence(page, expectedFile)) return { ok: true };
+            const busy = await page.locator('[role="progressbar"], [aria-label*="uploading" i], [aria-label*="processing" i]').count().catch(() => 0);
+            await page.waitForTimeout(busy === 0 ? 500 : 1_000).catch(() => undefined);
+        }
+        return { ok: false, error: 'gemini attachment never showed visible chip' };
+    }
     while (Date.now() < deadline) {
-        if (await hasGeminiAttachmentEvidence(page, expectedFile)) return { ok: true };
-        const busy = await page.locator('[role="progressbar"], [aria-label*="uploading" i], [aria-label*="processing" i]').count().catch(() => 0);
+        const [chipCount, busy] = await Promise.all([
+            countGeminiComposerAttachmentChips(page),
+            countGeminiComposerUploadProgress(page),
+        ]);
+        if (isGeminiRepomixAttachmentIncrementReady({ busy, chipCount }, chipCountBefore)) return { ok: true };
         await page.waitForTimeout(busy === 0 ? 500 : 1_000).catch(() => undefined);
     }
     return { ok: false, error: 'gemini attachment never showed visible chip' };
@@ -358,9 +509,13 @@ async function waitForGeminiAttachmentAccepted(page, expectedFile) {
 /**
  * @param {any} page
  * @param {any} warnings
+ * @param {{repomixMode?:boolean}} [options]
  */
-async function clearGeminiComposerAttachments(page, warnings) {
-    const removeButtons = await page.locator('button[aria-label^="Remove file"]').all().catch(() => []);
+async function clearGeminiComposerAttachments(page, warnings, options = {}) {
+    const selector = options.repomixMode === true
+        ? GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR
+        : 'button[aria-label^="Remove file"]';
+    const removeButtons = await page.locator(selector).all().catch(() => []);
     for (const button of removeButtons) {
         try {
             await button.click({ timeout: 2_000 });
@@ -401,6 +556,57 @@ async function hasGeminiAttachmentEvidence(page, expectedFile) {
     return chipCount > 0;
 }
 
+/** @param {any} page */
+async function countGeminiComposerAttachmentChips(page) {
+    return page.locator(GEMINI_COMPOSER_ATTACHMENT_CLOSE_SELECTOR).count().catch(() => 0);
+}
+
+/** @param {any} page */
+async function countGeminiComposerUploadProgress(page) {
+    return page.locator(GEMINI_COMPOSER_UPLOAD_PROGRESS_SELECTOR).count().catch(() => 0);
+}
+
+/**
+ * A Repomix part is accepted only when that upload adds a new visible chip.
+ * Filename text is deliberately ignored because the prompt itself may contain
+ * the configured artifact name.
+ * @param {{busy:number,chipCount:number}} evidence
+ * @param {number} chipCountBefore
+ */
+export function isGeminiRepomixAttachmentIncrementReady(evidence, chipCountBefore) {
+    return evidence.busy === 0 && evidence.chipCount > chipCountBefore;
+}
+
+/**
+ * Final pre-submit gate for Repomix uploads. Exact count rejects both missing
+ * parts and stale/unexpected composer attachments.
+ * @param {any} page
+ * @param {number} expectedCount
+ * @param {{timeoutMs?:number}} [options]
+ */
+export async function waitForGeminiRepomixAttachmentCount(page, expectedCount, options = {}) {
+    const deadline = Date.now() + Math.max(0, Number(options.timeoutMs ?? 8_000));
+    let observedCount = 0;
+    let busy = 0;
+    do {
+        [observedCount, busy] = await Promise.all([
+            countGeminiComposerAttachmentChips(page),
+            countGeminiComposerUploadProgress(page),
+        ]);
+        if (busy === 0 && observedCount === expectedCount) {
+            return { ok: true, expectedCount, observedCount };
+        }
+        if (Date.now() >= deadline) break;
+        await page.waitForTimeout(busy === 0 ? 250 : 500).catch(() => undefined);
+    } while (Date.now() <= deadline);
+    return {
+        ok: false,
+        expectedCount,
+        observedCount,
+        error: `Gemini accepted ${observedCount}/${expectedCount} expected attachments before submit`,
+    };
+}
+
 /**
  * @param {any} name
  */
@@ -414,7 +620,83 @@ function stripExtension(name) {
  * @param {any} input
  */
 export async function geminiPollWebAi(deps, input = {}) {
+    // Thin wrapper over a hard deadline. The loop below only looks at the clock
+    // BETWEEN awaited probes, so one never-settling `locator.all` or
+    // `page.evaluate` used to defeat `--timeout` outright: measured at 351ms
+    // against a 50ms budget, and unbounded in principle. A stalled probe cannot
+    // be cancelled, so the race does not stop the work — it stops the CALLER
+    // waiting on it.
+    const started = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const timeoutMs = Math.max(1, Number(input.timeout || input.thinkingTime || 1200) * 1000);
+    /** @type {{ page: any, session: any, baseline: any, sessionId: string|null }} */
+    const ctx = { page: null, session: null, baseline: null, sessionId: null };
+    // The id is carried SYNCHRONOUSLY so an expiry can always name the session,
+    // even one that fires before the loop has read anything. The read itself
+    // happens inside the race: doing it here cost real wall time before the
+    // deadline timer was armed — a contended store made the whole poll 3s late
+    // on a 1s budget, which is the same unbounded failure wearing a new hat.
+    ctx.sessionId = input.session || null;
+    return withPollDeadline(
+        (hardDeadline, token) => runGeminiPollWebAi(deps, input, ctx, token),
+        {
+            startedAt: started,
+            monotonicStartMs: monotonicStart,
+            timeoutMs,
+            // The SAME builder the loop's own timeout uses, so the two paths
+            // cannot drift apart in shape.
+            onExpired: () => buildGeminiTimeoutResult(ctx, { persist: false }),
+        },
+    );
+}
+
+/**
+ * The timeout envelope, from whatever the poll had established when it ran out.
+ *
+ * Shared by the loop's natural timeout and the outer race. Building a second
+ * envelope for the race is how the fields drift — an earlier round of this work
+ * shipped guards missing `usedFallbacks` and `conversationUrl` for exactly that
+ * reason.
+ *
+ * @param {{ page: any, session: any, baseline: any }} ctx
+ */
+async function buildGeminiTimeoutResult({ page, session, baseline, sessionId = null }, { persist = true } = {}) {
+    // `persist` is false on the RACE path so the expiry envelope remains
+    // write-free. The natural timeout owns its outcome and awaits the async
+    // store lock without a loser predicate.
+    const timedOutSession = (persist && session) ? await markSessionTimeoutAsync(session.sessionId, {
+        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
+    }) : null;
+    return {
+        ok: false,
+        vendor: 'gemini',
+        status: 'timeout',
+        url: page?.url?.() || baseline?.url || session?.conversationUrl || '',
+        ...((session?.sessionId || sessionId) ? { sessionId: session?.sessionId || sessionId } : {}),
+        ...((timedOutSession?.deadlineAt || session?.deadlineAt) ? { deadlineAt: timedOutSession?.deadlineAt || session?.deadlineAt } : {}),
+        ...((timedOutSession?.conversationUrl || session?.conversationUrl) ? { conversationUrl: timedOutSession?.conversationUrl || session?.conversationUrl } : {}),
+        baseline,
+        warnings: [],
+        usedFallbacks: [],
+        recoverable: true,
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for gemini response',
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {{ page: any, session: any, baseline: any }} ctx populated as the poll
+ *   learns each piece, so an expiry can describe how far it got
+ */
+async function runGeminiPollWebAi(deps, input = {}, ctx = { page: null, session: null, baseline: null, sessionId: null }, runToken = null) {
+    // False once the caller has been answered. A stalled probe cannot be
+    // cancelled, so this run may still be mid-tick when its poll returns
+    // `timeout`; what it must not do is START a new write after that.
+    const stillActive = () => isGeminiRunActive(runToken);
     const page = await deps.getPage();
+    ctx.page = page;
     if (!isGeminiUrl(page.url())) throw new WebAiError({
         errorCode: 'cdp.target-mismatch',
         stage: 'connect',
@@ -423,13 +705,21 @@ export async function geminiPollWebAi(deps, input = {}) {
         message: `active tab is not gemini.google.com (${page.url()})`,
         evidence: { url: page.url() },
     });
+    // Reuses the ASYNC read the wrapper already did. Calling blocking
+    // `getSession` here put the synchronous store lock back inside the race,
+    // and that lock stops the event loop — the deadline timer cannot fire while
+    // it waits, so a contended store defeated the bound entirely.
     const session = input.session
-        ? getSession(input.session)
-        : findActiveSession({
+        ? await readSessionAsync(input.session).catch(() => null)
+        // Async for the same reason as the read above: the synchronous form
+        // lists sessions under a lock whose wait stops the event loop, so the
+        // deadline timer could not fire while the implicit lookup ran.
+        : await findActiveSessionAsync({
             vendor: 'gemini',
             targetId: await deps.getTargetId?.().catch(() => null) || null,
             conversationUrl: page.url(),
         });
+    ctx.session = session;
     const baseline = (session && sessionToBaseline(session))
         || getBaseline('gemini', page.url())
         || getLatestBaseline('gemini');
@@ -440,7 +730,12 @@ export async function geminiPollWebAi(deps, input = {}) {
         retryHint: 'poll-or-resume',
         message: 'baseline required. Run web-ai send --vendor gemini first.',
     });
-    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 1200)) * 1000;
+    ctx.baseline = baseline;
+    // Fractional. Flooring at a whole second here undid the caller's clamp: a
+    // resumed session with 400ms of budget left was rounded back up to a full
+    // second. The floor is on MILLISECONDS now, so a positive budget is always
+    // honoured and a zero one still cannot loop forever.
+    const timeout = Math.max(1, Number(input.timeout || input.thinkingTime || 1200) * 1000);
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
         try {
@@ -448,7 +743,11 @@ export async function geminiPollWebAi(deps, input = {}) {
         const next = responses.slice(baseline.assistantCount).at(-1);
         if (next && await hasCompletionSignal(page)) {
             if (isPendingDeepThinkText(next)) {
-                await page.waitForTimeout(5_000).catch(() => undefined);
+                // Capped like the ordinary tick. This branch waits five seconds
+                // for a Deep Think placeholder to resolve, which on its own is
+                // longer than many resumed budgets — an expired session took a
+                // full five seconds before anyone checked the clock again.
+                await page.waitForTimeout(Math.max(1, Math.min(5_000, deadline - Date.now()))).catch(() => undefined);
                 continue;
             }
             let answerText = next;
@@ -466,7 +765,7 @@ export async function geminiPollWebAi(deps, input = {}) {
                 }
             }
             if (session) {
-                await finalizeProviderTab(deps, { vendor: 'gemini', session: /** @type {any} */ (session), page, answerText, warnings });
+                await finalizeProviderTab(deps, { vendor: 'gemini', session: /** @type {any} */ (session), page, answerText, warnings, stillActive });
             }
             return withAnswerArtifact({
                 ok: true,
@@ -480,10 +779,12 @@ export async function geminiPollWebAi(deps, input = {}) {
                 warnings,
             });
         }
-        await page.waitForTimeout(2_000).catch(() => undefined);
+        // Capped by what is left: the loop condition is checked before this
+        // wait, so a fixed tick is itself the overrun near the deadline.
+        await page.waitForTimeout(Math.max(1, Math.min(2_000, deadline - Date.now()))).catch(() => undefined);
         } catch (pollErr) {
             if (isPageDeathError(pollErr)) {
-                if (session) updateSession(session.sessionId, { status: 'crashed' });
+                if (session) await updateSessionAsync(session.sessionId, { status: 'crashed' }, stillActive);
                 return {
                     ok: false, vendor: 'gemini', status: 'tab-crashed',
                     url: baseline.url || '', ...(session ? { sessionId: session.sessionId } : {}),
@@ -496,24 +797,15 @@ export async function geminiPollWebAi(deps, input = {}) {
             throw pollErr;
         }
     }
-    const timedOutSession = session ? markSessionTimeout(session.sessionId, {
-        lastError: { errorCode: 'provider.poll-timeout', message: 'timed out waiting for gemini response' },
-    }) : null;
-    return {
-        ok: false,
-        vendor: 'gemini',
-        status: 'timeout',
-        url: page.url(),
-        ...(session ? { sessionId: session.sessionId } : {}),
-        ...(timedOutSession?.deadlineAt ? { deadlineAt: timedOutSession.deadlineAt } : {}),
-        ...(timedOutSession?.conversationUrl ? { conversationUrl: timedOutSession.conversationUrl } : {}),
-        baseline,
-        warnings: [],
-        usedFallbacks: [],
-        recoverable: true,
-        retryHint: 'poll-or-resume',
-        error: 'timed out waiting for gemini response',
-    };
+    return await buildGeminiTimeoutResult(ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isGeminiRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**
@@ -791,13 +1083,24 @@ async function hasCompletionSignal(page) {
  * @param {any} contextPack
  */
 function summarizeContextPack(contextPack) {
-    return {
-        files: contextPack.files.map((/** @type {any} */ file) => ({
+    const summary = {
+        files: (contextPack.files || []).map((/** @type {any} */ file) => ({
             relativePath: file.relativePath,
             sizeBytes: file.sizeBytes,
             estimatedTokens: file.estimatedTokens,
         })),
         excluded: contextPack.excluded,
         budget: contextPack.budget,
+    };
+    if (contextPack.contextTransform !== 'repomix') return summary;
+    return {
+        ...summary,
+        transport: contextPack.transport,
+        contextTransform: 'repomix',
+        attachments: (contextPack.attachments || []).map((/** @type {any} */ attachment) => ({
+            displayPath: attachment.displayPath,
+            sizeBytes: attachment.sizeBytes,
+        })),
+        ...(contextPack.repomix ? { repomix: contextPack.repomix } : {}),
     };
 }

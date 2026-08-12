@@ -10,6 +10,7 @@ import {
     resolveTimeoutDefaultSec,
     resolveDeadlineAt,
     resolveTimeoutBudgetSec,
+    resolvePollTimeoutSec,
 } from '../../web-ai/session.mjs';
 
 afterEach(() => { vi.useRealTimers(); });
@@ -231,6 +232,50 @@ describe('chatgpt-deep-research.mjs resume no longer uses 1_200_000 hardcode', (
     });
 });
 
+/**
+ * Every surface that resumes an existing session shares this. Each one got the
+ * same thing wrong differently, so the behaviour is pinned once, here.
+ */
+describe('resolvePollTimeoutSec never outlives the stored deadline', () => {
+    const NOW = new Date('2026-07-10T00:00:00.000Z').getTime();
+
+    it('returns the sub-second remainder instead of rounding it up', () => {
+        const session = { deadlineAt: new Date(NOW + 400).toISOString(), vendor: 'chatgpt' };
+        expect(resolvePollTimeoutSec({}, session, 'chatgpt', NOW)).toBeCloseTo(0.4, 3);
+    });
+
+    it('caps an explicit timeout that would outlive the deadline', () => {
+        const session = { deadlineAt: new Date(NOW + 2_000).toISOString(), vendor: 'chatgpt' };
+        expect(resolvePollTimeoutSec({ timeout: 30 }, session, 'chatgpt', NOW)).toBeCloseTo(2, 3);
+    });
+
+    it('leaves an explicit timeout alone when it fits', () => {
+        const session = { deadlineAt: new Date(NOW + 600_000).toISOString(), vendor: 'chatgpt' };
+        expect(resolvePollTimeoutSec({ timeout: 30 }, session, 'chatgpt', NOW)).toBe(30);
+    });
+
+    it('stays positive for an expired deadline rather than reading as "no budget"', () => {
+        // Zero or negative gets floored back up by some providers, which is the
+        // bug. Callers that must refuse an expired session check the remainder.
+        const session = { deadlineAt: new Date(NOW - 5_000).toISOString(), vendor: 'chatgpt' };
+        const sec = resolvePollTimeoutSec({}, session, 'chatgpt', NOW);
+        expect(sec).toBeGreaterThan(0);
+        expect(sec).toBeLessThan(0.01);
+    });
+
+    it.each(['gemini', 'grok'])('bounds %s, which reads no stored deadline of its own', (vendor) => {
+        // Omitting the timeout for these vendors is NOT safe: they fall back to
+        // their own 1200s/600s defaults, so a 400ms remainder became minutes.
+        const session = { deadlineAt: new Date(NOW + 400).toISOString(), vendor };
+        expect(resolvePollTimeoutSec({}, session, vendor, NOW)).toBeCloseTo(0.4, 3);
+    });
+
+    it('falls back to the tier default when there is no stored deadline', () => {
+        const session = { deadlineAt: null, vendor: 'chatgpt', envelopeSummary: { model: 'pro' } };
+        expect(resolvePollTimeoutSec({}, session, 'chatgpt', NOW)).toBe(5400);
+    });
+});
+
 describe('WP5 shared-file source contracts', () => {
     it('pollWebAi no longer has hardcoded || 1200 fallback', () => {
         const src = readFileSync(new URL('../../web-ai/chatgpt.mjs', import.meta.url), 'utf8');
@@ -242,11 +287,35 @@ describe('WP5 shared-file source contracts', () => {
         expect(src).toMatch(/command\s*===\s*'send'\s*\|\|\s*command\s*===\s*'query'/);
     });
 
-    it('MCP wait/resume uses resolveTimeoutBudgetSec, not raw args.timeout passthrough', () => {
+    it('MCP wait/resume resolves a bounded timeout, not raw args.timeout passthrough', () => {
         const src = readFileSync(new URL('../../web-ai/mcp-server.mjs', import.meta.url), 'utf8');
-        expect(src).toMatch(/resolveTimeoutBudgetSec/);
+        // Was `resolveTimeoutBudgetSec`. That resolver floors at a whole second
+        // and knows nothing about the stored deadline, which is what let a
+        // resumed session poll past it; `resolvePollTimeoutSec` wraps it.
+        expect(src).toMatch(/resolvePollTimeoutSec/);
         const pollBlock = src.match(/pollByProvider\([\s\S]*?\)\s*\)/)?.[0] || '';
         expect(pollBlock).not.toMatch(/timeout:\s*args\.timeout\s*[,)]/);
+    });
+
+    /**
+     * Resolving a budget for a caller who gave no timeout floors the stored
+     * remainder to a whole second and hands it down as `input.timeout`, which
+     * the provider cannot tell apart from a real `--timeout`. That let an
+     * expired session poll for another second, defeating the millisecond
+     * deadline the wrapper enforces.
+     *
+     * These are source contracts because the behaviour lives across a process
+     * boundary; the behavioural cover for the same defect is in
+     * web-ai-watcher.test.mjs, which drives the real `callVendorPoll`.
+     */
+    it.each([
+        ['resume', '../../web-ai/cli-sessions.mjs'],
+        ['MCP', '../../web-ai/mcp-server.mjs'],
+        ['watch', '../../web-ai/watcher.mjs'],
+        ['work poll', '../../web-ai/chatgpt-work-picker.mjs'],
+    ])('%s clamps its poll timeout to the stored deadline', (_label, modulePath) => {
+        const src = readFileSync(new URL(modulePath, import.meta.url), 'utf8');
+        expect(src).toMatch(/resolvePollTimeoutSec\(/);
     });
 
     it('tool schema timeout fields have minimum:1 and descriptions without 40min/2400 literals', () => {

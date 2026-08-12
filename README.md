@@ -31,35 +31,6 @@ workflow. It gives an agent a small CLI surface for:
 It does not require a long-running MCP server. Each command is a short-lived
 Node process that reconnects to the same Chrome DevTools Protocol endpoint.
 
-## Current ChatGPT picker contract
-
-- **GPT-5.6 Chat contract**: select Chat families with
-  `--family gpt-5.6-sol|gpt-5.5|o3` and use canonical
-  `--effort medium|high|xhigh` values. The runtime understands the current
-  Power shell with exact Model/Effort submenus and the
-  `Instant / Medium / High / Extra High / Pro` effort rows.
-- **ChatGPT Work surface v1**: submit through the dedicated
-  `agbrowse web-ai work send --prompt "..." --power 1..6` command or MCP
-  `web_ai_work_send`. Chat `send/query/poll/watch` and
-  `web_ai_submit_prompt` fail closed on an active Work surface.
-- **Long-run recovery**: ChatGPT Pro polls receive a 5400-second default
-  deadline, while Grok Heavy and Deep Research keep independent 3600-second
-  tiers. Saved sessions retain their original deadline across shell exits.
-- **Search and extraction**: the modular `search` skill now separates discovery
-  from original-page proof, and `agbrowse extract` maps tables or JSON-LD to a
-  supplied schema with fail-closed validation.
-- **Agent-first distribution and QA routing**: `skills install` ships
-  `browser`, `web-ai`, `search`, and `vision-click`; Playwright/browser-QA
-  intent routes to agbrowse for ad-hoc inspection while preserving maintained
-  project E2E suites.
-- **GitHub Pages redesign**: the docs landing page now presents browser control,
-  web-AI, search, and evidence as full-screen product lanes with reduced-motion
-  support.
-
-Provider UI automation remains beta because provider DOM and account state can
-change. Schema-bound CLI extraction remains experimental; see the
-[capability truth table](structure/CAPABILITY_TRUTH_TABLE.md) for exact labels.
-
 ## Public Surface
 
 | Surface | Link | Status |
@@ -148,24 +119,6 @@ produces a `research-fetch-enrichment-v1` evidence ledger. `browse-plan`
 converts remaining weak candidates into a reasoned browser command plan without
 mutating browser state.
 
-### Structured Extraction
-
-`agbrowse extract` pulls structured data from a URL or local HTML file using a
-JSON schema, without calling an LLM. When no structure matches the schema, it
-returns a fail-closed `no_mappable_structure` verdict instead of silent partial
-data. Tier 2 web-ai escalation is available as an explicit opt-in.
-
-```bash
-# Extract table data matching a schema (Tier 1, LLM-free)
-agbrowse extract "https://example.com/products" --schema products.json --json
-
-# Extract from a local HTML file
-agbrowse extract --from-file page.html --schema products.json --json
-
-# Tier 2: escalate to web-ai on Tier 1 failure
-agbrowse extract "https://example.com/products" --schema products.json --escalate-web-ai --vendor grok
-```
-
 ## What It Is Good For
 
 - **Browser automation for agents**: navigate, snapshot, click refs, type,
@@ -242,17 +195,16 @@ passing on `main`. Release publishing is dispatched through `release.yml`.
 
 This repository is packaged as a standalone skill/runtime.
 
-Source structure as of 2026-07-11:
+Source structure as of 2026-06-27:
 
 | Path | Files | Lines | Role |
 | --- | ---: | ---: | --- |
-| `skills/browser/` | 55 | 16 320 | Chrome lifecycle, CDP, refs, tabs, adaptive fetch v2, search, extract, Runway |
-| `skills/search/` | 5 | 896 | proof-first search skill hub and modular references |
-| `web-ai/` | 113 | 27 441 | provider automation, sessions, MCP, eval, policy, trace |
-| `test/unit/` | 141 | 17 628 | deterministic module tests |
-| `test/integration/` | 21 | 3 165 | CLI, MCP, policy, provider fixture tests |
+| `skills/browser/` | 54 | 15 587 | Chrome lifecycle, CDP, refs, tabs, adaptive fetch v2, search, Runway |
+| `web-ai/` | 112 | 25 409 | provider automation, sessions, MCP, eval, policy, trace |
+| `test/unit/` | 136 | 15 340 | deterministic module tests |
+| `test/integration/` | 19 | 2 639 | CLI, MCP, policy, provider fixture tests |
 | `scripts/` | 10 | 1 621 | release gates, eval runner, strict-baseline checks |
-| `docs/` | 41 | 3 540 | adoption, trace, production-readiness, developer docs |
+| `docs/` | 41 | 2 635 | adoption, trace, production-readiness, developer docs |
 
 Architecture and release-claim source of truth live in
 [`structure/INDEX.md`](structure/INDEX.md) and the Phase 11+ truth table lives
@@ -291,8 +243,8 @@ Experimental or deferred surfaces:
 
 - adaptive URL fetch (`agbrowse fetch <url>`) as a URL reader, not search
 - adaptive fetch 203.x modules: TLS impersonation, yt-dlp media reader,
-  Camoufox stealth lane, feed parser, BM25 reranker, structured extractor,
-  lane-classified candidate discovery
+  Camoufox hardened-fingerprint render, feed parser, BM25 reranker,
+  structured extractor, lane-classified candidate discovery
 - web-ai capability registry, interstitial detector, freshness gate,
   diagnostics stage taxonomy, and provider lifecycle adapter
 - hosted/cloud browser operation
@@ -329,6 +281,12 @@ npm install -g agbrowse@latest
 
 Set `AGBROWSE_UPDATE_CHECK=0` to hide the notice. The check is skipped for JSON
 output, MCP stdio, CI, and help commands.
+
+`agbrowse` ships no npm lifecycle scripts (`postinstall` and friends), so
+`npm install -g` never prints npm's `allow-scripts` warnings and keeps working
+as npm tightens script defaults. On your first interactive run the CLI may
+ask once whether to star the GitHub repo; agents, pipes, CI, and `--json`
+runs never see it. Set `AGBROWSE_STAR_PROMPT=0` to opt out.
 
 From this repository:
 
@@ -379,7 +337,7 @@ rungs:
 | --- | --- |
 | 203.1 TLS impersonation | JA3 fingerprint spoofing via `curl-impersonate` on 403/429/challenge, inserted before browser escalation |
 | 203.2 yt-dlp media reader | Extracts metadata and transcripts from video URLs via `yt-dlp` |
-| 203.3 Camoufox browser lane | Optional Firefox-based browser session via Camoufox for alternate rendering |
+| 203.3 Camoufox render | Optional hardened-fingerprint Firefox render, tried after readers and before Chrome. Requires a separate `camoufox` Python install; a no-op otherwise |
 | 203.4 Feed parser | RSS, Atom, and JSON Feed detection and parsing into structured evidence |
 | 203.5 BM25 lexical reranker | Content-relevance scoring using BM25 term weighting |
 | 203.6 Structured extractor | Table and heading extraction from HTML into structured records |
@@ -416,6 +374,11 @@ the source was rejected. `--max-bytes` remains the per-attempt read limit.
 Automated CAPTCHA solving, credential stuffing, and stealth are forbidden.
 Human assistance (browser-grade headers, user session, human resolves) is
 allowed with explicit opt-in flags (`--browser-session user|interactive`).
+"Stealth" here means defeating a bot check the site put in your way. Sending
+browser-grade headers or rendering with a hardened fingerprint (203.1, 203.3)
+is not that: it makes an automated read look like an ordinary browser read, and
+neither one solves a challenge. A page that actually challenges you still needs
+`--browser-session user|interactive`, or it stays blocked.
 Built-in public endpoint candidates include GitHub, Reddit, Hacker News,
 Wikipedia, npm, PyPI, arXiv, Bluesky, Mastodon-compatible statuses, Stack
 Exchange, dev.to, DOI/CrossRef, OpenLibrary, Wayback CDX, YouTube oEmbed,
@@ -499,9 +462,8 @@ For Codex:
 agbrowse skills install --target ~/.codex/skills
 ```
 
-The default mode copies the bundled `browser`, `web-ai`, `search`, and
-`vision-click` skill directories. Use `--json` when another agent will parse
-the result:
+The default mode copies the bundled `browser`, `web-ai`, and `vision-click`
+skill directories. Use `--json` when another agent will parse the result:
 
 ```bash
 agbrowse skills install --target ~/.cli-jaw-3460/skills --json
@@ -791,7 +753,8 @@ Initial `errorCode` catalog:
   `provider.runtime-disabled`
 - `capability.unsupported`
 - `session.target-ambiguous`
-- `context.over-budget`, `context.symlink-rejected`
+- `context.over-budget`, `context.symlink-rejected`,
+  `context.transform-invalid`, `context.transform-failed`
 - `grok.context-pack-not-allowed`
 - `internal.unhandled`
 
@@ -846,6 +809,11 @@ Model aliases:
 | `pro` | selected family + flat `Pro` row; omit effort |
 | `--effort medium\|high\|xhigh` | `Medium` / `High` / `Extra High` |
 | `--family gpt-5.6-sol\|gpt-5.5\|o3` | Current Chat family aliases; omit to preserve current UI family |
+
+`--family` is ChatGPT-only and does not change the checked tier. `--effort`
+without `--model` or `--family` applies to the current ChatGPT tier; it fails
+with `provider.model-mismatch` when that tier is Pro because Pro has no effort
+control. Gemini and Grok still require `--model` with effort.
 
 Legacy effort normalization: `light|standard → medium`, `extended → high` (one
 stderr warning), `heavy → xhigh`. Legacy Pro effort resolves to flat Pro and
@@ -1135,16 +1103,48 @@ replace, and clear operations are intentionally unsupported.
 Use context packages when the prompt plus files would be too large or when you
 want untrusted file content separated from the main instruction block.
 
-Upload transport writes one `web-ai-context-package-<id>.zip` archive. The
+Raw upload transport writes one `web-ai-context-package-<id>.zip` archive. The
 archive contains `CONTEXT_PACKAGE.md` plus the selected source files; do not
 create a temporary `.txt` or `.md` file yourself for source context.
 
-> Use ChatGPT or Gemini for context packaging. Grok context packages **fail
-> closed** by default — `web-ai send/query --vendor grok` with
+Context files use `--context-transform raw` by default. Omitting the option and
+passing `raw` are equivalent: selected file content is rendered and archived
+without transformation, and Repomix is not required or loaded.
+
+`--context-transform repomix` instead runs Repomix with its effective project,
+global, or built-in configuration and uploads the generated output file
+directly; ChatGPT and Gemini upload every `output.splitOutput` part in Repomix
+order.
+Without `--context-from-files` or `--context-file`, Repomix packs the current
+working directory. With either selector, the selected cwd-contained source
+files are the upper bound passed to Repomix; this selector-safe path requires
+Repomix 1.0.0 or newer. Repomix's ignore, processor, pattern, and other output
+settings still apply. Configured instruction text, Git diff/log sections, and
+processor output may therefore add non-source content to the artifact. Inline
+transport reads the generated parts in order and applies the existing context
+budgets.
+
+agbrowse first resolves a project-local Repomix package, then the package behind
+the `repomix` executable on `PATH`; it never installs or downloads Repomix. The
+configured output basename is preserved in an agbrowse-managed staging
+directory. `output.copyToClipboard` is disabled; other effective output content
+settings are preserved. `output.stdout` is also disabled because agbrowse needs
+a file artifact to upload. The active Repomix version must support the config and
+the current Node.js runtime.
+
+> Trust warning: opting into Repomix executes local/global JavaScript or
+> TypeScript config and configured `input.processors` with the same privileges
+> as a local Repomix CLI run. Review untrusted repositories before using it.
+
+> Use ChatGPT or Gemini for provider-bound context packaging. Grok context
+> packages **fail closed** by default — `web-ai send/query --vendor grok` with
 > `--context-from-files` / `--context-file` / `--context-transport upload`
 > throws with `stage: 'grok-context-pack-not-allowed'`. Pass
-> `--allow-grok-context-pack` to override deliberately; the runtime still
-> emits `grok-context-pack-not-recommended` when the override is used.
+> `--allow-grok-context-pack` to override deliberately for raw context only;
+> the runtime still emits `grok-context-pack-not-recommended` when the override
+> is used. `web-ai render/send/query/code --vendor grok` explicitly rejects
+> Repomix. The provider-neutral `context-render` and `context-dry-run` utilities
+> only build or inspect the package and do not imply live Grok support.
 
 Dry run:
 
@@ -1155,6 +1155,9 @@ agbrowse web-ai context-dry-run \
   --context-from-files "web-ai/*.mjs" \
   --json
 ```
+
+Add `--context-transform repomix` to build the exact staged artifact during a
+dry run before using the same configuration in a live context command.
 
 Live upload:
 
@@ -1255,6 +1258,7 @@ the target host before mutation.
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `CDP connection failed` | Chrome is not running on the selected port | `agbrowse start` |
+| `command not found: agbrowse` right after install | the shell session predates the install, or npm's global bin dir is not on `PATH` | open a new terminal tab (or run `rehash`); confirm the shim with `ls "$(npm prefix -g)/bin/agbrowse"` and make sure that bin dir is on `PATH` |
 | port in use but not CDP | another process owns `9222` | choose `CDP_PORT=9333` or stop the process |
 | provider says sign in | profile is not logged in | open the provider URL and log in manually |
 | wrong tab was used | stale active target | run `tabs`, then `tab-switch <targetId>` |

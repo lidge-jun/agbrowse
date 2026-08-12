@@ -7,12 +7,16 @@ import {
     generateSessionId,
     insertSession,
     listStoredSessions,
+    listStoredSessionsAsync,
+    mutateSessionAsync,
+    DEADLINE_PASSED,
     patchSession,
     pruneSessions,
 } from './session-store.mjs';
 import { normalizeChatGptModelChoice } from './chatgpt-model.mjs';
 import { normalizeGrokModelChoice } from './grok-model.mjs';
 import { normalizeGeminiModelChoice, isGeminiDeepThinkChoice } from './gemini-model.mjs';
+import { isDurableConversationUrl } from './conversation-url.mjs';
 
 /**
  * @typedef {import('./session-store.mjs').WebAiSession} WebAiSession
@@ -53,8 +57,28 @@ import { normalizeGeminiModelChoice, isGeminiDeepThinkChoice } from './gemini-mo
 
 /** @type {Map<string, WebAiBaseline>} */
 const baselines = new Map();
-let loaded = false;
-const STORE_PATH = join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-baselines.json');
+/**
+ * The path the in-memory map was loaded from, or null when nothing is loaded.
+ *
+ * Keyed by path rather than a plain `loaded` flag: the map is module-global, so
+ * a boolean let rows loaded under one `BROWSER_AGENT_HOME` answer reads under a
+ * different one — and the next save copied both homes' rows into whichever was
+ * current. Tests that switch homes saw the previous home's baselines.
+ *
+ * @type {string|null}
+ */
+let loadedFrom = null;
+/**
+ * Resolved per call, not at import. A frozen constant captured whatever
+ * `BROWSER_AGENT_HOME` held at first import, so a test pointing the variable at
+ * a temp directory in its body still read and wrote baselines under the
+ * developer's real `~/.browser-agent` — static imports run before test bodies.
+ *
+ * @returns {string}
+ */
+function storePath() {
+    return join(process.env.BROWSER_AGENT_HOME || join(homedir(), '.browser-agent'), 'web-ai-baselines.json');
+}
 
 /**
  * @param {WebAiEnvelope} envelope
@@ -153,11 +177,15 @@ export function clearBaseline(vendor, url) {
 }
 
 function loadStore() {
-    if (loaded) return;
-    loaded = true;
-    if (!existsSync(STORE_PATH)) return;
+    const path = storePath();
+    if (loadedFrom === path) return;
+    // The home changed under us. Drop the other home's rows instead of merging
+    // them into this one.
+    baselines.clear();
+    loadedFrom = path;
+    if (!existsSync(path)) return;
     try {
-        const parsed = JSON.parse(readFileSync(STORE_PATH, 'utf8'));
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
         for (const baseline of parsed.baselines || []) {
             if (baseline.vendor && baseline.url) baselines.set(makeBaselineKey(baseline.vendor, baseline.url), baseline);
         }
@@ -167,8 +195,9 @@ function loadStore() {
 }
 
 function saveStore() {
-    mkdirSync(dirname(STORE_PATH), { recursive: true });
-    writeFileSync(STORE_PATH, `${JSON.stringify({ baselines: Array.from(baselines.values()) }, null, 2)}\n`);
+    const path = storePath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ baselines: Array.from(baselines.values()) }, null, 2)}\n`);
 }
 
 // ─── Phase 1 PR1: session API on top of session-store.mjs ─────────────────
@@ -183,10 +212,15 @@ function saveStore() {
  */
 export function createSession(envelope, meta = {}) {
     const now = new Date().toISOString();
+    const vendor = envelope?.vendor || meta.vendor || null;
+    const observedConversationUrl = meta.conversationUrl || meta.originalUrl || null;
+    const conversationUrl = vendor === 'chatgpt'
+        ? (isDurableConversationUrl(observedConversationUrl) ? observedConversationUrl : null)
+        : observedConversationUrl;
     /** @type {WebAiSession} */
     const session = {
         sessionId: generateSessionId(),
-        vendor: envelope?.vendor || meta.vendor || null,
+        vendor,
         createdAt: now,
         updatedAt: now,
         deadlineAt: meta.deadlineAt || null,
@@ -199,7 +233,7 @@ export function createSession(envelope, meta = {}) {
             closeCount: 0,
         },
         originalUrl: meta.originalUrl || null,
-        conversationUrl: meta.conversationUrl || meta.originalUrl || null,
+        conversationUrl,
         promptHash: `sha256:${hashPrompt(envelope || {})}`,
         envelopeSummary: meta.envelopeSummary || {},
         status: 'sent',
@@ -222,7 +256,59 @@ export function createSession(envelope, meta = {}) {
  * @returns {WebAiSession|null}
  */
 export function updateSession(sessionId, patch = {}) {
-    return patchSession(sessionId, { ...patch, updatedAt: new Date().toISOString() });
+    const current = getSession(sessionId);
+    if (!current) return null;
+    const nextPatch = { ...patch };
+    if (
+        current.vendor === 'chatgpt' &&
+        Object.hasOwn(nextPatch, 'conversationUrl') &&
+        !isDurableConversationUrl(/** @type {string|null|undefined} */ (nextPatch.conversationUrl))
+    ) {
+        delete nextPatch.conversationUrl;
+    }
+    return patchSession(sessionId, { ...nextPatch, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Compute the effective patch for a session update against the CURRENT row.
+ *
+ * Shared by the sync and async forms so the ChatGPT conversation-URL filter
+ * cannot drift between them: a non-durable URL is dropped from the patch no
+ * matter which lock the write goes through.
+ *
+ * @param {WebAiSession} current
+ * @param {Partial<WebAiSession> & Record<string, unknown>} patch
+ * @returns {Partial<WebAiSession> & Record<string, unknown>}
+ */
+function buildSessionPatch(current, patch) {
+    const nextPatch = { ...patch };
+    if (
+        current.vendor === 'chatgpt' &&
+        Object.hasOwn(nextPatch, 'conversationUrl') &&
+        !isDurableConversationUrl(/** @type {string|null|undefined} */ (nextPatch.conversationUrl))
+    ) {
+        delete nextPatch.conversationUrl;
+    }
+    return { ...nextPatch, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * The awaited, deadline-aware form of {@link updateSession}.
+ *
+ * The sync form reads, decides, then takes the blocking lock — so its decision
+ * is made against a row that can change while the lock is waited for, and the
+ * wait itself stops the event loop. Here both the decision and the write
+ * happen inside the awaited lock, and `stillActive` is re-checked once the
+ * lock is held: a caller whose deadline passed during the wait gets
+ * `DEADLINE_PASSED` back and nothing is written.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & Record<string, unknown>} [patch]
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function updateSessionAsync(sessionId, patch = {}, stillActive) {
+    return mutateSessionAsync(sessionId, (current) => buildSessionPatch(current, patch), stillActive);
 }
 
 /**
@@ -235,6 +321,20 @@ export function updateSession(sessionId, patch = {}) {
 export function markSessionTimeout(sessionId, patch = {}) {
     const session = getSession(sessionId);
     if (!session) return null;
+    return updateSession(sessionId, buildTimeoutPatch(session, patch));
+}
+
+/**
+ * Decide what a timeout write should actually record, given the current row.
+ *
+ * Kept separate so the sync and async timeout paths share one rule: completed
+ * evidence is never downgraded to `timeout`, only annotated.
+ *
+ * @param {WebAiSession} session
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} patch
+ * @returns {Partial<WebAiSession> & Record<string, unknown>}
+ */
+function buildTimeoutPatch(session, patch) {
     const { warning, warnings: patchWarnings, ...sessionPatch } = patch;
     const warnings = mergeWarnings(session.warnings || [], patchWarnings || [], warning);
     const hasCompletedEvidence = session.status === 'complete' ||
@@ -242,17 +342,40 @@ export function markSessionTimeout(sessionId, patch = {}) {
         Boolean(session.completedAt) ||
         Boolean(session.answer);
     if (hasCompletedEvidence) {
-        return updateSession(sessionId, {
+        return {
             warnings: mergeWarnings(warnings, ['timeout-after-complete-ignored']),
             status: session.status === 'completed' ? 'completed' : 'complete',
-        });
+        };
     }
-    return updateSession(sessionId, {
-        ...sessionPatch,
-        status: 'timeout',
-        warnings,
-    });
+    return { ...sessionPatch, status: 'timeout', warnings };
 }
+
+/**
+ * The awaited, deadline-aware form of {@link markSessionTimeout}.
+ *
+ * The completed-evidence decision is made against the row read INSIDE the
+ * lock — the sync form decides before acquiring, so a run that completed while
+ * the lock was waited for could still be downgraded. `stillActive` follows the
+ * same post-lock contract as {@link updateSessionAsync}. Note the predicate
+ * semantics for timeout bookkeeping: the write that RECORDS an expiry is
+ * usually made by the run that owns the outcome, so callers pass a predicate
+ * only when this write belongs to a run that can lose a race (a detached
+ * loser must not write), not for the authoritative timeout record itself.
+ *
+ * @param {string} sessionId
+ * @param {Partial<WebAiSession> & { warnings?: unknown[], warning?: unknown, lastError?: unknown }} [patch]
+ * @param {() => boolean} [stillActive]
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function markSessionTimeoutAsync(sessionId, patch = {}, stillActive) {
+    return mutateSessionAsync(
+        sessionId,
+        (current) => buildSessionPatch(current, buildTimeoutPatch(current, patch)),
+        stillActive,
+    );
+}
+
+export { DEADLINE_PASSED };
 
 /**
  * @param {unknown[]} base
@@ -296,6 +419,33 @@ export function listSessions(filter = {}) {
 export function findActiveSession({ vendor, targetId, conversationUrl } = {}) {
     if (!vendor) return null;
     const active = listStoredSessions({ vendor, active: true });
+    return pickActiveSession(active, { targetId, conversationUrl });
+}
+
+/**
+ * The same lookup, awaited instead of blocked on.
+ *
+ * The synchronous form reads under a lock whose wait stops the event loop, so
+ * a caller holding a hard deadline stops counting time while it runs. Callers
+ * under a poll deadline must use this one.
+ *
+ * @param {{ vendor?: string, targetId?: string|null, conversationUrl?: string|null }} [query]
+ * @returns {Promise<WebAiSession|null>}
+ */
+export async function findActiveSessionAsync({ vendor, targetId, conversationUrl } = {}) {
+    if (!vendor) return null;
+    const active = await listStoredSessionsAsync({ vendor, active: true });
+    return pickActiveSession(active, { targetId, conversationUrl });
+}
+
+/**
+ * Selection order, shared so the sync and async forms cannot diverge.
+ *
+ * @param {WebAiSession[]} active
+ * @param {{ targetId?: string|null, conversationUrl?: string|null }} query
+ * @returns {WebAiSession|null}
+ */
+function pickActiveSession(active, { targetId, conversationUrl }) {
     if (active.length === 0) return null;
     if (targetId) {
         const byTarget = active.find((s) => s.targetId && s.targetId === targetId);
@@ -458,6 +608,111 @@ export function resolveTimeoutDefaultSec(input = {}, vendor = 'chatgpt') {
 }
 
 /**
+ * The stored deadline's remaining time in milliseconds, or null when the
+ * session carries no parseable deadline.
+ *
+ * Separate from `resolveTimeoutBudgetSec` because that function answers a
+ * different question. It returns a POLLING BUDGET in whole seconds and floors
+ * it at one, which keeps a nearly-expired session from being handed a budget
+ * too small to do anything with — deliberate, and covered by its own tests.
+ *
+ * A hard deadline is not a budget. Rounding it up means the bound the caller
+ * was promised can be overshot: 500ms left becomes 1000ms, and an already
+ * expired deadline becomes a fresh second. Callers enforcing a strict bound
+ * need the real remainder, including when it is zero or negative.
+ *
+ * @param {WebAiSession|null} [session]
+ * @param {number} [nowMs]
+ * @returns {number|null}
+ */
+export function storedDeadlineRemainderMs(session = null, nowMs = Date.now()) {
+    const storedDeadlineMs = Date.parse(String(session?.deadlineAt || ''));
+    if (!Number.isFinite(storedDeadlineMs)) return null;
+    return storedDeadlineMs - nowMs;
+}
+
+/**
+ * The timeout envelope for a session whose stored deadline has already passed,
+ * or null when it still has time.
+ *
+ * Re-reads the session by id rather than trusting a snapshot. Every caller
+ * checks this twice: once before taking the session command lock, and again
+ * after — the lock retries 200 times at 25ms, so a session with 150ms left can
+ * expire *while waiting for it*, and the pre-lock check alone let that run open
+ * a tab. Reading a stale snapshot inside the lock would reproduce the same gap.
+ *
+ * Shaped to match the providers' own hard-timeout envelope
+ * (`chatgpt.mjs` buildHardTimeoutResult) so a caller cannot tell the fast path
+ * apart by its fields.
+ *
+ * @param {string} sessionId
+ * @param {string} [fallbackVendor]
+ * @param {number} [nowMs] explicit clock for deterministic tests; otherwise
+ *   sampled AFTER the store read
+ * @returns {Record<string, unknown>|null}
+ */
+export function expiredSessionTimeoutResult(sessionId, fallbackVendor = 'chatgpt', nowMs = undefined) {
+    const session = getSession(sessionId);
+    if (!session) return null;
+    // Sampled AFTER the read, not as a default parameter. `getSession` takes
+    // the store lock, which retries and can block for seconds; a clock read
+    // before it would compare a fresh session against a stale time and let an
+    // already-expired session through. A caller-supplied `nowMs` still wins so
+    // tests stay deterministic.
+    const effectiveNowMs = nowMs === undefined ? Date.now() : nowMs;
+    const remainderMs = storedDeadlineRemainderMs(session, effectiveNowMs);
+    if (remainderMs === null || remainderMs > 0) return null;
+    return {
+        ok: false,
+        vendor: session.vendor || fallbackVendor,
+        status: 'timeout',
+        sessionId: session.sessionId,
+        conversationUrl: session.conversationUrl || session.originalUrl || undefined,
+        answerText: '',
+        usedFallbacks: [],
+        warnings: ['poll-deadline-exceeded'],
+        recoverable: true,
+        errorCode: 'provider.poll-timeout',
+        retryHint: 'poll-or-resume',
+        error: 'timed out waiting for answer',
+    };
+}
+
+/**
+ * The timeout to hand a provider poll, in seconds, never outliving the stored
+ * deadline.
+ *
+ * Every entry point that resumes an existing session needs this, and each one
+ * got it wrong differently. Resolving a budget and passing it down floored the
+ * remainder to a whole second, which reads to the provider as an explicit
+ * `--timeout` the user typed. Omitting it instead is only safe for ChatGPT,
+ * whose wrapper reads `deadlineAt` itself — Gemini and Grok fall back to their
+ * own 1200s and 600s defaults (`gemini-live.mjs:646`, `grok-live.mjs:277`), so
+ * omitting turns a 400ms remainder into twenty minutes.
+ *
+ * Fractional by design. Returning whole seconds is what let a sub-second
+ * remainder round up past the deadline it was supposed to enforce.
+ *
+ * @param {WebAiEnvelope} [input] the caller's own request; an explicit timeout wins
+ * @param {WebAiSession|null} [session]
+ * @param {string} [vendor]
+ * @param {number} [nowMs]
+ * @returns {number} seconds, > 0; approaches zero as the deadline arrives
+ */
+export function resolvePollTimeoutSec(input = {}, session = null, vendor = 'chatgpt', nowMs = Date.now()) {
+    const explicitSec = Number(input.timeout);
+    const requestedSec = Number.isFinite(explicitSec) && explicitSec > 0
+        ? explicitSec
+        : resolveTimeoutBudgetSec(input, session, vendor, nowMs);
+    const remainderMs = storedDeadlineRemainderMs(session, nowMs);
+    if (remainderMs === null) return requestedSec;
+    // Never zero or negative: a provider reads that as "no budget" and some
+    // floor it back up. Callers that must refuse an expired session check the
+    // remainder themselves — this function's job is only to not exceed it.
+    return Math.max(0.001, Math.min(requestedSec, remainderMs / 1000));
+}
+
+/**
  * Resolve one polling budget in seconds.
  * Priority: explicit timeout -> stored deadline remainder -> tier/vendor default.
  * @param {WebAiEnvelope} [input]
@@ -491,7 +746,30 @@ export function resolveTimeoutBudgetSec(
 
 /**
  * @param {WebAiEnvelope} [input]
- * @param {{ files?: unknown[], transport?: string } | null} [contextPack]
+ * @param {{ files?: unknown[], transport?: string, contextTransform?: string, attachments?: unknown[], repomix?: Record<string, unknown> } | null} [contextPack]
+ * @returns {Record<string, unknown>}
+ */
+/**
+ * The file artifact policy in force for this call.
+ *
+ * Monotonic on purpose: a stored `require-all` is NOT relaxed by a later poll
+ * that omits the flag. Letting one forgetful invocation downgrade the session
+ * would make the requirement advisory rather than a contract.
+ *
+ * @param {{ fileArtifactPolicy?: string }} [input]
+ * @param {{ envelopeSummary?: Record<string, unknown> } | null} [session]
+ * @returns {'best-effort'|'require-all'}
+ */
+export function resolveFileArtifactPolicy(input = {}, session = null) {
+    const stored = session?.envelopeSummary?.fileArtifactPolicy;
+    return input.fileArtifactPolicy === 'require-all' || stored === 'require-all'
+        ? 'require-all'
+        : 'best-effort';
+}
+
+/**
+ * @param {WebAiEnvelope} [input]
+ * @param {{ files?: unknown[], transport?: string, contextTransform?: string, attachments?: unknown[], repomix?: Record<string, unknown> } | null} [contextPack]
  * @returns {Record<string, unknown>}
  */
 export function summarizeEnvelope(input = {}, contextPack = null) {
@@ -499,9 +777,17 @@ export function summarizeEnvelope(input = {}, contextPack = null) {
     const summary = {};
     if (input.model) summary.model = input.model;
     if (input.attachmentPolicy) summary.attachmentPolicy = input.attachmentPolicy;
+    // Persisted so a later poll/watch/resume inherits the requirement the send
+    // was given: the flag is not repeated on those commands.
+    if (input.fileArtifactPolicy === 'require-all') summary.fileArtifactPolicy = 'require-all';
     if (input.filePath) summary.filePath = input.filePath;
     if (contextPack?.files?.length) summary.fileCount = contextPack.files.length;
     if (contextPack?.transport) summary.contextTransport = contextPack.transport;
+    if (contextPack?.contextTransform === 'repomix') {
+        summary.contextTransform = 'repomix';
+        if (contextPack.attachments?.length) summary.contextAttachmentCount = contextPack.attachments.length;
+        if (contextPack.repomix) summary.repomix = contextPack.repomix;
+    }
     return summary;
 }
 

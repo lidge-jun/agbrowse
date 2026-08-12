@@ -177,20 +177,30 @@ describe.sequential('research CLI', () => {
     });
 
     it('fails missing arguments before browser mutation', async () => {
-        const missingQuery = await execBrowser(['research', 'plan', '--json']);
-        expect(missingQuery.code).not.toBe(0);
-        expect(missingQuery.stderr).toContain('research plan --query <problem>');
+        // Under --json these now emit the failure envelope on stdout rather
+        // than plaintext usage on stderr. This test previously asserted the
+        // plaintext form while passing --json, which is the contract violation
+        // Q12 recorded; the usage text is still carried, as the envelope's
+        // message.
+        const cases = [
+            [['research', 'plan', '--json'], 'research plan --query <problem>'],
+            [['research', 'normalize-results', '--json'], 'research normalize-results --file <json>'],
+            [['research', 'enrich-fetch', '--json'], 'research enrich-fetch --plan <json> --results <json>'],
+            [['research', 'browse-plan', '--json'], 'research browse-plan --plan <json> --enrichment <json>'],
+        ];
+        for (const [argv, usage] of cases) {
+            const result = await execBrowser(argv);
+            expect(result.code).not.toBe(0);
+            const envelope = JSON.parse(result.stdout);
+            expect(envelope.ok).toBe(false);
+            expect(envelope.error.errorCode).toBe('input.invalid-arguments');
+            expect(envelope.error.message).toContain(usage);
+        }
+    });
 
-        const missingFile = await execBrowser(['research', 'normalize-results', '--json']);
-        expect(missingFile.code).not.toBe(0);
-        expect(missingFile.stderr).toContain('research normalize-results --file <json>');
-
-        const missingEnrich = await execBrowser(['research', 'enrich-fetch', '--json']);
-        expect(missingEnrich.code).not.toBe(0);
-        expect(missingEnrich.stderr).toContain('research enrich-fetch --plan <json> --results <json>');
-
-        const missingBrowsePlan = await execBrowser(['research', 'browse-plan', '--json']);
-        expect(missingBrowsePlan.code).not.toBe(0);
-        expect(missingBrowsePlan.stderr).toContain('research browse-plan --plan <json> --enrichment <json>');
+    it('keeps plaintext usage when --json is absent', async () => {
+        const result = await execBrowser(['research', 'plan']);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('research plan --query <problem>');
     });
 });

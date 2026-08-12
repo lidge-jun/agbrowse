@@ -32,12 +32,20 @@ export function appendAttempt(trace, attempt) {
 /**
  * @param {object[]} attempts
  */
-export function summarizeAttempts(attempts = []) {
+export function summarizeAttempts(attempts = [], outcome = null) {
     if (attempts.length === 0) return 'No attempts recorded.';
+    // The ladder returns the BEST candidate, not the last lane it tried, so the
+    // last attempt is simply a different axis. Summarizing it reported
+    // `verdict=discovered` for a URL nothing fetched, and `browser_required`
+    // for a fetch that actually returned `weak_ok` from an earlier rung.
+    // When the caller knows what it returned, say that.
+    if (outcome?.source || outcome?.verdict) {
+        return `${attempts.length} attempt(s); selected source=${outcome.source || 'unknown'}`
+            + ` verdict=${outcome.verdict || 'unknown'}`;
+    }
     const last = attempts[attempts.length - 1];
-    const source = /** @type {any} */ (last).source || 'unknown';
-    const verdict = /** @type {any} */ (last).verdict || 'unknown';
-    return `${attempts.length} attempt(s); last source=${source} verdict=${verdict}`;
+    return `${attempts.length} attempt(s); last source=${/** @type {any} */ (last).source || 'unknown'}`
+        + ` verdict=${/** @type {any} */ (last).verdict || 'unknown'}`;
 }
 
 /**
@@ -59,4 +67,3 @@ export function sanitizeAttempt(attempt) {
     }
     return safe;
 }
-

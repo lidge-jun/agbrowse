@@ -4,6 +4,7 @@
 // (Chat Intelligence picker) or chatgpt-composer.mjs global fallbacks.
 
 import { WebAiError } from './errors.mjs';
+import { monotonicNowMs, withPollDeadline } from './poll-deadline.mjs';
 import {
     STOP_BUTTON_SELECTOR,
     CONVERSATION_TURN_SELECTOR,
@@ -11,7 +12,9 @@ import {
 import {
     detectChatGptComposerSurface,
     detectChatGptWorkAvailability,
+    workSurfaceUnsupportedError,
 } from './product-surfaces.mjs';
+import { probeStopButton, scopeToMainRegion } from './chatgpt-response-dom.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
 
@@ -280,6 +283,80 @@ export async function ensureWorkSurface(page) {
             errorCode: 'provider.work-state-unknown',
             stage: 'provider-work-preflight',
             message: `Work surface not active after click (post-state: ${postDetection.surface})`,
+            retryHint: 'reload-page',
+            evidence: postDetection,
+        });
+    }
+
+    return { switched: true, detection: postDetection };
+}
+
+/**
+ * Ensure the CHAT surface is active. Mirror of `ensureWorkSurface`.
+ *
+ * NEVER called implicitly — only from an explicit caller opt-in, because
+ * switching a user's composer out of Work is a visible side effect they must
+ * ask for. That opt-in is the whole reason G16 could finally be implemented:
+ * the objection was never to the capability, only to doing it silently.
+ *
+ * @param {any} page
+ * @returns {Promise<{ switched: boolean, detection: import('./product-surfaces.mjs').ComposerSurfaceDetection }>}
+ */
+export async function ensureChatSurface(page) {
+    const detection = await detectChatGptComposerSurface(page);
+
+    if (detection.surface === 'chat') return { switched: false, detection };
+
+    // A conversation page has no toggle to click: normalizing there would mean
+    // navigating away from the user's conversation, which is a different and
+    // much larger action. Fail closed with the existing typed error instead.
+    if (detection.ui === 'legacy') {
+        throw workSurfaceUnsupportedError({
+            surface: detection.surface || 'conversation',
+            evidence: detection,
+        });
+    }
+
+    if (detection.surface === 'ambiguous') {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: 'Cannot ensure Chat surface: ambiguous surface state',
+            retryHint: 'reload-page',
+            evidence: detection,
+        });
+    }
+
+    // detection.surface === 'work' — click the Chat radio.
+    const { CHATGPT_SURFACE_RADIO_SELECTOR } = await import('./chatgpt-model.mjs');
+    const radios = page.locator(CHATGPT_SURFACE_RADIO_SELECTOR);
+    const count = await radios.count().catch(() => 0);
+    let clicked = false;
+    for (let i = 0; i < count; i++) {
+        const el = radios.nth(i);
+        const text = (await el.textContent().catch(() => '') || '').trim();
+        if (/^chat$/i.test(text)) {
+            await el.click({ timeout: 5000 });
+            clicked = true;
+            break;
+        }
+    }
+
+    if (!clicked) {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: 'Chat radio button not found for click',
+            retryHint: 'reload-page',
+        });
+    }
+
+    const postDetection = await detectChatGptComposerSurface(page);
+    if (postDetection.surface !== 'chat') {
+        throw new WebAiError({
+            errorCode: 'provider.work-state-unknown',
+            stage: 'provider-work-preflight',
+            message: `Chat surface not active after click (post-state: ${postDetection.surface})`,
             retryHint: 'reload-page',
             evidence: postDetection,
         });
@@ -670,6 +747,10 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
     const deadline = Date.now() + commitTimeout;
     const normalizedPrompt = prompt.toLowerCase().replace(/\s+/g, ' ').trim();
     const promptPrefix = normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 120));
+    // Sticky across ticks: if the stop button was ever unreadable, neither a
+    // later success nor a timeout should claim it was checked.
+    /** @type {'visible'|'absent'|'unknown'|null} */
+    let lastStopProbe = null;
 
     while (Date.now() <= deadline) {
         const turnLocators = await page.locator(CONVERSATION_TURN_SELECTOR).all().catch(() => []);
@@ -687,8 +768,14 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
             }
         }
 
-        const stopVisible = await page.locator('button[aria-label*="Stop" i]').first()
-            .isVisible().catch(() => false);
+        // Composer-scoped and main-scoped: a page-wide "Stop"-labelled control
+        // (dictation, sidebar) is not running evidence.
+        const stopProbe = await probeStopButton(scopeToMainRegion(page));
+        const stopVisible = stopProbe === 'visible';
+        // Not running evidence — an unreadable probe proves nothing. But record
+        // it, so a commit that succeeded on other evidence, or a timeout, says
+        // whether the stop button was ever actually checked.
+        if (stopProbe === 'unknown') lastStopProbe = 'unknown';
         const thinkingEl = page.getByText?.('Thinking', { exact: false });
         const thinkingVisible = thinkingEl
             ? await thinkingEl.first().isVisible().catch(() => false)
@@ -726,7 +813,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
                     taskUrl: null,
                     taskId: null,
                     turnsCount: turnLocators.length,
-                    warnings,
+                    warnings: withStopProbeWarning(warnings, lastStopProbe),
                 };
             }
 
@@ -735,7 +822,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
                 taskUrl: resolvedUrl,
                 taskId: taskId,
                 turnsCount: turnLocators.length,
-                warnings,
+                warnings: withStopProbeWarning(warnings, lastStopProbe),
             };
         }
 
@@ -752,6 +839,7 @@ export async function submitWorkPrompt(page, prompt, options = {}) {
             commitTimeoutMs: commitTimeout,
             baselineUrl,
             currentUrl: typeof page.url === 'function' ? page.url() : null,
+            stopProbe: lastStopProbe,
         },
     });
 }
@@ -799,22 +887,100 @@ const WORK_POLL_HEARTBEAT_SEC = 30;
  * @returns {Promise<Record<string, unknown>>}
  */
 export async function pollWorkSession(deps, input = {}) {
-    const { getSession, updateSession, resolveTimeoutBudgetSec } = await import('./session.mjs');
+    // Thin wrapper over a hard deadline. The loop below checks the clock only
+    // BETWEEN awaited browser probes, so one never-settling probe defeated
+    // `--timeout` outright — measured still-pending at 152ms against a 50ms
+    // budget. A stalled probe cannot be cancelled; the race is what stops the
+    // CALLER waiting on it.
+    const { resolvePollTimeoutSec: resolveBudgetSec } = await import('./session.mjs');
+    const startedAt = Date.now();
+    const monotonicStart = monotonicNowMs();
+    const wrapperVendor = input.vendor || 'chatgpt';
+    const wrapperSessionId = input.session || input.sessionId;
+    // No store read before the race is armed. The blocking `getSession` waits
+    // in a way that stops the event loop; even the async read costs
+    // real wall time, and a contended store made the poll seconds late on a 1s
+    // budget — the same unbounded failure the race exists to prevent. The
+    // budget therefore comes from the caller's own timeout when given, and the
+    // stored deadline is consulted inside the run.
+    const wrapperTimeoutMs = resolveBudgetSec(input, null, wrapperVendor) * 1000;
+    /** @type {{ page: any, session: any }} */
+    const ctx = { page: null, session: null };
+    return withPollDeadline(
+        (hardDeadline, token) => runPollWorkSession(deps, input, ctx, token),
+        {
+            startedAt,
+            monotonicStartMs: monotonicStart,
+            timeoutMs: wrapperTimeoutMs,
+            // The SAME builder the loop's own timeout uses: a second envelope
+            // here is how `surface` and `responseContract` would go missing.
+            onExpired: () => buildWorkTimeoutResult(wrapperVendor, wrapperSessionId, ctx),
+        },
+    );
+}
+
+/**
+ * The Work timeout envelope. Shared by the loop's natural timeout and the
+ * outer race so the two cannot drift apart in shape.
+ *
+ * @param {string} vendor
+ * @param {string|undefined} sessionId
+ * @param {{ page: any }} ctx
+ */
+function buildWorkTimeoutResult(vendor, sessionId, { page, session }) {
+    return {
+        ok: false,
+        status: 'timeout',
+        vendor,
+        sessionId: sessionId || null,
+        answerText: null,
+        conversationUrl: typeof page?.url === 'function' ? page.url() : (session?.conversationUrl || null),
+        surface: 'work',
+        responseContract: 'work',
+        warnings: ['work-poll-timeout'],
+    };
+}
+
+/**
+ * @param {any} deps
+ * @param {any} input
+ * @param {{ page: any }} ctx
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function runPollWorkSession(deps, input = {}, ctx = { page: null, session: null }, runToken = null) {
+    // False once the caller has been answered — see gemini-live.mjs.
+    const stillActive = () => isWorkRunActive(runToken);
+    const { updateSessionAsync, resolvePollTimeoutSec } = await import('./session.mjs');
 
     const vendor = input.vendor || 'chatgpt';
     const sessionId = input.session || input.sessionId;
-    const session = sessionId ? getSession(sessionId) : null;
+    // Read ASYNCHRONOUSLY, inside the race. The blocking `getSession` waits
+    // in a way that stops the event loop: the deadline timer
+    // cannot fire while it waits, so a contended store defeated the bound no
+    // matter how the race was set up.
+    const { readSessionAsync } = await import('./session-store.mjs');
+    const session = sessionId ? await readSessionAsync(sessionId).catch(() => null) : null;
+    ctx.session = session;
 
-    const timeoutSec = Math.max(1,
-        Number(input.timeout) > 0
-            ? Number(input.timeout)
-            : resolveTimeoutBudgetSec(input, session, vendor),
-    );
+    // Not floored at a whole second: this becomes a hard deadline below, and
+    // rounding a sub-second remainder up is how a poll outlives the session it
+    // belongs to. `resolvePollTimeoutSec` already refuses to return zero.
+    const timeoutSec = resolvePollTimeoutSec(input, session, vendor);
     const deadline = Date.now() + timeoutSec * 1000;
+    // The outer race was armed before this session could be read — reading it
+    // first is what put a blocking store lock inside the bound. Hand the real
+    // deadline back now that it is known; `tighten` only ever shortens, so a
+    // stored deadline cannot be used to extend the caller's own timeout.
+    //
+    // `deadline` is ABSOLUTE and already measured from after the read. Passing
+    // the duration instead re-anchored it at the wrapper's start and charged
+    // the read twice, discarding that much of the stored budget.
+    runToken?.tighten?.(deadline);
     const startedAt = Date.now();
     let lastHeartbeat = 0;
 
     const page = await deps.getPage();
+    ctx.page = page;
 
     // If the session's original target is gone, fail closed
     // (04 section 6: no auto-reattach for running tasks in v1)
@@ -849,15 +1015,17 @@ export async function pollWorkSession(deps, input = {}) {
         const state = await readWorkTaskState(page);
 
         if (state.status === 'unknown') {
+            // Gated: a run whose caller already got `timeout` must not start a
+            // new session write when its probe finally settles.
             if (sessionId) {
-                updateSession(sessionId, {
+                await updateSessionAsync(sessionId, {
                     status: 'error',
                     lastError: {
                         errorCode: 'provider.work-state-unknown',
                         message: 'Work task in unrecognized state',
                         evidence: state.evidence,
                     },
-                });
+                }, stillActive);
             }
             throw new WebAiError({
                 errorCode: 'provider.work-state-unknown',
@@ -872,7 +1040,7 @@ export async function pollWorkSession(deps, input = {}) {
             const taskUrl = typeof page.url === 'function' ? page.url() : null;
             const taskId = extractTaskId(taskUrl);
             if (sessionId) {
-                updateSession(sessionId, {
+                await updateSessionAsync(sessionId, {
                     status: 'complete',
                     answer: state.answerText,
                     completedAt: new Date().toISOString(),
@@ -882,7 +1050,7 @@ export async function pollWorkSession(deps, input = {}) {
                         taskId,
                         taskUrl,
                     },
-                });
+                }, stillActive);
             }
             return {
                 ok: true,
@@ -905,33 +1073,47 @@ export async function pollWorkSession(deps, input = {}) {
             lastHeartbeat = now;
         }
 
-        await page.waitForTimeout?.(WORK_POLL_INTERVAL_MS);
+        // Capped by what is left. The loop condition is checked before this
+        // wait, so on a deadline with under 2s remaining the wait itself is
+        // the overrun.
+        await page.waitForTimeout?.(Math.max(1, Math.min(WORK_POLL_INTERVAL_MS, deadline - Date.now())));
     }
 
     // Deadline reached — timeout
     if (sessionId) {
-        const { markSessionTimeout } = await import('./session.mjs');
-        markSessionTimeout(sessionId, {
+        const { markSessionTimeoutAsync } = await import('./session.mjs');
+        await markSessionTimeoutAsync(sessionId, {
             lastError: { errorCode: 'provider.poll-timeout', message: 'Work poll deadline reached' },
             warning: 'work-poll-timeout',
         });
     }
-    return {
-        ok: false,
-        status: 'timeout',
-        vendor,
-        sessionId: sessionId || null,
-        answerText: null,
-        conversationUrl: typeof page.url === 'function' ? page.url() : null,
-        surface: 'work',
-        responseContract: 'work',
-        warnings: ['work-poll-timeout'],
-    };
+    return buildWorkTimeoutResult(vendor, sessionId, ctx);
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isWorkRunActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }
 
 /**
  * @typedef {'running'|'complete'|'unknown'} WorkTaskStatus
  */
+
+/**
+ * Carry a sticky "the stop button was never actually checked" note onto EVERY
+ * success envelope. Applying it to only one of the two return paths let the
+ * unresolved-URL case report a clean commit.
+ *
+ * @param {string[]} warnings
+ * @param {'visible'|'absent'|'unknown'|null} stopProbe
+ * @returns {string[]}
+ */
+function withStopProbeWarning(warnings, stopProbe) {
+    return stopProbe === 'unknown' ? [...warnings, 'work-stop-probe-unverified'] : warnings;
+}
 
 /**
  * Read Work task state from the page.
@@ -943,14 +1125,11 @@ export async function readWorkTaskState(page) {
     // matching is poisoned by sidebar history titles (live 2026-07-10: a
     // conversation named "SMOKE_C3_THINKING_OK" matched getByText('Thinking')
     // and pinned the classifier to running forever).
-    const mainCandidate = page.locator('main');
-    const mainRegion = (mainCandidate && typeof mainCandidate.locator === 'function')
-        ? mainCandidate
-        : page;
-    const stopBtn = mainRegion.locator('button[aria-label*="Stop" i]').first();
-    const stopVisible = await stopBtn.isVisible().catch(() => false);
+    const mainRegion = scopeToMainRegion(page);
+    const stopProbe = await probeStopButton(mainRegion);
+    const stopVisible = stopProbe === 'visible';
 
-    const thinkingEl = mainRegion.getByText?.('Thinking', { exact: true });
+    const thinkingEl = mainRegion?.getByText?.('Thinking', { exact: true });
     const thinkingVisible = thinkingEl ? await thinkingEl.first().isVisible().catch(() => false) : false;
 
     if (stopVisible || thinkingVisible) {
@@ -958,7 +1137,20 @@ export async function readWorkTaskState(page) {
             surface: 'work',
             status: 'running',
             answerText: null,
-            evidence: { stopVisible, thinkingVisible, capturedAt: new Date().toISOString() },
+            evidence: { stopVisible, stopProbe, thinkingVisible, capturedAt: new Date().toISOString() },
+        };
+    }
+
+    // Ordering matters: the Copy check below would otherwise call this complete.
+    // Copy is visible on EARLIER assistant turns too, so an unreadable stop
+    // probe plus a leftover Copy button reads as "finished" while the current
+    // response is still being written.
+    if (stopProbe === 'unknown') {
+        return {
+            surface: 'work',
+            status: 'unknown',
+            answerText: null,
+            evidence: { stopVisible: null, stopProbe, thinkingVisible, capturedAt: new Date().toISOString() },
         };
     }
 
@@ -980,7 +1172,7 @@ export async function readWorkTaskState(page) {
             surface: 'work',
             status: 'complete',
             answerText: answerText ? answerText.trim() : null,
-            evidence: { copyVisible, stopVisible: false, assistantTurnCount: count, capturedAt: new Date().toISOString() },
+            evidence: { copyVisible, stopVisible: false, stopProbe, assistantTurnCount: count, capturedAt: new Date().toISOString() },
         };
     }
 
@@ -989,7 +1181,7 @@ export async function readWorkTaskState(page) {
         surface: 'work',
         status: 'unknown',
         answerText: null,
-        evidence: { stopVisible, thinkingVisible, copyVisible, capturedAt: new Date().toISOString() },
+        evidence: { stopVisible, stopProbe, thinkingVisible, copyVisible, capturedAt: new Date().toISOString() },
     };
 }
 

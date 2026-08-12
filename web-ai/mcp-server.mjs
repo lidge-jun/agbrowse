@@ -11,7 +11,7 @@ import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiSendWebAi, geminiPollWebAi } from './gemini-live.mjs';
 import { grokSendWebAi, grokPollWebAi } from './grok-live.mjs';
 import { runDoctor } from './doctor.mjs';
-import { getSession, resolveTimeoutBudgetSec } from './session.mjs';
+import { getSession, resolvePollTimeoutSec, expiredSessionTimeoutResult } from './session.mjs';
 import {
     captureCopiedResponseText,
     CHATGPT_COPY_SELECTORS,
@@ -25,7 +25,7 @@ import { enforcePolicy } from './policy/enforce.mjs';
 import { applyProviderDefaults } from './policy/default-policy.mjs';
 import { withActiveCommand } from './active-command-store.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
-import { withSessionPage } from './tab-recovery.mjs';
+import { storedDeadlineStillActive, withSessionPageGuarded } from './tab-recovery.mjs';
 import { requireLatestSnapshot, setLatestSnapshot } from './mcp-state.mjs';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -331,8 +331,19 @@ async function runMcpSessionPoll(name, args, deps) {
     const stored = getSession(sessionId);
     if (!stored) throw new Error(`no session record for ${sessionId}`);
     providerFromArgs({ provider: args.provider || args.vendor || stored.vendor || 'chatgpt' });
-    return withSessionCommandLock(sessionId, () =>
-        withSessionPage(deps, sessionId, async ({ page, targetId, session }) => {
+    // Refuse an expired session before resolving its page. The poll clamp keeps
+    // a positive minimum so providers cannot read it as "no budget", so without
+    // this an expired session still opens a tab and takes at least one probe.
+    const mcpFallbackVendor = args.provider || args.vendor || 'chatgpt';
+    const expiredBeforeLock = expiredSessionTimeoutResult(sessionId, mcpFallbackVendor);
+    if (expiredBeforeLock) return expiredBeforeLock;
+    return withSessionCommandLock(sessionId, () => {
+        // Re-checked inside the lock: acquiring it retries 200 times at 25ms,
+        // so a nearly-expired session can pass the check above and expire
+        // before the page is ever resolved.
+        const expiredInLock = expiredSessionTimeoutResult(sessionId, mcpFallbackVendor);
+        if (expiredInLock) return expiredInLock;
+        return withSessionPageGuarded(deps, sessionId, async ({ page, targetId, session }) => {
             const provider = providerFromArgs({ provider: session.vendor || stored.vendor || args.provider || args.vendor || 'chatgpt' });
             const sessionDeps = {
                 ...deps,
@@ -352,15 +363,19 @@ async function runMcpSessionPoll(name, args, deps) {
                     ...args,
                     vendor: session.vendor || provider,
                     session: session.sessionId,
-                    timeout: resolveTimeoutBudgetSec(
+                    // Clamped to the stored deadline, fractional. A plain budget
+                    // floored the remainder to a whole second and read as an
+                    // explicit override; omitting it would hand Gemini and Grok
+                    // their own multi-minute defaults instead.
+                    timeout: resolvePollTimeoutSec(
                         args,
                         session,
                         session.vendor || provider,
                     ),
                 });
             });
-        }),
-    );
+        }, { stillActive: storedDeadlineStillActive(stored) });
+    });
 }
 
 /**

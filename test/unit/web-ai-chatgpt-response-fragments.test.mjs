@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     CHATGPT_ASSISTANT_SELECTORS,
+    CHATGPT_STOP_SELECTORS,
+    isActiveState,
+    readChatGptStreamingState,
+    readTopLevelAssistantSnapshots,
     readTopLevelAssistantTexts,
     readTopLevelAssistantTextsFromLocators,
 } from '../../web-ai/chatgpt-response-dom.mjs';
@@ -54,7 +61,192 @@ describe('ChatGPT assistant response fragments', () => {
         };
 
         await expect(readTopLevelAssistantTextsFromLocators(page, CHATGPT_ASSISTANT_SELECTORS))
-            .resolves.toEqual(['Full assistant answer']);
+            .resolves.toEqual({ ok: true, texts: ['Full assistant answer'] });
+    });
+
+    it('extracts message id, turn id, and top-level turn index with assistant text', () => {
+        const snapshots = readSnapshotsFixture(`
+            <article data-testid="conversation-turn-7">
+                <div data-message-author-role="assistant" data-message-id="m7">Final answer</div>
+            </article>`);
+        expect(snapshots).toEqual([{
+            text: 'Final answer',
+            messageId: 'm7',
+            turnId: 'conversation-turn-7',
+            turnIndex: 0,
+        }]);
+    });
+
+    it('keeps readTopLevelAssistantTexts as a snapshot projection', () => {
+        const dom = new JSDOM('<article data-testid="conversation-turn-1"><div data-turn="assistant">Projected text</div></article>');
+        const previous = globalThis.document;
+        globalThis.document = dom.window.document;
+        try {
+            expect(readTopLevelAssistantTexts(CHATGPT_ASSISTANT_SELECTORS)).toEqual(['Projected text']);
+        } finally {
+            dom.window.close();
+            if (previous === undefined) delete globalThis.document;
+            else globalThis.document = previous;
+        }
+    });
+
+    it('does not snapshot a newer bare conversation article without an assistant role', () => {
+        const snapshots = readSnapshotsFixture(`
+            <article data-testid="conversation-turn-1"><div data-turn="assistant">Verified</div></article>
+            <article data-testid="conversation-turn-2">Bare newer turn</article>`);
+        expect(snapshots.map(snapshot => snapshot.text)).toEqual(['Verified']);
+    });
+});
+
+describe('ChatGPT streaming state', () => {
+    it('detects an exact stop test-id outside the composer', () => {
+        expect(readStreamingFixture('<button data-testid="stop-button">Stop</button>')).toBe(true);
+    });
+
+    it('detects the scoped aria Stop fallback inside the composer', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop generating">Stop</button></form>')).toBe(true);
+    });
+
+    it('ignores the aria Stop fallback outside the composer', () => {
+        expect(readStreamingFixture('<button aria-label="Stop generating">Stop</button>')).toBe(false);
+    });
+
+    it('excludes a composer Stop dictation control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop dictation">Stop</button></form>')).toBe(false);
+    });
+
+    it('excludes a composer Stop voice control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop voice">Stop</button></form>')).toBe(false);
+    });
+
+    it('excludes a composer Stop reading control', () => {
+        expect(readStreamingFixture('<form><button aria-label="Stop reading">Stop</button></form>')).toBe(false);
+    });
+
+    it('scopes progress to the latest role-verified assistant turn', () => {
+        const shellOnly = `
+            <progress value="10" max="100"></progress>
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant">Old</div></article>
+            <article data-testid="conversation-turn-2"><div data-message-author-role="assistant">Latest</div></article>`;
+        const latestProgress = `
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant"><progress value="10" max="100"></progress></div></article>
+            <article data-testid="conversation-turn-2"><div data-message-author-role="assistant"><progress value="20" max="100"></progress></div></article>`;
+        expect(readStreamingFixture(shellOnly)).toBe(false);
+        expect(readStreamingFixture(latestProgress)).toBe(true);
+    });
+
+    it('does not treat a bare latest conversation article as an assistant turn', () => {
+        const html = `
+            <article data-testid="conversation-turn-1"><div data-message-author-role="assistant">Old</div></article>
+            <article data-testid="conversation-turn-2"><progress value="20" max="100"></progress></article>`;
+        expect(readStreamingFixture(html)).toBe(false);
+    });
+
+    it('treats completed HTML progress as idle and incomplete HTML progress as live', () => {
+        const fixture = (value) => `
+            <article data-testid="conversation-turn-1">
+                <div data-message-author-role="assistant"><progress value="${value}" max="100"></progress></div>
+            </article>`;
+        expect(readStreamingFixture(fixture(100))).toBe(false);
+        expect(readStreamingFixture(fixture(99))).toBe(true);
+    });
+
+    it('treats indeterminate HTML progress as live', () => {
+        const html = '<div data-message-author-role="assistant"><progress></progress></div>';
+        expect(readStreamingFixture(html)).toBe(true);
+    });
+
+    it('defaults omitted ARIA max to 100 for completed and incomplete progress', () => {
+        const fixture = (now) => `
+            <div data-turn="assistant"><div role="progressbar" aria-valuenow="${now}"></div></div>`;
+        expect(readStreamingFixture(fixture(100))).toBe(false);
+        expect(readStreamingFixture(fixture(99))).toBe(true);
+    });
+
+    it('requires thinking metadata before a right-side panel can veto completion', () => {
+        expect(readStreamingFixture('<aside>Reasoning</aside>', { sidecar: true })).toBe(false);
+        expect(readStreamingFixture('<aside data-testid="reasoning-sidecar">Reasoning</aside>', { sidecar: true })).toBe(true);
+    });
+
+    it('ignores an anchored completed sidecar summary', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thought for 12s</aside>';
+        expect(readStreamingFixture(html, { sidecar: true })).toBe(false);
+    });
+
+    it('keeps a growing Thought for trace live', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Reasoning Thought for 2s: Searching…</aside>';
+        expect(readStreamingFixture(html, { sidecar: true })).toBe(true);
+    });
+});
+
+describe('ChatGPT completed-reasoning grammar (G7/G9/G12)', () => {
+    const panel = (text) => `<aside data-testid="reasoning-sidecar">${text}</aside>`;
+    const strength = (text) => readActivityFixture(panel(text), { sidecar: true }).strength;
+
+    it.each([
+        ['Thought for 12s'],
+        ['Reasoning Thought for 12s'],
+        ['Pro thinking Thought for 1.5 minutes'],
+        ['Thought for 1m 5s'],
+        ['Thought for a moment'],
+        ['Thought for a few seconds'],
+        ['Thought for 12s Edit'],
+        ['Reasoning Thought for 2 hours Edit'],
+    ])('treats %s as a completed summary', (text) => {
+        expect(strength(text)).toBe('none');
+    });
+
+    it.each([
+        ['Thought for 2s: Searching…', 'panel-trace'],
+        ['Thought for 12s and still going through the sources it found', 'panel-trace'],
+        ['Thinking', 'panel-text'],
+        ['Reasoning', 'panel-text'],
+    ])('treats %s as weak live activity', (text, evidence) => {
+        const state = readActivityFixture(panel(text), { sidecar: true });
+        expect(state).toMatchObject({ strength: 'weak', evidence });
+    });
+});
+
+describe('ChatGPT activity strata (G8)', () => {
+    it('reports a visible stop button as strong', () => {
+        const html = '<form><button data-testid="stop-button">stop</button></form>';
+        expect(readActivityFixture(html)).toMatchObject({ strength: 'strong', evidence: 'stop-button' });
+    });
+
+    it('reports live progress inside a verified panel as strong', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thinking<progress value="1" max="10"></progress></aside>';
+        expect(readActivityFixture(html, { sidecar: true })).toMatchObject({ strength: 'strong', evidence: 'panel-progress' });
+    });
+
+    it('does not let a weak panel mask a later panel with live progress', () => {
+        const html = '<aside data-testid="reasoning-sidecar">Thinking</aside>'
+            + '<aside data-testid="thinking-sidecar">Reasoning<progress value="1" max="10"></progress></aside>';
+        expect(readActivityFixture(html, { sidecar: true }).strength).toBe('strong');
+    });
+
+    it('reports nothing as none', () => {
+        expect(readActivityFixture('<div>plain answer</div>')).toMatchObject({ strength: 'none' });
+    });
+
+    it('exposes a boolean view for legacy callers', () => {
+        expect(isActiveState(true)).toBe(true);
+        expect(isActiveState(false)).toBe(false);
+        expect(isActiveState(null)).toBe(false);
+        expect(isActiveState(undefined)).toBe(false);
+        expect(isActiveState({ strength: 'none', evidence: '' })).toBe(false);
+        expect(isActiveState({ strength: 'weak', evidence: 'panel-text' })).toBe(true);
+        expect(isActiveState({ strength: 'strong', evidence: 'stop-button' })).toBe(true);
+    });
+
+    it('keeps the poll loop honest about weak activity', () => {
+        // Source-shape guard for the behavioural change: weak activity must not
+        // count as `streaming`, must lengthen the stability window, and must not
+        // open the image shortcut.
+        const src = readFileSync(join(process.cwd(), 'web-ai', 'chatgpt.mjs'), 'utf8');
+        expect(src).toContain("const streaming = activity.strength === 'strong'");
+        expect(src).toContain("const weakActive = activity.strength === 'weak'");
+        expect(src).toContain('const minStableMs = weakActive ? 5_000 : 1_000');
+        expect(src).toContain("if (activity.strength === 'none' && latestSnapshot && session");
     });
 });
 
@@ -89,3 +281,158 @@ function withDocument(nodesBySelector, fn) {
         else globalThis.document = previous;
     }
 }
+
+function readStreamingFixture(html, options = {}) {
+    return isActiveState(readActivityFixture(html, options));
+}
+
+function readActivityFixture(html, { sidecar = false } = {}) {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
+    const previous = {
+        document: globalThis.document,
+        window: globalThis.window,
+        HTMLElement: globalThis.HTMLElement,
+        HTMLProgressElement: globalThis.HTMLProgressElement,
+    };
+    globalThis.document = dom.window.document;
+    globalThis.window = dom.window;
+    globalThis.HTMLElement = dom.window.HTMLElement;
+    globalThis.HTMLProgressElement = dom.window.HTMLProgressElement;
+    Object.defineProperty(dom.window, 'innerWidth', { configurable: true, value: 1000 });
+    for (const element of dom.window.document.querySelectorAll('*')) {
+        element.getBoundingClientRect = () => ({
+            left: sidecar && element.matches('aside') ? 400 : 0,
+            width: sidecar && element.matches('aside') ? 300 : 20,
+            height: sidecar && element.matches('aside') ? 200 : 20,
+            right: 0,
+            bottom: 0,
+            top: 0,
+            x: 0,
+            y: 0,
+            toJSON() {},
+        });
+    }
+    try {
+        return readChatGptStreamingState({
+            assistantSelectors: CHATGPT_ASSISTANT_SELECTORS,
+            stopSelectors: CHATGPT_STOP_SELECTORS,
+        });
+    } finally {
+        dom.window.close();
+        for (const [key, value] of Object.entries(previous)) {
+            if (value === undefined) delete globalThis[key];
+            else globalThis[key] = value;
+        }
+    }
+}
+
+function readSnapshotsFixture(html) {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
+    const previous = globalThis.document;
+    globalThis.document = dom.window.document;
+    try {
+        return readTopLevelAssistantSnapshots(CHATGPT_ASSISTANT_SELECTORS);
+    } finally {
+        dom.window.close();
+        if (previous === undefined) delete globalThis.document;
+        else globalThis.document = previous;
+    }
+}
+
+/**
+ * Locator reads report whether they HAPPENED (issue #88, boundary B07).
+ *
+ * The selectors are alternative search paths, so one of them throwing while
+ * another legitimately matches nothing is not evidence the page has no
+ * assistant turns — the answer may sit behind the path that failed. This value
+ * ends up in `baseline.assistantCount`, the slice point every later poll uses.
+ */
+describe('locator fallback distinguishes an unread page from an empty one (B07)', () => {
+    const selectors = ['sel-a', 'sel-b'];
+
+    /** @param {Record<string, any>} behaviour */
+    function pageWith(behaviour) {
+        return { locator: (selector) => behaviour[selector] ?? { all: async () => [] } };
+    }
+
+    it('X4: every selector failing reports ok:false', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => { throw new Error('detached'); } },
+            'sel-b': { all: async () => { throw new Error('detached'); } },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X4b: matched nodes that cannot be read report ok:false', async () => {
+        // `all()` worked, so the page has assistant nodes — failing to read them
+        // is a failed read, not an empty page.
+        const unreadable = { innerText: async () => { throw new Error('detached'); } };
+        const page = pageWith({ 'sel-a': { all: async () => [unreadable] } });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X5: a single selector that legitimately matches nothing reports ok:true', async () => {
+        const page = pageWith({ 'sel-a': { all: async () => [] } });
+        await expect(readTopLevelAssistantTextsFromLocators(page, ['sel-a']))
+            .resolves.toEqual({ ok: true, texts: [] });
+    });
+
+    it('X5b: one selector failing poisons the empty verdict', async () => {
+        // `sel-b` finding nothing says nothing about what `sel-a` would have
+        // matched. Reporting ok:true here would put a false 0 in the baseline.
+        const page = pageWith({
+            'sel-a': { all: async () => { throw new Error('detached'); } },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X5c: all selectors examined and empty reports ok:true', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => [] },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: [] });
+    });
+
+    it('X4c: a partially readable selector is discarded, not undercounted', async () => {
+        // Two assistant turns, one unreadable. Returning the one text would set
+        // `baseline.assistantCount` to 1 and re-admit the other turn as a new
+        // answer — the same corruption as recording 0, only quieter.
+        const page = pageWith({
+            'sel-a': {
+                all: async () => [
+                    { innerText: async () => 'first answer' },
+                    { innerText: async () => { throw new Error('detached'); } },
+                ],
+            },
+            'sel-b': { all: async () => [] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: false, texts: [] });
+    });
+
+    it('X4d: a fully readable alternative selector still answers', async () => {
+        // Discarding a partial read must not discard a good path behind it.
+        const page = pageWith({
+            'sel-a': {
+                all: async () => [{ innerText: async () => { throw new Error('detached'); } }],
+            },
+            'sel-b': { all: async () => [{ innerText: async () => 'clean answer' }] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: ['clean answer'] });
+    });
+
+    it('a readable node still short-circuits on the first match', async () => {
+        const page = pageWith({
+            'sel-a': { all: async () => [{ innerText: async () => 'answer' }] },
+        });
+        await expect(readTopLevelAssistantTextsFromLocators(page, selectors))
+            .resolves.toEqual({ ok: true, texts: ['answer'] });
+    });
+});

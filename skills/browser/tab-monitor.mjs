@@ -1,6 +1,6 @@
 // @ts-check
 import { EventEmitter } from 'node:events';
-import { isTabAlive, getTabInfo } from './tab-manager.mjs';
+import { probeTabAlive, getTabInfo } from './tab-manager.mjs';
 
 /**
  * @typedef {Object} MonitorEntry
@@ -41,35 +41,7 @@ export class TabMonitor extends EventEmitter {
             this.stopMonitoring(targetId);
         }
 
-        const check = async () => {
-            try {
-                const alive = await isTabAlive(this.port, targetId);
-                const previous = this.healthStatus.get(targetId);
-                
-                this.healthStatus.set(targetId, {
-                    alive,
-                    lastSeen: Date.now(),
-                    error: null
-                });
-
-                if (!alive && previous?.alive) {
-                    // Tab was closed
-                    this.emit('tab:closed', { targetId });
-                } else if (alive && !previous?.alive) {
-                    // Tab recovered
-                    this.emit('tab:recovered', { targetId });
-                }
-
-                this.emit('tab:health-check', { targetId, alive });
-            } catch (error) {
-                this.healthStatus.set(targetId, {
-                    alive: false,
-                    lastSeen: Date.now(),
-                    error: /** @type {{ message?: string }} */ (error).message
-                });
-                this.emit('tab:crashed', { targetId, error: /** @type {{ message?: string }} */ (error).message });
-            }
-        };
+        const check = () => this.checkOnce(targetId);
 
         // Initial check
         check();
@@ -77,6 +49,48 @@ export class TabMonitor extends EventEmitter {
         // Schedule periodic checks
         const interval = setInterval(check, intervalMs);
         this.monitors.set(targetId, { interval, lastCheck: Date.now() });
+    }
+
+    /**
+     * Run one health check. Extracted from the interval so the liveness policy
+     * can be exercised without waiting on a timer.
+     *
+     * @param {string} targetId
+     */
+    async checkOnce(targetId) {
+        try {
+            const liveness = await probeTabAlive(this.port, targetId);
+            // An unreadable tab list says nothing about this tab. Emitting
+            // `tab:closed` on a transient fetch failure would tell consumers a
+            // live tab had gone away, and the previous health entry is better
+            // evidence than a failed read.
+            if (liveness === 'unknown') return;
+            const alive = liveness === 'alive';
+            const previous = this.healthStatus.get(targetId);
+
+            this.healthStatus.set(targetId, {
+                alive,
+                lastSeen: Date.now(),
+                error: null
+            });
+
+            if (!alive && previous?.alive) {
+                // Tab was closed
+                this.emit('tab:closed', { targetId });
+            } else if (alive && !previous?.alive) {
+                // Tab recovered
+                this.emit('tab:recovered', { targetId });
+            }
+
+            this.emit('tab:health-check', { targetId, alive });
+        } catch (error) {
+            this.healthStatus.set(targetId, {
+                alive: false,
+                lastSeen: Date.now(),
+                error: /** @type {{ message?: string }} */ (error).message
+            });
+            this.emit('tab:crashed', { targetId, error: /** @type {{ message?: string }} */ (error).message });
+        }
     }
 
     /**

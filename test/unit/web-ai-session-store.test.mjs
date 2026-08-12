@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -243,5 +243,110 @@ describe('web-ai session-store concurrency', () => {
         const stored = listStoredSessions({ vendor: 'chatgpt' });
         expect(stored.length).toBe(25);
         expect(new Set(stored.map(s => s.sessionId)).size).toBe(25);
+    });
+});
+
+/**
+ * The command lock used to wait with `Atomics.wait`, which stops the event loop
+ * outright. That is the entry-point lock a poll acquires BEFORE it starts, so a
+ * contended lock could freeze `--timeout` for up to LOCK_RETRY_LIMIT *
+ * LOCK_RETRY_MS (~5s) before the deadline was even armed.
+ *
+ * Asserting only "a timer fired" would pass even if it fired after the waiter
+ * finished, so this pins the interleaving instead.
+ */
+describe('web-ai session command lock waits without freezing the event loop', () => {
+    it('V1: a timer fires while a second caller is still waiting for the lock', async () => {
+        const { withSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONWAIT';
+        /** @type {string[]} */
+        const order = [];
+        let waiterSettled = false;
+        let releaseHolder;
+        const holderReleased = new Promise(resolve => { releaseHolder = resolve; });
+        let holderAcquired;
+        const holderIsIn = new Promise(resolve => { holderAcquired = resolve; });
+
+        const holder = withSessionCommandLock(sessionId, async () => {
+            order.push('holder-acquired');
+            holderAcquired();
+            await holderReleased;
+        }, { heartbeatMs: 0 });
+
+        // Only arm the release once the lock is genuinely held, so the second
+        // call really does contend.
+        await holderIsIn;
+        const timer = new Promise(resolve => setTimeout(() => {
+            order.push('timer-fired');
+            // The waiter must still be pending: a blocking wait would have
+            // prevented this callback from running at all.
+            expect(waiterSettled).toBe(false);
+            order.push('holder-released');
+            releaseHolder();
+            resolve(undefined);
+        }, 60));
+
+        const waiter = withSessionCommandLock(sessionId, async () => {
+            order.push('waiter-acquired');
+        }, { heartbeatMs: 0 }).then(() => { waiterSettled = true; });
+
+        await Promise.all([holder, timer, waiter]);
+
+        expect(order).toEqual([
+            'holder-acquired',
+            'timer-fired',
+            'holder-released',
+            'waiter-acquired',
+        ]);
+    });
+
+    it('V2: an uncontended lock is acquired without waiting', async () => {
+        const { withSessionCommandLock } = await freshStore();
+        // A wall-clock bound would be flaky on a loaded CI box and would still
+        // pass with a needless delay in place. Count the retry waits instead.
+        const timers = vi.spyOn(globalThis, 'setTimeout');
+        try {
+            let ran = false;
+            await withSessionCommandLock('TESTSESSIONFREE', async () => { ran = true; }, { heartbeatMs: 0 });
+            expect(ran).toBe(true);
+            expect(timers).not.toHaveBeenCalled();
+        } finally {
+            timers.mockRestore();
+        }
+    });
+
+    it('V5: a permanently held lock still gives up after a bounded number of retries', async () => {
+        // The safety claim of this change is that waiting is bounded. Turning a
+        // blocking loop into 200 sequential timers would be worse, not better,
+        // if the ceiling stopped applying.
+        const { withSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONHELD';
+        const { writeFileSync, mkdirSync } = await import('node:fs');
+        const { dirname } = await import('node:path');
+        const lockPath = join(tmpHome, `web-ai-sessions.json.cmd.${sessionId}.lock`);
+        mkdirSync(dirname(lockPath), { recursive: true });
+        // Our own PID and a far-future expiry, so the lock is never judged stale.
+        writeFileSync(lockPath, JSON.stringify({
+            pid: process.pid,
+            sessionId,
+            acquiredAt: new Date().toISOString(),
+            heartbeatAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        }));
+
+        let ran = false;
+        const attempt = withSessionCommandLock(sessionId, async () => { ran = true; }, { heartbeatMs: 0 });
+
+        await expect(attempt).rejects.toThrow(/failed to acquire lock .* after 200 attempts/);
+        expect(ran).toBe(false);
+    }, 30_000);
+
+    it('V6: the lock is released when the callback throws', async () => {
+        const { withSessionCommandLock, readSessionCommandLock } = await freshStore();
+        const sessionId = 'TESTSESSIONTHROW';
+        await expect(withSessionCommandLock(sessionId, async () => {
+            throw new Error('callback failed');
+        }, { heartbeatMs: 0 })).rejects.toThrow('callback failed');
+        expect(readSessionCommandLock(sessionId)).toBeNull();
     });
 });

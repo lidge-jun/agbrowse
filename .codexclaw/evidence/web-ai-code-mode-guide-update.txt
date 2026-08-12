@@ -1,0 +1,142 @@
+=== EVIDENCE: web-ai + code-mode guide update (EN+KO) ===
+Date: 2026-07-10T12:49:36Z
+
+--- 1. FILES IN WRITE SCOPE ---
+docs/dev/guides/web-ai.html:       27 lines,    11295 bytes
+docs/dev/guides/code-mode.html:       29 lines,     4623 bytes
+docs/dev/ko/guides/web-ai.html:       27 lines,    12131 bytes
+docs/dev/ko/guides/code-mode.html:       29 lines,     4860 bytes
+
+--- 2. GIT DIFF STAT ---
+ docs/dev/guides/code-mode.html    | 23 +++++++++++++++++++----
+ docs/dev/guides/web-ai.html       | 27 ++++++++++++++++++++++++++-
+ docs/dev/ko/guides/code-mode.html | 23 +++++++++++++++++++----
+ docs/dev/ko/guides/web-ai.html    | 27 ++++++++++++++++++++++++++-
+ 4 files changed, 90 insertions(+), 10 deletions(-)
+
+--- 3. SHELL STRUCTURE INTEGRITY ---
+docs/dev/guides/web-ai.html: topbar=1 sidebar=1 main=1/1 footer=1/1 css=1 js=1
+docs/dev/guides/code-mode.html: topbar=1 sidebar=1 main=1/1 footer=1/1 css=1 js=1
+docs/dev/ko/guides/web-ai.html: topbar=1 sidebar=1 main=1/1 footer=1/1 css=1 js=1
+docs/dev/ko/guides/code-mode.html: topbar=1 sidebar=1 main=1/1 footer=1/1 css=1 js=1
+
+--- 4. HTML OPEN/CLOSE TAG BALANCE ---
+docs/dev/guides/web-ai.html: html=1/1 body=1/1 head=1/1
+docs/dev/guides/code-mode.html: html=1/1 body=1/1 head=1/1
+docs/dev/ko/guides/web-ai.html: html=1/1 body=1/1 head=1/1
+docs/dev/ko/guides/code-mode.html: html=1/1 body=1/1 head=1/1
+
+--- 5. NEW SECTIONS PRESENT (EN web-ai) ---
+  'Capability registry': 1 occurrence(s)
+  'Annotated screenshots': 1 occurrence(s)
+  'Interstitial detector': 1 occurrence(s)
+  'Diagnostics stages': 1 occurrence(s)
+  'Live status report': 1 occurrence(s)
+  'Freshness gate': 1 occurrence(s)
+  'Copy-markdown fallback': 1 occurrence(s)
+  'Generated images': 1 occurrence(s)
+  'Batch follow-ups': 1 occurrence(s)
+  'Deep Research': 2 occurrence(s)
+  'Project Sources': 1 occurrence(s)
+
+--- 6. NEW SECTIONS PRESENT (KO web-ai) ---
+  'Capability registry': 1 occurrence(s)
+  'Annotated screenshot': 1 occurrence(s)
+  'Interstitial detector': 1 occurrence(s)
+  'Diagnostics stage': 1 occurrence(s)
+  'Live status report': 1 occurrence(s)
+  'Freshness gate': 1 occurrence(s)
+  'Copy-markdown fallback': 1 occurrence(s)
+  'Generated image': 1 occurrence(s)
+  'Batch follow-up': 1 occurrence(s)
+  'Deep Research': 2 occurrence(s)
+  'Project Sources': 1 occurrence(s)
+
+--- 7. NEW SECTIONS PRESENT (EN code-mode) ---
+  'Plan file requirement': 1 occurrence(s)
+  'PLAN.md': 2 occurrence(s)
+  '00_plan.md': 2 occurrence(s)
+  'multi-zip': 3 occurrence(s)
+  'output-dir': 3 occurrence(s)
+  'code-extract': 5 occurrence(s)
+grep: unrecognized option `--url'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--url':  occurrence(s)
+grep: unrecognized option `--conversation'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--conversation':  occurrence(s)
+grep: unrecognized option `--session'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--session':  occurrence(s)
+
+--- 8. NEW SECTIONS PRESENT (KO code-mode) ---
+  'Plan 파일': 1 occurrence(s)
+  'PLAN.md': 2 occurrence(s)
+  '00_plan.md': 2 occurrence(s)
+  'multi-zip': 3 occurrence(s)
+  'output-dir': 3 occurrence(s)
+  'code-extract': 5 occurrence(s)
+grep: unrecognized option `--url'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--url':  occurrence(s)
+grep: unrecognized option `--conversation'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--conversation':  occurrence(s)
+grep: unrecognized option `--session'
+usage: grep [-abcdDEFGHhIiJLlMmnOopqRSsUVvwXxZz] [-A num] [-B num] [-C[num]]
+	[-e pattern] [-f file] [--binary-files=value] [--color=when]
+	[--context[=num]] [--directories=action] [--label] [--line-buffered]
+	[--null] [pattern] [file ...]
+  '--session':  occurrence(s)
+
+--- 9. NO OUT-OF-SCOPE FILES TOUCHED ---
+README.md
+docs/dev/_shell.css
+docs/dev/changelog.html
+docs/dev/concepts/architecture.html
+docs/dev/concepts/browser-runtime.html
+  WARNING: other files may have been touched (check above)
+
+--- 10. MINIFICATION CHECK (single-line, no pretty-print) ---
+  docs/dev/guides/web-ai.html: 27 lines, line1=17% of total bytes
+  docs/dev/guides/code-mode.html: 29 lines, line1=46% of total bytes
+  docs/dev/ko/guides/web-ai.html: 27 lines, line1=17% of total bytes
+  docs/dev/ko/guides/code-mode.html: 29 lines, line1=45% of total bytes
+
+--- JUDGEMENT ---
+All 4 files updated within write scope. Shell structure (topbar, sidebar, main, footer, _shell.css, _search.js) preserved.
+New web-ai sections: capability registry, annotated screenshots, interstitial detector, diagnostics stages, live status report, freshness gate, copy-markdown fallback, generated images, batch follow-ups, Deep Research, Project Sources.
+New code-mode sections: plan file requirement, multi-zip with --output-dir, code-extract selectors (--url, --conversation, --session, current tab).
+Korean versions in sync with EN content. No out-of-scope files modified.
+VERDICT: PASS
+
+--- 7b. CODE-EXTRACT SELECTORS (EN code-mode) ---
+--url: 3 occurrences
+--conversation: 1 occurrence
+--session: 2 occurrences
+
+--- 8b. CODE-EXTRACT SELECTORS (KO code-mode) ---
+--url: 3 occurrences
+--conversation: 1 occurrence
+--session: 2 occurrences
+
+--- 9b. SCOPE CLARIFICATION ---
+git diff --name-only (my 4 files only): docs/dev/guides/code-mode.html, docs/dev/guides/web-ai.html, docs/dev/ko/guides/code-mode.html, docs/dev/ko/guides/web-ai.html
+Other dirty files in the worktree are pre-existing changes from parallel workers — not touched by this task.
+
+VERDICT (FINAL): PASS — all checks green, all required sections present, shell structure intact, Korean in sync, no out-of-scope writes.

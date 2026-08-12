@@ -41,6 +41,8 @@
     "web-ai/tool-schema.mjs",
     "web-ai/context-pack/constants.mjs",
     "web-ai/context-pack/token-estimator.mjs",
+    "web-ai/context-pack/transformer.mjs",
+    "web-ai/context-pack/repomix-runner.mjs",
     "web-ai/context-pack/report.mjs",
     "web-ai/context-pack/renderer.mjs",
     "web-ai/context-pack/file-selector.mjs",

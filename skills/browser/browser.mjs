@@ -89,6 +89,7 @@ import { runSearchCli } from './search.mjs';
 import { runExtractCli } from './extract.mjs';
 import { runRunwayCli } from './runway.mjs';
 import { maybeEmitUpdateNotice } from './update-check.mjs';
+import { maybeRunStarPrompt } from '../../scripts/postinstall.mjs';
 import { planKoreanResearch } from './search-research/search-strategy.mjs';
 import { normalizeSearchResults } from './search-research/normalizer.mjs';
 import { enrichSearchResultsWithFetch } from './search-research/fetch-enrichment.mjs';
@@ -1538,6 +1539,93 @@ async function navigate(port, url, opts = {}) {
 }
 
 /**
+ * Flags that stand alone, taking no value.
+ *
+ * The set is deliberately the BOOLEAN one, not the value-taking one. An
+ * allowlist of value-taking flags fails OPEN: anything missing from it leaks
+ * its value into positional arguments, which is how `--file`, `--browser`, and
+ * a dozen others still leaked after the first pass at this fix listed only the
+ * flags that turned up in one grep. Every new flag would inherit the bug
+ * silently.
+ *
+ * Inverting it fails CLOSED. An unknown `--flag` is assumed to take a value, so
+ * a flag added later is safe by default; the cost of a mistake is a dropped
+ * argument rather than a silently corrupted one. Booleans are also the smaller
+ * and more stable half (18 vs 29 in this CLI).
+ */
+const BOOLEAN_FLAGS = new Set([
+    '--boxes', '--clear', '--dry-run', '--double', '--force', '--full-page',
+    '--headed', '--headless', '--heavy-site-compat', '--include-disabled',
+    '--include-untracked', '--interactive', '--json', '--keep-bg-networking',
+    '--live-only', '--no-activate', '--no-browser', '--reload', '--right',
+    '--screenshot', '--submit', '--trace',
+]);
+
+/**
+ * Collect the positional arguments from an argv slice, keeping CLI flags AND
+ * their values out of the result.
+ *
+ * Filtering only tokens that start with `--` is not enough: the flag name goes
+ * away but its value stays behind and is read as a positional argument. That is
+ * how `--port 9333` ended up inside an evaluated expression, a typed string, and
+ * an upload file list.
+ *
+ * Everything after a bare `--` is taken literally, so a positional argument that
+ * merely LOOKS like a flag survives.
+ *
+ * @param {string[]} args argv after the command name
+ * @returns {string[]}
+ */
+export function collectPositionalArgs(args) {
+    // Everything after a bare `--` is expression, never flags. Without this
+    // escape hatch a JS token that merely LOOKS like a flag is dropped:
+    // `evaluate "let b=5;" "--b"` silently became `let b=5;` and returned
+    // undefined — the same silent-wrong-answer class this function exists to
+    // stop, just from the other direction.
+    const stop = args.indexOf('--');
+    const scanned = stop === -1 ? args : args.slice(0, stop);
+    const literal = stop === -1 ? [] : args.slice(stop + 1);
+    const parts = [];
+    for (let i = 0; i < scanned.length; i++) {
+        const arg = scanned[i];
+        if (!arg.startsWith('--')) {
+            parts.push(arg);
+            continue;
+        }
+        // `--flag=value` carries its value inline, so nothing extra to skip.
+        if (arg.includes('=') || BOOLEAN_FLAGS.has(arg)) continue;
+        // Unknown flag: assume it takes a value and skip that token too.
+        i += 1;
+    }
+    return [...parts, ...literal];
+}
+
+/**
+ * Join the `evaluate` argv into the source to run, keeping CLI flags OUT of it.
+ * @param {string[]} args argv after the command name
+ * @returns {string}
+ */
+export function collectEvaluateExpression(args) {
+    return collectPositionalArgs(args).join(' ');
+}
+
+/**
+ * Should a failure be reported as a JSON envelope rather than `❌ <message>`?
+ *
+ * Help documents `AGBROWSE_JSON_ERRORS=1` under `Environment:` — outside the
+ * web-ai section, so the promise reads as CLI-wide — and every `--json` command
+ * implies the same contract for its failures.
+ *
+ * @param {string[]} argv
+ * @param {Record<string, string|undefined>} env
+ * @returns {boolean}
+ */
+export function wantsJsonErrors(argv, env) {
+    if (env.AGBROWSE_JSON_ERRORS === '1') return true;
+    return argv.includes('--json');
+}
+
+/**
  * @param {any} port
  * @param {any} expression
  * @param {any} opts
@@ -2281,19 +2369,44 @@ try {
         dataDir: DATA_DIR,
         packageRoot: PACKAGE_ROOT,
     });
+    await maybeRunStarPrompt({ argv: process.argv.slice(2) });
     switch (sub) {
         case 'research': {
             const result = await runResearchCli(process.argv.slice(3));
             if (result.stderr) {
-                console.error(result.stderr);
+                // This path returns an error instead of throwing, so it never
+                // reaches the top-level handler that renders the JSON envelope.
+                // Argument errors like `research plan` without --query printed
+                // plaintext usage even under --json.
+                if (wantsJsonErrors(process.argv, process.env)) {
+                    console.log(JSON.stringify({
+                        ok: false,
+                        status: 'error',
+                        error: {
+                            name: 'ResearchCliError',
+                            errorCode: 'input.invalid-arguments',
+                            stage: 'input-preflight',
+                            message: result.stderr.trim(),
+                            retryHint: 'fix-arguments',
+                        },
+                    }, null, 2));
+                } else {
+                    console.error(result.stderr);
+                }
                 process.exit(result.exitCode || 1);
             }
             console.log(result.stdout);
             break;
         }
-        case 'search':
-            await runSearchCli(process.argv.slice(3));
+        case 'search': {
+            // A reported failure must exit non-zero. `extract` already does
+            // this (extract.mjs:540); `fetch` and `search` used to print
+            // ok:false and exit 0, so a failed lookup slipped through `&&`
+            // chains as success.
+            const searchResult = await runSearchCli(process.argv.slice(3));
+            if (searchResult && searchResult.ok === false) process.exit(1);
             break;
+        }
         case 'extract':
             await runExtractCli(process.argv.slice(3));
             break;
@@ -2339,15 +2452,24 @@ try {
             }
             break;
         }
-        case 'web-ai':
-            await runWebAiCli(process.argv.slice(3), browserDeps);
+        case 'web-ai': {
+            // A command that REPORTS failure must EXIT with failure. claim-audit
+            // returns {ok:false} for a policy violation without throwing, so
+            // discarding the result made `agbrowse web-ai claim-audit` print
+            // "FAIL" and exit 0 — useless in a `set -e` or `&&` CI chain, which
+            // is exactly how --help tells you to verify claims.
+            const webAiResult = await runWebAiCli(process.argv.slice(3), browserDeps);
+            if (webAiResult && webAiResult.ok === false) process.exit(1);
             break;
+        }
         case 'runway':
             await runRunwayCli(process.argv.slice(3), browserDeps);
             break;
-        case 'fetch':
-            await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
+        case 'fetch': {
+            const fetchResult = await runAdaptiveFetchCli(process.argv.slice(3), browserDeps);
+            if (fetchResult && fetchResult.ok === false) process.exit(1);
             break;
+        }
         case 'start': {
             const { values } = parseArgs({
                 args: process.argv.slice(3),
@@ -2377,7 +2499,19 @@ try {
             break;
         case 'status': {
             const r = await getBrowserStatus();
-            console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
+            // --json is this CLI's machine-readable contract (see `doctor`
+            // directly below, and every --json command in help). `status` used
+            // to accept the flag and silently emit the human format, so an
+            // agent parsing it got a JSON.parse error instead of a status.
+            if (process.argv.includes('--json')) {
+                console.log(JSON.stringify({
+                    running: r.running,
+                    tabs: r.tabs,
+                    cdpUrl: r.cdpUrl || null,
+                }, null, 2));
+            } else {
+                console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
+            }
             break;
         }
         case 'doctor': {
@@ -2563,7 +2697,10 @@ try {
         }
         case 'type': {
             const [ref, ...rest] = process.argv.slice(3);
-            const text = rest.filter(a => !a.startsWith('--')).join(' ');
+            // Not `filter(a => !a.startsWith('--'))`: that drops the flag NAME
+            // and keeps its value, so `type e2 "hello" --port 9333` typed
+            // "hello 9333" into the page with no error.
+            const text = collectPositionalArgs(rest).join(' ');
             const submit = rest.includes('--submit');
             await typeAction(getPort(), ref, text, { submit });
             console.log(`typed into ${ref}`);
@@ -2840,11 +2977,27 @@ try {
             }
             const leaseResult = await cleanupPoolTabs(getPort());
             const result = await cleanupIdleTabs(getPort(), cleanupOpts);
+            // `ok` and `counts` mirror the --dry-run shape above. The two paths
+            // used to share no keys at all: the preview nested its counters
+            // under `counts` and carried `ok`, while the real run was flat and
+            // had no `ok`, so a caller that previewed and then executed needed
+            // two parsers, and anything gating on `ok` read every successful
+            // cleanup as a failure.
             const combined = {
+                ok: true,
+                dryRun: false,
                 ...result,
                 closed: result.closed + (leaseResult.closed || 0),
                 leaseClosed: leaseResult.closed || 0,
                 leaseClosedTabs: leaseResult.closedTabs || [],
+                counts: {
+                    total: result.closed + (leaseResult.closed || 0),
+                    idleClosed: result.idleClosed,
+                    limitClosed: result.limitClosed,
+                    untrackedClosed: result.untrackedClosed,
+                    providerClosed: result.providerClosed,
+                    leaseClosed: leaseResult.closed || 0,
+                },
             };
             if (values.json) console.log(JSON.stringify(combined, null, 2));
             else {
@@ -2939,9 +3092,13 @@ try {
         case 'evaluate': {
             const unsafeIndex = process.argv.indexOf('--unsafe-allow');
             const unsafeAllow = unsafeIndex === -1 ? [] : [process.argv[unsafeIndex + 1]].filter(Boolean);
-            const expression = process.argv.slice(3)
-                .filter((arg, index, args) => arg !== '--unsafe-allow' && args[index - 1] !== '--unsafe-allow')
-                .join(' ');
+            // Only --unsafe-allow used to be stripped, so every OTHER flag was
+            // concatenated into the evaluated source: `evaluate "1+1" --port 9333`
+            // ran `1+1 --port 9333`. Usually a SyntaxError, but not always —
+            // `evaluate "globalThis.json = 41; 1 +" --json` parses fine and
+            // silently returns the wrong value. This command executes arbitrary
+            // JS in the page, so a flag must never become part of the source.
+            const expression = collectEvaluateExpression(process.argv.slice(3));
             const r = await evaluate(getPort(), expression, { unsafeAllow });
             console.log(JSON.stringify(r.result, null, 2));
             break;
@@ -2990,16 +3147,10 @@ try {
         case 'wait-for-text': {
             const json = process.argv.includes('--json');
             const timeoutIndex = process.argv.indexOf('--timeout');
-            const textArgs = [];
-            for (let i = 3; i < process.argv.length; i++) {
-                if (i === timeoutIndex) {
-                    i += 1;
-                    continue;
-                }
-                if (process.argv[i].startsWith('--')) continue;
-                textArgs.push(process.argv[i]);
-            }
-            const text = textArgs.join(' ');
+            // Only --timeout used to have its value skipped, so every other
+            // flag's value joined the search text: `--port 9333` made this wait
+            // for "QA Fixture 9333" and time out.
+            const text = collectPositionalArgs(process.argv.slice(3)).join(' ');
             if (!text) { console.error('Usage: browser.mjs wait-for-text <text> [--timeout ms] [--json]'); process.exit(1); }
             const timeout = timeoutIndex !== -1 ? parseInt(process.argv[timeoutIndex + 1]) : undefined;
             const wr = await waitForText(getPort(), text, { timeout });
@@ -3056,7 +3207,10 @@ try {
         case 'upload': {
             const json = process.argv.includes('--json');
             const uRef = process.argv[3];
-            const uFiles = process.argv.slice(4).filter(arg => !arg.startsWith('--'));
+            // A flag's value must never become a file path: with a file named
+            // `9333` in cwd, `--port 9333` uploaded it alongside the requested
+            // one and reported success.
+            const uFiles = collectPositionalArgs(process.argv.slice(4));
             if (!uRef || uFiles.length === 0) { console.error('Usage: browser.mjs upload <ref> <file>... [--json]'); process.exit(1); }
             const result = await uploadFiles(getPort(), uRef, uFiles);
             if (json) console.log(JSON.stringify(result, null, 2));
@@ -3404,8 +3558,11 @@ try {
         --url <conversation-or-provider-url>
         --inline-only | --file <path> | --context-from-files <glob>
         --context-transport <upload|inline>
+        --context-transform <raw|repomix> Default raw; repomix uploads artifacts
+                                           produced from its effective config.
+                                           Without selectors it packs cwd.
         --allow-copy-markdown-fallback Capture provider Copy button output
-        --allow-grok-context-pack      Override Grok hard-gate (prefer inline)
+        --allow-grok-context-pack      Override Grok raw-context gate; not Repomix
         --timeout <sec>                Long tier defaults: chatgpt-pro=5400 ·
                                        grok-heavy=3600 · deep-research=3600;
                                        unknown tier falls back
@@ -3530,6 +3687,45 @@ try {
     // Force exit — playwright CDP WebSocket keeps event loop alive
     process.exit(0);
 } catch (e) {
-    if (!(/** @type {any} */ (e))?.alreadyReported) console.error(`❌ ${(/** @type {any} */ (e)).message}`);
+    // `--json` (or AGBROWSE_JSON_ERRORS=1) is this CLI's machine-readable
+    // contract, and the help text promises it globally under `Environment:`.
+    // Failures used to print `❌ <message>` regardless, so a caller parsing a
+    // successful run got JSON and a failed one got a JSON.parse error.
+    // `extract` already emits the same envelope shape on both paths.
+    const err = /** @type {any} */ (e);
+    if (!err?.alreadyReported) {
+        if (wantsJsonErrors(process.argv, process.env)) {
+            console.log(JSON.stringify({
+                ok: false,
+                status: 'error',
+                error: {
+                    name: err?.name || 'Error',
+                    errorCode: err?.errorCode || 'internal.unhandled',
+                    stage: err?.stage || null,
+                    message: err?.message || String(err),
+                    retryHint: err?.retryHint || null,
+                },
+            }, null, 2));
+        } else {
+            // The JSON envelope carries `errorCode`/`retryHint`, and those are
+            // what tell a refusal apart from a typo. Without them the human
+            // path made an SSRF block look like a bad URL, so surface the same
+            // facts in one extra line when they exist.
+            console.error(`❌ ${err?.message}`);
+            const code = err?.errorCode;
+            // Unclassified failures leave `errorCode` unset — the JSON envelope
+            // fills in `internal.unhandled` as a default, but there is nothing
+            // to show a human, so `code &&` already covers them. The explicit
+            // comparison is a second line of defence for errors that set that
+            // default on themselves (`WebAiError` does): today they never reach
+            // here because `web-ai/cli.mjs` marks them `alreadyReported` after
+            // printing, and this guard is what keeps the noise out if that flag
+            // is ever dropped.
+            if (code && code !== 'internal.unhandled') {
+                const hint = err?.retryHint ? ` · ${err.retryHint}` : '';
+                console.error(`   ${code}${hint}`);
+            }
+        }
+    }
     process.exit(1);
 }

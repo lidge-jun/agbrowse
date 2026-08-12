@@ -105,6 +105,16 @@ export async function runSearchCli(argv = [], deps = {}) {
     } else {
         console.log(formatHumanOutput(output));
     }
+    // Returned so the caller can map failure onto an exit code.
+    //
+    // `evidenceStatus` is NOT that signal. It is the weakest rung of a
+    // four-level ladder (sufficient / partial / browse-needed / insufficient)
+    // describing how much evidence the run gathered, and which rung you land on
+    // depends on network conditions. Treating `insufficient` as failure made
+    // this command exit 1 intermittently — a search that legitimately found
+    // little is not a search that failed. The pipeline has no failure mode of
+    // its own here: a real failure throws and is caught upstream.
+    return { ok: true, output };
 }
 
 /**
@@ -137,6 +147,7 @@ async function runVerifyMode(url, options) {
     } else {
         console.log(formatVerifyOutput(output));
     }
+    return { ok: output.ok, output };
 }
 
 /**

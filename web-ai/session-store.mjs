@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
  *   targetId: string|null,
  *   tabId: string|null,
  *   tabState?: { createdAt?: string, lastActiveAt?: string, recoveryCount?: number, closeCount?: number, [extra: string]: unknown },
+ *   cdpRecovery?: { fingerprint: string, attemptedAt: string }|null,
  *   originalUrl: string|null,
  *   conversationUrl: string|null,
  *   promptHash: string,
@@ -96,24 +97,75 @@ function encodeRandom() {
     return out;
 }
 
+// Whether the LAST store read found a file it could not parse. A corrupt
+// store is collapsed to an empty one so callers keep working, but "empty
+// because broken" must stay distinguishable from "empty because new" — a
+// poll that trusts a borrowed baseline needs to know its session lookup
+// failed rather than genuinely missed.
+let lastReadCorrupt = false;
+
 /** @returns {WebAiSessionStore} */
 export function readSessionStore() {
     const path = storePath();
-    if (!existsSync(path)) return { version: SESSION_STORE_VERSION, sessions: [] };
-    try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
-        if (!parsed || typeof parsed !== 'object') return { version: SESSION_STORE_VERSION, sessions: [] };
-        if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
-        if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
-        return parsed;
-    } catch {
+    if (!existsSync(path)) {
+        lastReadCorrupt = false;
         return { version: SESSION_STORE_VERSION, sessions: [] };
     }
+    try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        if (!parsed || typeof parsed !== 'object') {
+            lastReadCorrupt = true;
+            return { version: SESSION_STORE_VERSION, sessions: [] };
+        }
+        // A present-but-non-array `sessions` is a broken store, not a fresh
+        // one: rows existed in some shape this reader cannot use. Only an
+        // absent field counts as legitimately empty.
+        if (!Array.isArray(parsed.sessions)) {
+            lastReadCorrupt = parsed.sessions !== undefined && parsed.sessions !== null;
+            parsed.sessions = [];
+            if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
+            return parsed;
+        }
+        if (typeof parsed.version !== 'number') parsed.version = SESSION_STORE_VERSION;
+        lastReadCorrupt = false;
+        return parsed;
+    } catch {
+        lastReadCorrupt = true;
+        return { version: SESSION_STORE_VERSION, sessions: [] };
+    }
+}
+
+/**
+ * Whether the most recent {@link readSessionStore} hit a corrupt file.
+ *
+ * Read this immediately after the lookup whose trustworthiness is in
+ * question; a later successful read resets it.
+ *
+ * @returns {boolean}
+ */
+export function sessionStoreReadWasCorrupt() {
+    return lastReadCorrupt;
 }
 
 /** @returns {WebAiSessionStore} */
 function readSessionStoreLocked() {
     return withStoreLock(() => readSessionStore());
+}
+
+/**
+ * Read one session without stopping the event loop.
+ *
+ * `getSession` goes through the blocking lock, so calling it inside a poll that
+ * is holding a deadline suspends the timer enforcing that deadline — the same
+ * defect as the write path, reached by a read.
+ *
+ * @param {string} sessionId
+ * @returns {Promise<WebAiSession|null>}
+ */
+export async function readSessionAsync(sessionId) {
+    if (!sessionId) return null;
+    const store = await withStoreLockAsync(() => readSessionStore());
+    return store.sessions.find((s) => s.sessionId === sessionId) || null;
 }
 
 /**
@@ -158,6 +210,57 @@ export function withStoreLock(fn) {
                 continue;
             }
             sleepBlockingMs(LOCK_RETRY_MS);
+        }
+    }
+    throw new Error(`web-ai session store: failed to acquire lock at ${path} after ${LOCK_RETRY_LIMIT} attempts`);
+}
+
+/**
+ * The same lock, awaited instead of blocked on.
+ *
+ * The blocking form waits with `Atomics.wait`, which stops the event loop: a
+ * contended acquire measured 6,476ms during which a 50ms timer never fired. Any
+ * deadline a caller is holding is simply not counted while that happens, which
+ * is why the hard poll deadline cannot bound work that goes through the
+ * synchronous lock.
+ *
+ * The protocol is identical — same path, same staleness rule, same retry
+ * budget — so the two can be held by different processes at the same time
+ * without either seeing a lock the other does not.
+ *
+ * @template T
+ * @param {() => T|Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export async function withStoreLockAsync(fn) {
+    const path = lockPath();
+    mkdirSync(dirname(path), { recursive: true });
+    let attempts = 0;
+    while (attempts < LOCK_RETRY_LIMIT) {
+        let fd;
+        try {
+            fd = openSync(path, 'wx');
+        } catch (err) {
+            const e = /** @type {NodeJS.ErrnoException} */ (err);
+            if (e?.code !== 'EEXIST') throw err;
+            attempts += 1;
+            if (isStoreLockStale(path)) {
+                try { unlinkSync(path); } catch { /* races resolve naturally */ }
+                continue;
+            }
+            await delayMs(LOCK_RETRY_MS);
+            continue;
+        }
+        // Acquired. The release is in `finally` so an awaited `fn` that throws
+        // still frees the lock for the next holder.
+        try {
+            writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+        } catch { /* best-effort metadata write */ }
+        try {
+            return await fn();
+        } finally {
+            try { closeSync(fd); } catch { /* already closed */ }
+            try { unlinkSync(path); } catch { /* already gone */ }
         }
     }
     throw new Error(`web-ai session store: failed to acquire lock at ${path} after ${LOCK_RETRY_LIMIT} attempts`);
@@ -255,6 +358,20 @@ function sleepBlockingMs(ms) {
 }
 
 /**
+ * Async counterpart to {@link sleepBlockingMs}.
+ *
+ * Deliberately NOT `unref`ed: the process must stay alive while a command waits
+ * for its lock. Retries are bounded by `LOCK_RETRY_LIMIT`, so this cannot hold
+ * the loop open indefinitely.
+ *
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function delayMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/**
  * @param {string} sessionId
  * @returns {string}
  */
@@ -294,7 +411,12 @@ export async function withSessionCommandLock(sessionId, fn, options = {}) {
                 try { unlinkSync(path); } catch { /* races resolve naturally */ }
                 continue;
             }
-            sleepBlockingMs(LOCK_RETRY_MS);
+            // `withSessionCommandLock` is already async and every caller consumes
+            // the promise, so waiting here costs no signature change. Blocking
+            // instead froze the event loop for up to LOCK_RETRY_LIMIT *
+            // LOCK_RETRY_MS — timers included, which is why a `--timeout` could
+            // stall before polling even began.
+            await delayMs(LOCK_RETRY_MS);
         }
     }
     if (fd === null) {
@@ -345,11 +467,149 @@ export function patchSession(sessionId, patch) {
 }
 
 /**
+ * Append artifact descriptors to a session INSIDE the store lock.
+ *
+ * `patchSession` protects the write, not the read that produced the value: two
+ * callers that each read `artifacts` and then patch `[...previous, ...mine]`
+ * both write an array built from the same snapshot, and the second erases the
+ * first one's descriptors. Reading the current row here closes that window.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @returns {WebAiSession|null}
+ */
+export function appendSessionArtifacts(sessionId, descriptors) {
+    return withStoreLock(() => {
+        const store = readSessionStore();
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+        if (idx < 0) return null;
+        const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
+        store.sessions[idx] = {
+            ...store.sessions[idx],
+            artifacts: [...current, ...descriptors],
+            updatedAt: new Date().toISOString(),
+        };
+        writeSessionStore(store);
+        return store.sessions[idx];
+    });
+}
+
+/**
+ * Returned when a caller's deadline passed while the lock was being waited for.
+ *
+ * Distinct from `null` (no such session), because the two need different
+ * handling: one is a missing record, the other is a write that must not happen.
+ */
+export const DEADLINE_PASSED = Symbol('store-write-deadline-passed');
+
+/**
+ * The awaited form of {@link appendSessionArtifacts}.
+ *
+ * The artifact commit runs inside a poll that promised the caller a deadline.
+ * Taking the blocking lock there stops the event loop, so the deadline timer
+ * does not run and the bound the caller was given quietly stops applying.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @param {() => boolean} [stillActive] re-checked once the lock is held
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function appendSessionArtifactsAsync(sessionId, descriptors, stillActive) {
+    return withStoreLockAsync(() => {
+        // Checked here rather than before the call: the wait for the lock is
+        // exactly the gap where a deadline can pass, and a check taken before
+        // it says nothing about this moment.
+        if (stillActive?.() === false) return DEADLINE_PASSED;
+        return appendSessionArtifactsLocked(sessionId, descriptors);
+    });
+}
+
+/**
+ * The append itself, for a caller that ALREADY holds the store lock.
+ *
+ * Taking the lock again here would deadlock against the holder, and doing the
+ * work outside it reintroduces the lost-update race this exists to prevent.
+ *
+ * @param {string} sessionId
+ * @param {unknown[]} descriptors
+ * @returns {WebAiSession|null}
+ */
+export function appendSessionArtifactsLocked(sessionId, descriptors) {
+    const store = readSessionStore();
+    const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+    if (idx < 0) return null;
+    const current = /** @type {unknown[]} */ (store.sessions[idx].artifacts || []);
+    store.sessions[idx] = {
+        ...store.sessions[idx],
+        artifacts: [...current, ...descriptors],
+        updatedAt: new Date().toISOString(),
+    };
+    writeSessionStore(store);
+    return store.sessions[idx];
+}
+
+/**
+ * The deadline-aware read-mutate-write primitive.
+ *
+ * The awaited lock closed the event-loop stall, but it opened a window of its
+ * own: a `stillActive` check taken before the acquire says nothing about the
+ * moment the write starts, because the wait itself is where a deadline passes.
+ * So the predicate runs AFTER the lock is held, and the mutation decision is
+ * made against the row read inside that same lock — not against whatever the
+ * caller saw earlier.
+ *
+ * `mutate` receives the current row and returns the patch to apply, or `null`
+ * to leave the row untouched (still returns the current row). Returning the
+ * patch rather than a whole row keeps the primitive append-safe: two racers
+ * each patch what they read under the lock, so neither erases the other.
+ *
+ * @param {string} sessionId
+ * @param {(current: WebAiSession) => (Partial<WebAiSession> & Record<string, unknown>)|null} mutate
+ * @param {() => boolean} [stillActive] re-checked once the lock is held
+ * @returns {Promise<WebAiSession|null|typeof DEADLINE_PASSED>}
+ */
+export function mutateSessionAsync(sessionId, mutate, stillActive) {
+    return withStoreLockAsync(() => {
+        if (stillActive?.() === false) return DEADLINE_PASSED;
+        const store = readSessionStore();
+        const idx = store.sessions.findIndex((s) => s.sessionId === sessionId);
+        if (idx < 0) return null;
+        const patch = mutate(store.sessions[idx]);
+        if (!patch) return store.sessions[idx];
+        store.sessions[idx] = { ...store.sessions[idx], ...patch };
+        writeSessionStore(store);
+        return store.sessions[idx];
+    });
+}
+
+/**
  * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
  * @returns {WebAiSession[]}
  */
 export function listStoredSessions(filter = {}) {
     const store = readSessionStoreLocked();
+    let rows = store.sessions;
+    if (filter.sessionId) rows = rows.filter((s) => s.sessionId === filter.sessionId);
+    if (filter.vendor) rows = rows.filter((s) => s.vendor === filter.vendor);
+    if (filter.status) rows = rows.filter((s) => s.status === filter.status);
+    if (filter.active === true) rows = rows.filter((session) => isSessionActive(session));
+    rows = rows.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    if (typeof filter.limit === 'number' && filter.limit > 0) rows = rows.slice(-filter.limit);
+    return rows;
+}
+
+/**
+ * The same listing, awaited instead of blocked on.
+ *
+ * `listStoredSessions` reads under the synchronous lock, whose wait stops the
+ * event loop — so any deadline timer a caller is holding simply does not tick
+ * while it runs. Callers under a hard deadline need this form.
+ *
+ * @param {{ sessionId?: string, vendor?: string, status?: string, active?: boolean, limit?: number }} [filter]
+ * @returns {Promise<WebAiSession[]>}
+ */
+export async function listStoredSessionsAsync(filter = {}) {
+    const store = await withStoreLockAsync(() => readSessionStore());
     let rows = store.sessions;
     if (filter.sessionId) rows = rows.filter((s) => s.sessionId === filter.sessionId);
     if (filter.vendor) rows = rows.filter((s) => s.vendor === filter.vendor);

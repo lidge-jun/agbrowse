@@ -40,11 +40,13 @@ import { WebAiError } from './errors.mjs';
  * @property {number} [timeoutMs]
  * @property {number} [baselineTurns]
  * @property {number} [sendButtonTimeoutMs]
+ * @property {boolean} [requireEnabledSendButton]
  */
 
 /**
  * @typedef {Object} SubmitResult
- * @property {'button' | 'enter'} method
+ * @property {'button' | 'enter' | 'none'} method
+ * @property {'send-button-disabled'} [failure]
  * @property {string} [selector]
  * @property {unknown} [resolution]
  */
@@ -171,6 +173,9 @@ export async function submitPromptFromComposer(page, options = {}) {
     }
     const clicked = await clickEnabledSendButton(page, options.sendButtonTimeoutMs);
     if (clicked) return { method: 'button' };
+    if (options.requireEnabledSendButton) {
+        return { method: 'none', failure: 'send-button-disabled' };
+    }
     await page.keyboard.press('Enter');
     return { method: 'enter' };
 }

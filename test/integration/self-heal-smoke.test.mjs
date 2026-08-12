@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { chromium } from 'playwright-core';
 import { resolveActionTarget, validateResolvedTarget } from '../../web-ai/self-heal.mjs';
 import { createActionCacheHandle } from '../../web-ai/action-cache.mjs';
-import { chromiumLaunchOptions } from './playwright-launch.mjs';
+import { launchTransportChromium } from './playwright-launch.mjs';
 import { startSmokeServer, stopSmokeServer } from './smoke-server.mjs';
 
 describe('self-heal browser smoke', () => {
@@ -14,7 +14,7 @@ describe('self-heal browser smoke', () => {
         const result = await startSmokeServer();
         server = result.server;
         serverUrl = result.url;
-        browser = await chromium.launch(chromiumLaunchOptions());
+        browser = await launchTransportChromium(chromium);
     });
 
     afterAll(async () => {

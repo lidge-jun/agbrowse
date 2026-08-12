@@ -9,7 +9,8 @@ import {
     isImageAttachmentPath,
     scoreFileInputCandidate,
     setFilesViaUploadSurface,
-    resolveAttachmentUploadTimeoutMs,
+    computeAttachmentTimeouts,
+    setInputFilesResilient,
 } from './chatgpt-upload-surface.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
@@ -123,12 +124,14 @@ export function buildAttachmentReadyExpression(fileNames = []) {
         });
         const removeCount = candidates.filter(node => /remove (file|attachment)/i.test(node.getAttribute?.('aria-label') || node.textContent || '')).length;
         const progressCount = composer.querySelectorAll('[role="progressbar"], [aria-label*="uploading" i], [aria-label*="processing" i], [data-testid*="upload-progress" i]').length;
+        const errorCount = composer.querySelectorAll('[aria-label*="upload failed" i], [aria-label*="failed to upload" i], [data-testid*="upload-error" i], [aria-label*="retry upload" i]').length;
         return {
-            ok: progressCount === 0 && (matched.length === expected.length || (expected.length > 0 && removeCount >= expected.length)),
+            ok: progressCount === 0 && errorCount === 0 && (matched.length === expected.length || (expected.length > 0 && removeCount >= expected.length)),
             matched,
             chipCount: candidates.length,
             removeCount,
-            progressCount
+            progressCount,
+            errorCount
         };
     })()`;
 }
@@ -202,11 +205,17 @@ export function resolveUploadFileSizeCap(value, fallback = HARD_LIMIT_BYTES) {
 }
 
 /**
+ * Send-readiness budget. Scales with the total attachment bytes so a large
+ * upload gets more time for the send button to enable; backward compatible
+ * with the legacy single-argument call shape.
+ *
  * @param {string[]|AttachmentFile[]|null|undefined} fileNames
+ * @param {number} [totalSizeBytes]
  * @returns {number}
  */
-export function sendButtonTimeoutMs(fileNames = []) {
-    return Array.isArray(fileNames) && fileNames.length > 0 ? 45_000 : 20_000;
+export function sendButtonTimeoutMs(fileNames = [], totalSizeBytes = 0) {
+    if (!Array.isArray(fileNames) || fileNames.length === 0) return 20_000;
+    return computeAttachmentTimeouts([{ sizeBytes: Number(totalSizeBytes) || 0 }]).sendReadyMs;
 }
 
 /**
@@ -228,22 +237,26 @@ export async function attachLocalFileLive(page, file, options = {}) {
         return { ok: false, stage: 'attachment-preflight', error: preflight.rejectedReason || 'preflight rejected', usedFallbacks };
     }
     warnings.push(...preflight.softWarnings);
-    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
+    const budgets = computeAttachmentTimeouts([file], options);
+    const uploadTimeoutMs = budgets.handoffMs;
 
     const inputSel = await findFirstFileInput(page, file);
     if (inputSel) {
-        try {
-            await page.locator(inputSel).first().setInputFiles(file.path, { timeout: uploadTimeoutMs });
-        } catch (e) {
-            return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${/** @type {{message?: string}} */ (e)?.message}`, usedFallbacks };
+        const injected = await setInputFilesResilient(page, inputSel, file.path, {
+            timeoutMs: uploadTimeoutMs,
+            totalBytes: budgets.totalBytes,
+            usedFallbacks,
+        });
+        if (injected.ok !== true) {
+            return { ok: false, stage: 'attachment-upload', error: injected.error, usedFallbacks };
         }
     } else {
-        const surfaceUpload = await setFilesViaUploadSurface(page, file.path, file, usedFallbacks, options.uploadTarget, { uploadTimeoutMs });
+        const surfaceUpload = await setFilesViaUploadSurface(page, file.path, file, usedFallbacks, options.uploadTarget, { uploadTimeoutMs, totalBytes: budgets.totalBytes });
         if (surfaceUpload.ok !== true) {
             return { ok: false, stage: 'attachment-upload', error: surfaceUpload.error, usedFallbacks };
         }
     }
-    const accepted = await waitForAttachmentAcceptedLive(page, { timeoutMs: 45_000, fileNames: [file.basename] });
+    const accepted = await waitForAttachmentAcceptedLive(page, { timeoutMs: budgets.acceptanceMs, fileNames: [file.basename] });
     if (!accepted.ok) return accepted;
     return {
         ok: true,
@@ -293,22 +306,26 @@ export async function attachLocalFilesLive(page, files, options = {}) {
     // the general (no-accept) input that takes all types.
     const batchIsImage = files.every(file => isImageAttachmentPath(file.basename || file.path || ''));
     const probeFile = { ...files[0], basename: batchIsImage ? files[0].basename : 'batch.bin' };
-    const uploadTimeoutMs = resolveAttachmentUploadTimeoutMs(options.attachmentUploadTimeoutMs);
+    const budgets = computeAttachmentTimeouts(files, options);
+    const uploadTimeoutMs = budgets.handoffMs;
 
     const inputSel = await findFirstFileInput(page, probeFile);
     if (inputSel) {
-        try {
-            await page.locator(inputSel).first().setInputFiles(files.map(file => file.path), { timeout: uploadTimeoutMs });
-        } catch (e) {
-            return { ok: false, stage: 'attachment-upload', error: `setInputFiles failed: ${/** @type {{message?: string}} */ (e)?.message}`, usedFallbacks };
+        const injected = await setInputFilesResilient(page, inputSel, files.map(file => file.path), {
+            timeoutMs: uploadTimeoutMs,
+            totalBytes: budgets.totalBytes,
+            usedFallbacks,
+        });
+        if (injected.ok !== true) {
+            return { ok: false, stage: 'attachment-upload', error: injected.error, usedFallbacks };
         }
     } else {
-        const surfaceUpload = await setFilesViaUploadSurface(page, files.map(file => file.path), probeFile, usedFallbacks, options.uploadTarget, { uploadTimeoutMs });
+        const surfaceUpload = await setFilesViaUploadSurface(page, files.map(file => file.path), probeFile, usedFallbacks, options.uploadTarget, { uploadTimeoutMs, totalBytes: budgets.totalBytes });
         if (surfaceUpload.ok !== true) {
             return { ok: false, stage: 'attachment-upload', error: surfaceUpload.error, usedFallbacks };
         }
     }
-    const accepted = await waitForAttachmentAcceptedLive(page, { timeoutMs: 60_000, fileNames: files.map(file => file.basename) });
+    const accepted = await waitForAttachmentAcceptedLive(page, { timeoutMs: budgets.acceptanceMs, fileNames: files.map(file => file.basename) });
     if (!accepted.ok) return accepted;
     return {
         ok: true,
@@ -327,19 +344,30 @@ export async function attachLocalFilesLive(page, files, options = {}) {
  */
 export async function waitForAttachmentAcceptedLive(page, opts = {}) {
     const deadline = Date.now() + (opts.timeoutMs || 45_000);
+    // When the page supports script evaluation and we know the expected file
+    // names, acceptance REQUIRES filename/remove-control evidence. The generic
+    // any-chip fallback below is reserved for pages without evaluate support
+    // (unit-test doubles) — a bare chip with no matching filename must not be
+    // reported as a completed upload (community false-success report 260711).
+    const canEvaluate = typeof page.evaluate === 'function' && Boolean(opts.fileNames?.length);
+    /** @type {{ matched?: string[], chipCount?: number, removeCount?: number, progressCount?: number, errorCount?: number }|null} */
+    let lastReadiness = null;
     while (Date.now() < deadline) {
-        if (typeof page.evaluate === 'function' && opts.fileNames?.length) {
+        if (canEvaluate) {
             const readiness = await page.evaluate(buildAttachmentReadyExpression(opts.fileNames)).catch(() => null);
+            if (readiness) lastReadiness = readiness;
             if (readiness?.ok) {
                 return {
                     ok: true,
                     stage: 'attachment-verified',
                     chipVisible: true,
-                    fileCount: readiness.chipCount || readiness.removeCount || opts.fileNames.length,
+                    fileCount: readiness.chipCount || readiness.removeCount || opts.fileNames?.length || 0,
                     usedFallbacks: readiness.matched?.length ? [] : ['attachment-count-fallback'],
                     warnings: [],
                 };
             }
+            await page.waitForTimeout(500).catch(() => undefined);
+            continue;
         }
         let chipCount = 0;
         for (const sel of ATTACHMENT_CHIP_SELECTORS) {
@@ -354,7 +382,10 @@ export async function waitForAttachmentAcceptedLive(page, opts = {}) {
         }
         await page.waitForTimeout(500).catch(() => undefined);
     }
-    return { ok: false, stage: 'attachment-upload', error: 'attachment never showed visible chip', usedFallbacks: [] };
+    const diag = lastReadiness
+        ? ` (matched ${lastReadiness.matched?.length ?? 0}/${opts.fileNames?.length ?? 0}, chips ${lastReadiness.chipCount ?? 0}, remove ${lastReadiness.removeCount ?? 0}, progress ${lastReadiness.progressCount ?? 0}, errors ${lastReadiness.errorCount ?? 0})`
+        : '';
+    return { ok: false, stage: 'attachment-upload', error: `attachment never showed accepted evidence${diag}`, usedFallbacks: [] };
 }
 
 /**
@@ -374,7 +405,15 @@ export async function verifySentTurnAttachmentLive(page, expectedFile = null) {
     if (expectedFile?.basename && text.includes(expectedFile.basename)) {
         return { ok: true, stage: 'attachment-verified', chipVisible: true, fileCount: 1, usedFallbacks: [], warnings: [] };
     }
-    const evidence = await turn.locator('[data-testid*="attachment" i], [data-testid*="file" i], img, [role="img"]').count().catch(() => 0);
+    // Generic img/[role="img"] nodes (avatars, decorative icons) only count as
+    // evidence for image attachments; documents need attachment/file markers.
+    const expectedIsImage = expectedFile
+        ? isImageAttachmentPath(expectedFile.basename || expectedFile.path || '')
+        : true;
+    const evidenceSelector = expectedIsImage
+        ? '[data-testid*="attachment" i], [data-testid*="file" i], img, [role="img"]'
+        : '[data-testid*="attachment" i], [data-testid*="file" i]';
+    const evidence = await turn.locator(evidenceSelector).count().catch(() => 0);
     if (evidence === 0) {
         return { ok: false, stage: 'attachment-upload', error: 'sent turn has no attachment evidence', usedFallbacks: [] };
     }

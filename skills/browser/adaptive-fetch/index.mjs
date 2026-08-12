@@ -1,7 +1,8 @@
 // @ts-check
 
 import { parseArgs } from 'node:util';
-import { validateFetchUrl, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safety.mjs';
+import { constants as bufferConstants } from 'node:buffer';
+import { validateFetchUrl, AdaptiveFetchInputError, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from './safety.mjs';
 import { appendAttempt, createAttemptTrace, summarizeAttempts } from './trace.mjs';
 import { resolvePublicEndpointCandidates } from './endpoint-resolvers.mjs';
 import { fetchTextCandidate } from './fetcher.mjs';
@@ -21,7 +22,49 @@ import { parsePublicFeed, formatFeedEvidence } from './feed-parser.mjs';
 import { extractStructuredContent } from './structured-extractor.mjs';
 import { extractCandidateUrlsFromText, rankDiscoveredCandidates } from './candidate-discovery.mjs';
 import { ytdlpMetadata, ytdlpSubtitles, formatYtdlpEvidence } from './ytdlp-reader.mjs';
-import { fetchViaCamoufox } from './camoufox-session.mjs';
+import { fetchViaCamoufox, camoufoxBudgetMs } from './camoufox-session.mjs';
+
+/**
+ * Decide whether a thrown value is our own bug rather than a lane failure.
+ *
+ * Every lane in this scheduler records its failure and continues, which is
+ * right for network, process, and provider failures and wrong for a defect in
+ * this code: swallowing a TypeError turns "we crashed" into "that source had
+ * nothing", and the fetch reports partial evidence as if it were complete.
+ *
+ * The type alone cannot decide it. Node's `fetch` throws a TypeError for
+ * ordinary network failures — ENOTFOUND and ECONNREFUSED both arrive as
+ * `TypeError: fetch failed` — so a type-only rule would rethrow on a dead
+ * hostname. What separates them is `cause`: undici attaches the underlying
+ * system error, while a real programming fault has none.
+ *
+ * @param {unknown} error
+ */
+function isProgrammerError(error) {
+    if (!(error instanceof TypeError || error instanceof ReferenceError
+        || error instanceof RangeError || error instanceof SyntaxError)) return false;
+    return (/** @type {any} */ (error)).cause === undefined;
+}
+
+/**
+ * Record a lane failure, or rethrow it when it is our bug.
+ *
+ * @param {{ attempts: object[] }} trace
+ * @param {unknown} error
+ * @param {{ source: string, url: string, fallbackReason: string, lane?: string }} context
+ */
+function recordLaneFailure(trace, error, { source, url, fallbackReason, lane }) {
+    if (isProgrammerError(error)) throw error;
+    const message = (/** @type {any} */ (error))?.message || fallbackReason;
+    appendAttempt(trace, {
+        source,
+        verdict: 'error',
+        url,
+        // Lanes that share a `source` with another lane say which one they are,
+        // otherwise their failures are indistinguishable in the trace.
+        reason: lane ? `${lane}: ${message}` : message,
+    });
+}
 
 /**
  * @typedef {'strong_ok'|'weak_ok'|'blocked'|'auth_required'|'challenge'|'paywall'|'browser_required'|'unsupported'|'error'} AdaptiveFetchVerdict
@@ -34,6 +77,15 @@ import { fetchViaCamoufox } from './camoufox-session.mjs';
 const BROWSER_MODES = new Set(['auto', 'never', 'required']);
 const BROWSER_SESSIONS = new Set(['none', 'isolated', 'existing', 'user', 'interactive']);
 const IDENTITY_MODES = new Set(['auto', 'minimal', 'chrome']);
+// `AbortSignal.timeout` does not reject a delay past 2^31-1 — Node warns
+// `TimeoutOverflowWarning` and silently resets it to 1ms, so asking for an
+// enormous timeout would abort instantly. `camoufox-session` clamps to the
+// same number.
+const MAX_TIMEOUT_MS = 2_147_483_647;
+// A different limit for a different thing: `maxBytes` never reaches a timer,
+// it bounds a response body that is decoded into a string. Past
+// `MAX_STRING_LENGTH` the decode itself throws.
+const MAX_MAX_BYTES = bufferConstants.MAX_STRING_LENGTH;
 
 /**
  * @param {Record<string, unknown>} raw
@@ -55,8 +107,8 @@ export function normalizeAdaptiveFetchOptions(raw = {}) {
         userSessionExplicit,
         humanLoop,
         browserSessionRaw: browserSession,
-        maxBytes: positiveInteger(raw.maxBytes, DEFAULT_MAX_BYTES),
-        timeoutMs: positiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
+        maxBytes: positiveInteger(raw.maxBytes, DEFAULT_MAX_BYTES, MAX_MAX_BYTES, 'maxBytes'),
+        timeoutMs: positiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, 'timeoutMs'),
         selector: typeof raw.selector === 'string' ? raw.selector : null,
         publicEndpoints: raw.publicEndpoints !== false,
         allowPrivateNetwork: Boolean(raw.allowPrivateNetwork),
@@ -64,6 +116,11 @@ export function normalizeAdaptiveFetchOptions(raw = {}) {
         allowArchive: Boolean(raw.allowArchive),
         interactive: Boolean(raw.interactive),
         optionWarnings: raw.allowArchive ? ['archive-fallback-deferred'] : [],
+        // Filled during the run by lanes whose failure the caller should still
+        // hear about. `attempts` only ships with `--trace`, so without this a
+        // swallowed infrastructure failure would leave no trace at all in the
+        // default JSON output.
+        runtimeWarnings: [],
     };
 }
 
@@ -80,6 +137,11 @@ export async function runAdaptiveFetch(input, deps = {}) {
         identity: options.identity,
     });
     const fetchImpl = /** @type {typeof fetch | undefined} */ (deps.fetch || input.fetchImpl);
+    // Same injection shape as `deps.fetch` above. Without it the camoufox lane
+    // can only be exercised by installing camoufox and spawning a browser, so
+    // nothing stopped the `html` field name from regressing to `content` —
+    // which is exactly the defect Q6 fixed.
+    const camoufoxImpl = /** @type {typeof fetchViaCamoufox} */ (deps.fetchViaCamoufox || fetchViaCamoufox);
     const parsed = validateFetchUrl(options.url, { allowPrivateNetwork: options.allowPrivateNetwork });
     appendAttempt(trace, {
         source: 'validation',
@@ -122,11 +184,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 fetchImpl,
             });
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: candidate.source,
-                verdict: 'error',
                 url: candidate.url,
-                reason: (/** @type {any} */ (error)).message || 'fetch-candidate-error',
+                fallbackReason: 'fetch-candidate-error',
             });
             continue;
         }
@@ -215,11 +276,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     fetchImpl,
                 });
             } catch (error) {
-                appendAttempt(trace, {
+                recordLaneFailure(trace, error, {
                     source: 'public_endpoint',
-                    verdict: 'error',
                     url: discovered.url,
-                    reason: (/** @type {any} */ (error)).message || `${discovered.label}-error`,
+                    fallbackReason: `${discovered.label}-error`,
                 });
                 continue;
             }
@@ -263,11 +323,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 fetchImpl,
             });
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'third_party_reader',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'third-party-reader-error',
+                fallbackReason: 'third-party-reader-error',
             });
         }
         if (fetched) {
@@ -289,10 +348,21 @@ export async function runAdaptiveFetch(input, deps = {}) {
         }
     }
 
-    // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical URLs
-    // from the first-pass text, adding them to the reader candidate pool.
+    // Phase 1d (203.7): candidate-discovery — extract and rank alternate/canonical
+    // URLs from the first-pass text and record them in the trace. It deliberately
+    // does NOT fetch them: `agbrowse fetch` reads one URL (README lists it as "a
+    // URL reader, not search"), and following discovered links would turn every
+    // fetch into a crawl and widen the SSRF surface past the one validated URL the
+    // caller asked for. `agbrowse search` is the surface that acts on candidates;
+    // this phase only tells it, and `--trace` readers, what the page pointed at.
     {
-        const bestSoFar = chooseBestReaderCandidate(readerCandidates);
+        // `chooseBestReaderCandidate` returns the SCORED wrapper
+        // (`{ candidate, score, verdict, ... }`), so the body lives under
+        // `.candidate.text`. Reading `.text` off the wrapper made this
+        // condition always false and Phase 1d never ran — the same
+        // wrapper/raw-candidate mix-up that kept the camoufox guard always
+        // true. `resultFromReaderCandidate` is the canonical unwrap.
+        const bestSoFar = chooseBestReaderCandidate(readerCandidates)?.candidate;
         if (bestSoFar?.text) {
             const discovered = extractCandidateUrlsFromText(bestSoFar.text);
             if (discovered.length > 0) {
@@ -300,11 +370,19 @@ export async function runAdaptiveFetch(input, deps = {}) {
                     discovered.map(u => ({ url: u, source: bestSoFar.source || 'fetch' })),
                     { originalUrl: parsed.href },
                 );
-                for (const candidate of ranked.slice(0, 3)) {
+                // `rankDiscoveredCandidates` returns
+                // `{ candidates, lanes, rejected }`, not an array. This line
+                // threw `ranked.slice is not a function` the moment the block
+                // above became reachable — nobody saw it because nobody ever
+                // got here.
+                for (const candidate of (ranked.candidates || []).slice(0, 3)) {
                     if (fetchedUrls.has(candidate.url)) continue;
                     fetchedUrls.add(candidate.url);
                     appendAttempt(trace, {
-                        source: 'metadata', verdict: 'weak_ok', url: candidate.url,
+                        // Not `weak_ok`: nothing fetched or scored this URL, and a
+                        // verdict that implies it passed evaluation misleads anyone
+                        // reading `--trace`.
+                        source: 'metadata', verdict: 'discovered', url: candidate.url,
                         reason: `candidate-discovered:${candidate.lane || 'unknown'}`,
                     });
                 }
@@ -312,16 +390,55 @@ export async function runAdaptiveFetch(input, deps = {}) {
         }
     }
 
-    // Phase 04c (203.3): Camoufox stealth-browser fallback. When TLS-impersonation also
-    // fails (or wasn't attempted), try a hardened-fingerprint render before CDP browser.
-    if (!readerCandidates.some(c => c.verdict === 'strong_ok') && options.browserMode !== 'never') {
-        const camoResult = await fetchViaCamoufox(parsed.href, {
-            timeoutMs: options.timeoutMs,
-        }).catch(() => null);
+    // Phase 04c (203.3): Camoufox hardened-fingerprint render. When TLS-impersonation
+    // also fails (or wasn't attempted), render through Camoufox before the CDP browser.
+    // It normalizes the fingerprint; it does not resolve challenges (README §Boundary).
+    // `verdict` lives on the SCORED candidate, not the raw one — `fromFetchResult`
+    // never sets it, so `readerCandidates.some(c => c.verdict === 'strong_ok')`
+    // was always false and this lane ran on every non-`never` fetch, including
+    // ones a direct fetch had already answered well. Ask the scorer the way the
+    // browser and user-session lanes below already do.
+    const bestBeforeCamoufox = chooseBestReaderCandidate(readerCandidates);
+    if (bestBeforeCamoufox?.verdict !== 'strong_ok' && options.browserMode !== 'never') {
+        // The lane checks `signal.aborted` before spawning and passes the signal
+        // to execFile, but only if the caller supplies one, so the whole abort
+        // path was unreachable in production.
+        //
+        // The signal must expire with the lane's process budget, not with
+        // `timeoutMs`. `timeoutMs` is per-attempt (see `--timeout-ms` in the
+        // help) and the Python script spends it on `page.goto`; the lane allows
+        // launch headroom on top. Signalling at `timeoutMs` aborts mid-launch —
+        // measured: at `--timeout-ms 1500` the fetch went from ok:true to
+        // ok:false with no attempt recorded. `camoufoxBudgetMs` is the one
+        // definition both sides use.
+        let camoResult = null;
+        try {
+            camoResult = await camoufoxImpl(parsed.href, {
+                timeoutMs: options.timeoutMs,
+                signal: AbortSignal.timeout(camoufoxBudgetMs(options.timeoutMs)),
+            });
+        } catch (error) {
+            // A bare `.catch(() => null)` here swallowed our own bugs too — the
+            // exact thing the sibling lanes stopped doing. Same rule for this one.
+            recordLaneFailure(trace, error, {
+                source: 'fetch',
+                lane: 'camoufox-render',
+                url: parsed.href,
+                fallbackReason: 'camoufox-render-error',
+            });
+            options.runtimeWarnings.push(
+                `camoufox-render-failed: ${(/** @type {any} */ (error))?.message || 'camoufox-error'}`,
+            );
+        }
         if (camoResult?.ok) {
             const camoCandidate = fromFetchResult({
                 ok: true, status: 200, finalUrl: camoResult.url || parsed.href,
-                contentType: 'text/html', text: camoResult.content || '', headers: {},
+                // `html`, not `content`: CamoufoxResult and the Python emitter
+                // both produce `html`. Reading `content` made `text` always ''
+                // and the candidate was then dropped by the `if` below, so this
+                // lane could never contribute evidence even with Camoufox
+                // installed.
+                contentType: 'text/html', text: camoResult.html || '', headers: {},
             }, { source: 'fetch', label: 'camoufox' });
             camoCandidate.evidence = [...(camoCandidate.evidence || []), 'camoufox-render'];
             const scored = scoreReaderCandidate(camoCandidate);
@@ -397,11 +514,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 return finishResult(resultFromReaderCandidate(best), options, trace, { chromeUsed: true });
             }
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'browser_user',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'user-session-error',
+                fallbackReason: 'user-session-error',
             });
         }
     }
@@ -433,11 +549,10 @@ export async function runAdaptiveFetch(input, deps = {}) {
                 });
             }
         } catch (error) {
-            appendAttempt(trace, {
+            recordLaneFailure(trace, error, {
                 source: 'human_resolved',
-                verdict: 'error',
                 url: parsed.href,
-                reason: (/** @type {any} */ (error)).message || 'human-loop-error',
+                fallbackReason: 'human-loop-error',
             });
         }
     }
@@ -507,6 +622,10 @@ export async function runAdaptiveFetchCli(args, deps = {}) {
     } else {
         await writeStdoutLine(formatAdaptiveFetchHuman(result), /** @type {any} */ (deps.stdout));
     }
+    // The caller turns this into an exit code. Reporting ok:false while exiting
+    // 0 let a failed fetch pass silently through `&&` chains and `set -e`, with
+    // downstream steps running on empty content.
+    return result;
 }
 
 export function formatAdaptiveFetchHelp() {
@@ -561,7 +680,17 @@ export function formatAdaptiveFetchHuman(result) {
 function normalizeEnum(value, allowed, fallback, name) {
     if (value === undefined || value === null || value === '') return fallback;
     const text = String(value);
-    if (!allowed.has(text)) throw new Error(`invalid ${name}: ${text}`);
+    // A plain Error here reached the CLI as `internal.unhandled`, so mistyping
+    // `--browser` read as "report a bug" — the same misclassification the URL
+    // errors had.
+    if (!allowed.has(text)) {
+        throw new AdaptiveFetchInputError(
+            `invalid ${name}: ${text} (expected ${[...allowed].join('|')})`,
+            // kebab-case, like every other code here. `toLowerCase()` alone
+            // flattened `browserSession` into `browsersession`.
+            { code: `invalid-${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}` },
+        );
+    }
     return text;
 }
 
@@ -569,9 +698,20 @@ function normalizeEnum(value, allowed, fallback, name) {
  * @param {unknown} value
  * @param {number} fallback
  */
-function positiveInteger(value, fallback) {
+function positiveInteger(value, fallback, max, label) {
     const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    // Upper bound too. Unbounded, `--timeout-ms` reached `AbortSignal.timeout`
+    // and crashed with a bare RangeError, which the scheduler reads as our own
+    // bug and rethrows. Each option gets its own ceiling — they feed different
+    // machinery and share no natural limit.
+    if (n > max) {
+        throw new AdaptiveFetchInputError(
+            `${label} out of range: ${value} (max ${max})`,
+            { code: 'value-out-of-range' },
+        );
+    }
+    return Math.floor(n);
 }
 
 /**
@@ -638,9 +778,9 @@ function finishResult(result, options, trace, runtime = {}) {
         attempts: options.trace ? trace.attempts : [],
         safetyFlags: Array.isArray(result.safetyFlags) ? result.safetyFlags : [],
         evidence,
-        warnings: [...(options.optionWarnings || []), ...(result.warnings || [])],
+        warnings: [...(options.optionWarnings || []), ...(options.runtimeWarnings || []), ...(result.warnings || [])],
         metadata: result.metadata || null,
-        _traceSummary: summarizeAttempts(trace.attempts),
+        _traceSummary: summarizeAttempts(trace.attempts, { source: result.source, verdict: result.verdict }),
     };
 }
 
@@ -709,16 +849,27 @@ async function tryBrowserEscalation(url, options, deps, trace, challengeInfo) {
         }
         return result;
     } catch (error) {
-        if (error instanceof BrowserRequiredError || (/** @type {any} */ (error))?.code === 'browser_required') {
-            appendAttempt(trace, {
-                source: 'browser',
-                verdict: 'browser_required',
-                url,
-                reason: (/** @type {any} */ (error)).message,
-            });
-            return null;
-        }
-        throw error;
+        // Every other lane in this scheduler records the failure and keeps
+        // going (see the catch blocks around the fetch, feed, third-party
+        // reader, user-session, and human-loop lanes). This one used to
+        // rethrow anything that was not a BrowserRequiredError, so a CDP
+        // connect failure — a plain Error from browser.mjs — killed the whole
+        // fetch and discarded text an earlier lane had already read. Classify
+        // the verdict, but never let the error escape: a browser that will not
+        // come up is an environment state, not an internal fault.
+        if (isProgrammerError(error)) throw error;
+        const browserRequired = error instanceof BrowserRequiredError
+            || (/** @type {any} */ (error))?.code === 'browser_required';
+        const message = (/** @type {any} */ (error))?.message || 'browser-escalation-error';
+        appendAttempt(trace, {
+            source: 'browser',
+            verdict: browserRequired ? 'browser_required' : 'error',
+            url,
+            reason: message,
+        });
+        // `attempts` is trace-only, so carry the reason into the result too.
+        if (!browserRequired) options.runtimeWarnings.push(`browser-escalation-failed: ${message}`);
+        return null;
     }
 }
 

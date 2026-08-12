@@ -79,10 +79,16 @@ export function normalizeEnvelope(input = {}) {
 
     const prompt = String(input.prompt || input.question || '').trim();
     if (!prompt) throw new WebAiError({
-        errorCode: 'context.over-budget',
-        stage: 'context-preflight',
-        retryHint: 'reduce-files',
-        message: 'prompt required',
+        // Follows the `code-mode.prompt-missing` precedent (cli.mjs:904-912):
+        // a missing argument gets its own code and an actionable hint. This
+        // used to reuse `context.over-budget` with `retryHint: 'reduce-files'`,
+        // which is the code for a genuine budget overflow twelve lines below —
+        // so the two events were indistinguishable, and a user who forgot
+        // --prompt was told to reduce files.
+        errorCode: 'input.prompt-missing',
+        stage: 'input-preflight',
+        retryHint: 'add-prompt',
+        message: 'a prompt is required: pass --prompt <text>',
     });
 
     const attachmentPolicy = input.attachmentPolicy || ATTACHMENT_POLICY.INLINE_ONLY;

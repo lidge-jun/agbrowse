@@ -47,8 +47,16 @@ export async function fetchTextCandidate(rawUrl, options = {}) {
             signal: AbortSignal.timeout(timeoutMs),
         });
         if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
-            const next = new URL(response.headers.get('location') || '', current);
-            const redirectParsed = validateFetchUrl(next.href, { allowPrivateNetwork: options.allowPrivateNetwork });
+            // `location` is remote input. `new URL()` throws a bare TypeError on a
+            // malformed value, and the scheduler treats a cause-less TypeError as
+            // our own bug and rethrows it — so a server sending `location: http://[bad`
+            // would crash the whole fetch instead of failing this one lane.
+            const next = resolveRedirectTarget(response.headers.get('location'), current);
+            if (!next) {
+                return blockedResult(current, response.status, response.headers.get('content-type') || '',
+                    Object.fromEntries(response.headers.entries()), 'invalid-redirect-location');
+            }
+            const redirectParsed = validateFetchUrl(next, { allowPrivateNetwork: options.allowPrivateNetwork });
             if (!options.allowPrivateNetwork) await dnsRebindingGuard(redirectParsed.hostname);
             current = redirectParsed.href;
             continue;
@@ -132,4 +140,28 @@ function blockedResult(finalUrl, status, contentType, headers, reason) {
         evidence: [reason],
         warnings: [reason],
     };
+}
+
+/**
+ * Resolve a redirect `Location` against the current URL, or null when the
+ * server sent something that is not a URL. `URL.parse` needs Node 22; the
+ * try/catch keeps the declared `>=18` engine range working.
+ *
+ * The blank check guards a different failure: `new URL('   ', base)` does not
+ * throw, it returns `base`, which turns a blank `Location` into a redirect to
+ * itself and burns the whole redirect budget. Standard `Headers` normalizes a
+ * blank value to `''` so the caller's truthiness check catches it first, but an
+ * injected `fetchImpl` with its own `headers.get` does not have to.
+ *
+ * @param {string|null} location
+ * @param {string} base
+ * @returns {string|null}
+ */
+function resolveRedirectTarget(location, base) {
+    if (typeof location !== 'string' || location.trim() === '') return null;
+    try {
+        return new URL(location, base).href;
+    } catch {
+        return null;
+    }
 }

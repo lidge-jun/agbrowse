@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { GEMINI_DEEP_THINK_CONSTRAINTS } from '../../web-ai/vendor-editor-contract.mjs';
 import { CONVERSATION_TURN_SELECTOR, INPUT_SELECTORS } from '../../web-ai/chatgpt-composer.mjs';
 import { normalizeGeminiModelChoice } from '../../web-ai/gemini-model.mjs';
+import {
+    isGeminiRepomixAttachmentIncrementReady,
+    waitForGeminiRepomixAttachmentCount,
+} from '../../web-ai/gemini-live.mjs';
 
 describe('web-ai Gemini Deep Think contract constraints', () => {
     it('keeps Gemini selectors separate from ChatGPT composer selectors', () => {
@@ -72,8 +76,81 @@ describe('web-ai Gemini Deep Think contract constraints', () => {
         expect(liveSrc).toContain('Upload & tools');
         expect(liveSrc).toContain('Upload files');
         expect(liveSrc).toContain('uploader-file-preview');
+        expect(liveSrc).toContain('input-area-v2 button[aria-label^="close " i]');
+        expect(liveSrc).toContain('input-area-v2 [role="progressbar"]:visible');
         expect(liveSrc).toContain('Gemini sent turn has no attachment evidence');
         expect(liveSrc).toContain('context package attached:');
         expect(liveSrc).not.toContain('gemini context package upload is not implemented');
     });
+
+    it('requires every Repomix upload to increase the visible chip count', () => {
+        expect(isGeminiRepomixAttachmentIncrementReady({ busy: 0, chipCount: 2 }, 1)).toBe(true);
+        expect(isGeminiRepomixAttachmentIncrementReady({ busy: 0, chipCount: 1 }, 1)).toBe(false);
+        expect(isGeminiRepomixAttachmentIncrementReady({ busy: 1, chipCount: 2 }, 1)).toBe(false);
+    });
+
+    it('requires the exact final Repomix attachment count', async () => {
+        const partial = await waitForGeminiRepomixAttachmentCount(
+            createGeminiAttachmentCountPage(1),
+            2,
+            { timeoutMs: 0 },
+        );
+        const extra = await waitForGeminiRepomixAttachmentCount(
+            createGeminiAttachmentCountPage(3),
+            2,
+            { timeoutMs: 0 },
+        );
+        const complete = await waitForGeminiRepomixAttachmentCount(
+            createGeminiAttachmentCountPage(2),
+            2,
+            { timeoutMs: 0 },
+        );
+
+        expect(partial).toMatchObject({ ok: false, expectedCount: 2, observedCount: 1 });
+        expect(extra).toMatchObject({ ok: false, expectedCount: 2, observedCount: 3 });
+        expect(complete).toMatchObject({ ok: true, expectedCount: 2, observedCount: 2 });
+    });
+
+    it('ignores historical sent-turn previews in the Repomix composer count', async () => {
+        const result = await waitForGeminiRepomixAttachmentCount(
+            createGeminiAttachmentCountPage(2, 9),
+            2,
+            { timeoutMs: 0 },
+        );
+
+        expect(result).toMatchObject({ ok: true, expectedCount: 2, observedCount: 2 });
+    });
+
+    it('runs Repomix exact-count verification before Gemini submit', () => {
+        const liveSrc = readFileSync(new URL('../../web-ai/gemini-live.mjs', import.meta.url), 'utf8');
+        const sendBody = liveSrc.slice(
+            liveSrc.indexOf('export async function geminiSendWebAi'),
+            liveSrc.indexOf('function preflightGeminiUploadFiles'),
+        );
+
+        expect(sendBody.indexOf('requireChipCountIncrease: strictRepomixUpload')).toBeLessThan(
+            sendBody.indexOf('waitForGeminiRepomixAttachmentCount(page, uploadFiles.length)'),
+        );
+        expect(sendBody.indexOf('waitForGeminiRepomixAttachmentCount(page, uploadFiles.length)')).toBeLessThan(
+            sendBody.indexOf('await page.locator(sendSel).first().click'),
+        );
+        expect(sendBody).toContain('if (!repomixMode)');
+        expect(sendBody).toContain('verifyGeminiSentTurnAttachment(page, fileInfoFromPath(uploadPath))');
+        expect(liveSrc).toContain(": 'button[aria-label^=\"Remove file\"]'");
+        expect(sendBody).not.toContain('requireExactCount: strictRepomixUpload');
+    });
 });
+
+function createGeminiAttachmentCountPage(attachmentCount, previewCount = 0) {
+    return {
+        locator: selector => ({
+            count: async () => {
+                if (/progressbar|uploading|processing/i.test(selector)) return 0;
+                if (selector.includes('input-area-v2 button[aria-label^="close " i]')) return attachmentCount;
+                if (/uploader-file-preview|file-preview|attachment-preview/.test(selector)) return previewCount;
+                return 0;
+            },
+        }),
+        waitForTimeout: async () => undefined,
+    };
+}

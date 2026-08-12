@@ -29,7 +29,42 @@ describe('adaptive fetch trace', () => {
     it('summarizes recorded attempts for human output', () => {
         const trace = createAttemptTrace({ url: 'https://example.com/' });
         appendAttempt(trace, { source: 'validation', verdict: 'unsupported' });
-        expect(summarizeAttempts(trace.attempts)).toContain('last source=validation');
+        // Intent: name the lane that produced the outcome. The wording gained
+        // "scored" when discovery started recording unfetched URLs; what the
+        // test is for is the source, not the phrasing.
+        expect(summarizeAttempts(trace.attempts)).toContain('source=validation');
+        expect(summarizeAttempts(trace.attempts)).toContain('verdict=unsupported');
+    });
+
+    // The ladder returns the best candidate, not the last lane it tried, so the
+    // last attempt is a different axis entirely. Summarizing it named a lane
+    // that produced nothing: `discovered` for a URL nothing fetched, and
+    // `browser_required` for a fetch that returned `weak_ok` from an earlier
+    // rung.
+    it('names the lane whose candidate was returned, not the last one tried', () => {
+        const trace = createAttemptTrace({ url: 'https://example.com/' });
+        appendAttempt(trace, { source: 'validation', verdict: 'weak_ok', reason: 'url-valid' });
+        appendAttempt(trace, { source: 'fetch', verdict: 'weak_ok', reason: 'score:41' });
+        appendAttempt(trace, { source: 'metadata', verdict: 'discovered', reason: 'candidate-discovered:package' });
+        const summary = summarizeAttempts(trace.attempts, { source: 'fetch', verdict: 'weak_ok' });
+        expect(summary).toContain('3 attempt(s)');
+        expect(summary).toContain('selected source=fetch verdict=weak_ok');
+        expect(summary).not.toContain('verdict=discovered');
+    });
+
+    it('does not name a browser lane that never produced the result', () => {
+        const trace = createAttemptTrace({ url: 'https://example.com/' });
+        appendAttempt(trace, { source: 'fetch', verdict: 'weak_ok', reason: 'score:41' });
+        appendAttempt(trace, { source: 'browser', verdict: 'browser_required', reason: 'no browser' });
+        const summary = summarizeAttempts(trace.attempts, { source: 'fetch', verdict: 'weak_ok' });
+        expect(summary).toContain('selected source=fetch verdict=weak_ok');
+        expect(summary).not.toContain('browser_required');
+    });
+
+    it('falls back to the last attempt when the caller reports no outcome', () => {
+        const trace = createAttemptTrace({ url: 'https://example.com/' });
+        appendAttempt(trace, { source: 'metadata', verdict: 'discovered', reason: 'candidate-discovered:fetch' });
+        expect(summarizeAttempts(trace.attempts)).toContain('last source=metadata verdict=discovered');
     });
 
     it('records identity field in trace', () => {

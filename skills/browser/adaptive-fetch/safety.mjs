@@ -65,15 +65,35 @@ const SPECIAL_USE_IPV6_CIDRS = [
     ['ff00::', 8],
 ];
 
+// Codes where the answer is "we refused", not "you typed it wrong". Telling a
+// caller to fix their arguments after an SSRF or DNS-rebinding refusal invites
+// them to retry something we blocked on purpose, so these get the `safety.*`
+// namespace and no retry hint. `web-ai/policy` draws the same line with
+// `policy.*` + `retryHint: 'policy'`.
+const REFUSAL_CODES = new Set([
+    'private-network',
+    'dns-rebinding',
+    'credential-url',
+    'sensitive-query',
+]);
+
 export class AdaptiveFetchInputError extends Error {
     /**
      * @param {string} message
-     * @param {{ code?: string, url?: string }} [details]
+     * @param {{ code?: string, url?: string, retryHint?: string }} [details]
      */
     constructor(message, details = {}) {
         super(message);
         this.name = 'AdaptiveFetchInputError';
         this.code = details.code || 'invalid-url';
+        // The CLI's top-level handler reads `errorCode`, not `code`, so every
+        // one of these arrived as `internal.unhandled` — "report a bug" for a
+        // user typo. `input.*` + `input-preflight` is the vocabulary the rest
+        // of the CLI already uses (see `input.prompt-missing`).
+        const refusal = REFUSAL_CODES.has(this.code);
+        this.errorCode = `${refusal ? 'safety' : 'input'}.${this.code}`;
+        this.stage = refusal ? 'safety-preflight' : 'input-preflight';
+        this.retryHint = details.retryHint || (refusal ? null : 'fix-arguments');
         this.url = details.url || null;
     }
 }

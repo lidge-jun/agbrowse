@@ -63,6 +63,80 @@ describe('web-ai summarizeEnvelope', () => {
             contextTransport: 'upload',
         });
     });
+
+    it('persists a require-all file artifact policy so later polls inherit it', async () => {
+        const { summarizeEnvelope } = await import('../../web-ai/session.mjs');
+        expect(summarizeEnvelope({ fileArtifactPolicy: 'require-all' }).fileArtifactPolicy).toBe('require-all');
+        // The default is not stored: absence means best-effort.
+        expect(summarizeEnvelope({ fileArtifactPolicy: 'best-effort' }).fileArtifactPolicy).toBeUndefined();
+    });
+});
+
+describe('web-ai file artifact policy inheritance', () => {
+    it('does not let a poll without the flag relax a stored requirement', async () => {
+        const { resolveFileArtifactPolicy } = await import('../../web-ai/session.mjs');
+        const strictSession = { envelopeSummary: { fileArtifactPolicy: 'require-all' } };
+
+        // poll/watch/resume never repeat the flag, so an input-only reading
+        // would silently downgrade the session the send established.
+        expect(resolveFileArtifactPolicy({}, strictSession)).toBe('require-all');
+        expect(resolveFileArtifactPolicy({ fileArtifactPolicy: 'best-effort' }, strictSession)).toBe('require-all');
+        // Raising it for one call is still allowed.
+        expect(resolveFileArtifactPolicy({ fileArtifactPolicy: 'require-all' }, null)).toBe('require-all');
+        // And the default stays best-effort when nobody asked.
+        expect(resolveFileArtifactPolicy({}, null)).toBe('best-effort');
+        expect(resolveFileArtifactPolicy({}, { envelopeSummary: {} })).toBe('best-effort');
+    });
+});
+
+describe('web-ai durable conversation URL persistence', () => {
+    it('omits a non-durable initial ChatGPT URL while preserving originalUrl', async () => {
+        const { createSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'x' },
+            { originalUrl: 'https://chatgpt.com/', conversationUrl: 'https://chatgpt.com/c/WEB:req-1' },
+        );
+
+        expect(session.originalUrl).toBe('https://chatgpt.com/');
+        expect(session.conversationUrl).toBeNull();
+    });
+
+    it('preserves the last durable ChatGPT URL and applies sibling fields on rejected update', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const durableUrl = 'https://chatgpt.com/c/abc-123';
+        const session = createSession({ vendor: 'chatgpt', prompt: 'x' }, { conversationUrl: durableUrl });
+        const updated = updateSession(session.sessionId, {
+            conversationUrl: 'https://chatgpt.com/',
+            status: 'polling',
+            answer: 'partial',
+        });
+
+        expect(updated.conversationUrl).toBe(durableUrl);
+        expect(updated.status).toBe('polling');
+        expect(updated.answer).toBe('partial');
+    });
+
+    it('accepts a later durable ChatGPT URL after an initial root URL', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'x' },
+            { originalUrl: 'https://chatgpt.com/' },
+        );
+        const updated = updateSession(session.sessionId, { conversationUrl: 'https://chatgpt.com/c/later-123' });
+
+        expect(updated.conversationUrl).toBe('https://chatgpt.com/c/later-123');
+    });
+
+    it('passes a Gemini conversation URL update through ungated', async () => {
+        const { createSession, updateSession } = await import('../../web-ai/session.mjs');
+        const session = createSession(
+            { vendor: 'gemini', prompt: 'x' },
+            { conversationUrl: 'https://gemini.google.com/app/initial' },
+        );
+        const updated = updateSession(session.sessionId, { conversationUrl: 'https://gemini.google.com/app/next' });
+
+        expect(updated.conversationUrl).toBe('https://gemini.google.com/app/next');
+    });
 });
 
 describe('web-ai session timeout monotonicity', () => {
@@ -227,20 +301,51 @@ describe('web-ai provider integration (source-string contracts)', () => {
 
     it('all three providers resolve session on poll via input.session > findActiveSession', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
-            expect(src).toMatch(/input\.session\s*\?\s*getSession\(input\.session\)/);
-            expect(src).toMatch(/findActiveSession\(\{[\s\S]*?vendor[\s\S]*?targetId[\s\S]*?conversationUrl/);
+            // ONE regex spanning both branches of the ternary, so it pins the
+            // ORDER and not merely the presence of each half. Split assertions
+            // also accepted the reverse — `findActiveSession(...) || (input.session
+            // ? read : null)` — which is a different lookup wearing the same parts.
+            //
+            // Either read form is fine. Gemini and Grok read asynchronously
+            // because the blocking one waits under a lock that stops the event
+            // loop, which put their poll deadline outside its own bound.
+            expect(src).toMatch(
+                /input\.session\s*\n?\s*\?\s*(?:await\s+readSessionAsync\(input\.session\)|getSession\(input\.session\))[\s\S]{0,400}?:\s*(?:\/\/[^\n]*\n\s*)*(?:await\s+)?findActiveSession(?:Async)?\(\{[\s\S]{0,200}?vendor[\s\S]{0,200}?targetId[\s\S]{0,200}?conversationUrl/,
+            );
             expect(src).toMatch(/session && sessionToBaseline\(session\)/);
+        }
+    });
+
+    /**
+     * Gemini and Grok specifically must NOT go back to the blocking reads.
+     * Both take the session-store lock, whose wait stops the event loop, which
+     * is what put their poll deadline outside its own bound: a held lock
+     * turned a 50ms budget into a 6.4s return. The shared precedence contract
+     * above permits either form — deliberately, since ChatGPT still uses the
+     * synchronous one — so it cannot catch that regression on its own.
+     */
+    it('gemini and grok resolve the poll session without blocking the event loop', () => {
+        for (const [vendor, src] of [['gemini', geminiSrc], ['grok', grokSrc]]) {
+            const pollBody = src.slice(src.indexOf(`async function run${vendor === 'gemini' ? 'Gemini' : 'Grok'}PollWebAi`));
+            expect(pollBody).toMatch(/await\s+readSessionAsync\(input\.session\)/);
+            expect(pollBody).toMatch(/await\s+findActiveSessionAsync\(/);
+            // Neither blocking form may reappear on the poll path.
+            expect(pollBody).not.toMatch(/\bgetSession\(/);
+            expect(pollBody).not.toMatch(/\bfindActiveSession\(/);
         }
     });
 
     it('all three providers finalize completion and markSessionTimeout on timeout', () => {
         for (const src of [chatgptSrc, geminiSrc, grokSrc]) {
             expect(src).toMatch(/finalizeProviderTab\(deps, \{[\s\S]*?session[\s\S]*?answerText/);
-            expect(src).toMatch(/markSessionTimeout\(session\.sessionId/);
+            // The awaited form is the contract now: the sync call took the
+            // blocking store lock inside the poll deadline.
+            expect(src).toMatch(/await\s+markSessionTimeoutAsync\(session\.sessionId/);
+            expect(src).not.toMatch(/[^cn]\bmarkSessionTimeout\(session\.sessionId/);
             expect(src).toContain("retryHint: 'poll-or-resume'");
             expect(src).toContain('recoverable: true');
         }
-        expect(finalizerSrc).toMatch(/updateSession\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
+        expect(finalizerSrc).toMatch(/updateSessionAsync\(session\.sessionId, \{[\s\S]*?status: 'complete'/);
         expect(finalizerSrc).toMatch(/completedAt: new Date\(\)\.toISOString\(\)/);
     });
 
@@ -307,11 +412,15 @@ describe('web-ai cli session flags', () => {
     it('wraps MCP wait/resume in session command lock, session page recovery, and MCP active command', () => {
         const mcpSrc = readFileSync(join(process.cwd(), 'web-ai/mcp-server.mjs'), 'utf8');
         expect(mcpSrc).toContain("import { withSessionCommandLock } from './session-store.mjs'");
-        expect(mcpSrc).toContain("import { withSessionPage } from './tab-recovery.mjs'");
+        // The guarded form threads the stored-deadline predicate into the
+        // recovery writes; the plain form would let a binding write land after
+        // the session's own deadline passed while the store lock was waited on.
+        expect(mcpSrc).toContain("import { storedDeadlineStillActive, withSessionPageGuarded } from './tab-recovery.mjs'");
         expect(mcpSrc).toMatch(/if \(name === 'web_ai_wait_response' \|\| name === 'web_ai_session_resume'\) \{[\s\S]*?return runMcpSessionPoll\(name, args, deps\)/);
         expect(mcpSrc).toMatch(/async function runMcpSessionPoll\(name, args, deps\)/);
         expect(mcpSrc).toMatch(/withSessionCommandLock\(sessionId/);
-        expect(mcpSrc).toMatch(/withSessionPage\(deps, sessionId/);
+        expect(mcpSrc).toMatch(/withSessionPageGuarded\(deps, sessionId/);
+        expect(mcpSrc).toMatch(/stillActive: storedDeadlineStillActive\(stored\)/);
         expect(mcpSrc).toMatch(/withMcpActiveCommand\(name, provider, sessionDeps, sessionArgs/);
     });
 
@@ -384,12 +493,15 @@ function createStreamingRecoveryChatGptPage(text) {
             }
         },
         waitForTimeout: async (ms) => new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 10))),
-        locator: (selector) => ({
-            first: () => ({
-                isVisible: async () => selector.includes('stop-button') || selector.includes('Stop'),
-            }),
-            all: async () => [],
-        }),
+        // A real locator lists its matches; the stop probe reads `all()` and
+        // treats an empty list as "no stop button", not as a hidden one.
+        locator: (selector) => {
+            const matches = selector.includes('stop-button') || selector.includes('Stop');
+            return {
+                first: () => ({ isVisible: async () => matches }),
+                all: async () => (matches ? [{ isVisible: async () => true }] : []),
+            };
+        },
     };
 }
 
@@ -409,6 +521,11 @@ function createCopyMarkdownDeferredChatGptPage(text) {
     return {
         url: () => 'https://chatgpt.com/c/copy-streaming',
         evaluate: async (fn, selectors) => {
+            // The split-source reader is a separate acquisition; it must not consume
+            // the first-call slot this fixture uses to stage its text sequence.
+            if (String(fn).startsWith('function readAssistantSnapshotSources')) {
+                return { ok: false, wrapped: [], wrapperless: [] };
+            }
             evaluateCount += 1;
             const currentNode = evaluateCount === 1 ? node : placeholderNode;
             const previous = globalThis.document;
@@ -423,14 +540,22 @@ function createCopyMarkdownDeferredChatGptPage(text) {
             }
         },
         waitForTimeout: async () => {
+            // Flip the stop button and let the loop budget lapse. Sleeping past
+            // the whole `--timeout` used to be harmless because nothing enforced
+            // it; now it races the hard deadline and, under load, the poll
+            // correctly expires before reaching the copy path this test is
+            // about. 800ms clears the 750ms loop budget with room to spare while
+            // staying inside the 1s bound.
             stopVisible = true;
-            await new Promise(resolve => setTimeout(resolve, 1050));
+            await new Promise(resolve => setTimeout(resolve, 800));
         },
         locator: (selector) => ({
             first: () => ({
                 isVisible: async () => stopVisible && (selector.includes('stop-button') || selector.includes('Stop')),
             }),
-            all: async () => [],
+            all: async () => (stopVisible && (selector.includes('stop-button') || selector.includes('Stop'))
+                ? [{ isVisible: async () => true }]
+                : []),
         }),
     };
 }

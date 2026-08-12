@@ -1,8 +1,10 @@
 // @ts-check
-import { updateSession, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
-import { trySaveReport, appendArtifactRecord } from './session-artifacts.mjs';
+import { DEADLINE_PASSED, updateSession, updateSessionAsync, TIER_DEFAULT_TIMEOUT_SEC } from './session.mjs';
+import { trySaveReport, appendArtifactRecord, appendArtifactRecordAsync } from './session-artifacts.mjs';
 import { createChatGptEditorAdapter } from './vendor-editor-contract.mjs';
 import { chooseDeepResearchReportRead } from './chatgpt-deep-research-report.mjs';
+import { probeStopButton } from './chatgpt-response-dom.mjs';
+import { withPollDeadline } from './poll-deadline.mjs';
 
 /**
  * @typedef {Object} DeepResearchResult
@@ -46,10 +48,6 @@ const DEEP_RESEARCH_SELECTORS = {
 };
 
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const STOP_SELECTORS = [
-    'button[data-testid="stop-button"]',
-    'button[aria-label*="Stop" i]',
-];
 
 /**
  * Count assistant messages on the page.
@@ -72,15 +70,16 @@ async function readLatestAssistant(page) {
 }
 
 /**
- * Check if ChatGPT is currently streaming/generating.
+ * Is ChatGPT streaming/generating right now?
+ *
+ * Returns the verdict: `unknown` is not evidence of finishing, and it is not
+ * evidence of research activity either.
+ *
  * @param {any} page
- * @returns {Promise<boolean>}
+ * @returns {Promise<'visible'|'absent'|'unknown'>}
  */
 async function isStreaming(page) {
-    for (const sel of STOP_SELECTORS) {
-        if (await page.locator(sel).first().isVisible().catch(() => false)) return true;
-    }
-    return false;
+    return probeStopButton(page);
 }
 
 /**
@@ -214,6 +213,7 @@ export async function extractResearchReport(page, _deps) {
  * @returns {Promise<DeepResearchResult>}
  */
 export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, skipModeActivation = false }) {
+    // Contract 110 residual table: initial send stays synchronous until this path owns a losing-run token.
     const warnings = [];
 
     updateSession(session.sessionId, { researchMode: 'deep' });
@@ -278,7 +278,10 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
         const count = await countAssistants(page);
         const progress = await hasProgressIndicator(page);
         if (progress) researchActivityObserved = true;
-        if (count > baselineCount || await isStreaming(page) || progress) {
+        // An unreadable probe leaves the startup wait — the main poll is
+        // bounded — but it is NOT recorded as research activity. Counting a
+        // failed read as evidence would claim work that was never observed.
+        if (count > baselineCount || (await isStreaming(page)) !== 'absent' || progress) {
             break;
         }
         await page.waitForTimeout(500);
@@ -289,14 +292,19 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        await page.waitForTimeout(2000);
+        // Capped by what is left: the loop condition is checked before the
+        // wait, so a fixed 2s tick is itself the overrun on a deadline with
+        // less than that remaining.
+        await page.waitForTimeout(Math.max(1, Math.min(2000, deadline - Date.now())));
 
-        const streaming = await isStreaming(page);
+        const stop = await isStreaming(page);
         const progress = await hasProgressIndicator(page);
         if (progress) researchActivityObserved = true;
         const count = await countAssistants(page);
 
-        if (count > baselineCount && !streaming && !progress) {
+        // Extracting a report on an unreadable probe would publish a partial
+        // research run as the finished product.
+        if (count > baselineCount && stop === 'absent' && !progress) {
             const latest = (await readLatestAssistant(page)).trim();
             if (latest) {
                 if (latest === stableText) {
@@ -401,14 +409,69 @@ export async function sendDeepResearch(page, deps, { prompt, session, timeoutMs 
  * @returns {Promise<DeepResearchResult>}
  */
 export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }) {
+    // Thin wrapper over a hard deadline. The loop below checks the clock only
+    // BETWEEN awaited probes, so one never-settling probe defeated `timeoutMs`
+    // — measured still-pending at 153ms against a 50ms budget.
+    //
+    // The expiry envelope deliberately does NOT capture a report. The normal
+    // timeout path calls `extractResearchReport` first, but that is itself a
+    // browser probe: running it here would re-enter the exact stall this is
+    // bounding. An expired resume says so with its own warning instead of
+    // pretending it looked.
+    return withPollDeadline(
+        (hardDeadline, token) => runResumeDeepResearch(page, deps, { session, timeoutMs, stableMs }, token),
+        {
+            timeoutMs,
+            onExpired: () => buildResumeTimeoutEnvelope(session, page),
+        },
+    );
+}
+
+/**
+ * The envelope for a resume that ran out of time, from what is already known.
+ *
+ * Deliberately does NOT persist and does NOT capture: `markSessionTimeout`
+ * takes the synchronous store lock — whose wait stops
+ * the event loop — and `extractResearchReport` is another browser probe, so
+ * either would re-enter the stall this is bounding.
+ *
+ * @param {any} session
+ * @param {any} page
+ */
+function buildResumeTimeoutEnvelope(session, page) {
+    return {
+        ok: false,
+        sessionId: session?.sessionId,
+        conversationUrl: (typeof page?.url === 'function' ? page.url() : null) || session?.conversationUrl || null,
+        reportText: null,
+        sources: [],
+        warnings: ['deep-research-resumed', 'deep-research-resume-timeout', 'deep-research-capture-skipped-past-deadline'],
+        status: 'timeout',
+    };
+}
+
+/**
+ * @param {any} page
+ * @param {any} deps
+ * @param {{ session: any, timeoutMs?: number, stableMs?: number }} opts
+ * @returns {Promise<DeepResearchResult>}
+ */
+async function runResumeDeepResearch(page, deps, { session, timeoutMs = TIER_DEFAULT_TIMEOUT_SEC['deep-research'] * 1000, stableMs = 5_000 }, runToken = null) {
+    // False once the caller has been answered. A stalled probe cannot be
+    // cancelled, so this run may still finish after its resume returned
+    // `timeout`; it must not then write a report nobody is waiting for.
+    const stillActive = () => isDeepResearchResumeActive(runToken);
     const warnings = ['deep-research-resumed'];
     const deadline = Date.now() + timeoutMs;
     let stableText = '';
     let stableSince = 0;
 
     while (Date.now() < deadline) {
-        await page.waitForTimeout(2000);
-        if (await isStreaming(page) || await hasProgressIndicator(page)) {
+        // Capped by what is left. A fixed 2s tick overshoots a deadline that
+        // has under two seconds on it — the loop condition is checked before
+        // the wait, not during it, so the wait itself is the overrun.
+        await page.waitForTimeout(Math.max(1, Math.min(2000, deadline - Date.now())));
+        if ((await isStreaming(page)) !== 'absent' || await hasProgressIndicator(page)) {
             stableText = '';
             stableSince = 0;
             continue;
@@ -429,9 +492,17 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
             continue;
         }
         if (report.from === 'frame') warnings.push('report-extracted-from-iframe');
-        updateSession(session.sessionId, { status: 'complete', answer: report.text, conversationUrl: page.url() });
+        const updated = await updateSessionAsync(
+            session.sessionId,
+            { status: 'complete', answer: report.text, conversationUrl: page.url() },
+            stillActive,
+        );
+        if (updated === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
         const saved = trySaveReport(session.sessionId, { text: report.text, sources: report.sources });
-        if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
+        if (saved.ok) {
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, stillActive);
+            if (appended === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
+        }
         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
         return {
             ok: true,
@@ -446,10 +517,14 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
 
     const finalReport = await extractResearchReport(page, deps);
     const finalText = finalReport?.completed ? finalReport.text : null;
-    updateSession(session.sessionId, { status: 'timeout', answer: finalText });
+    const updated = await updateSessionAsync(session.sessionId, { status: 'timeout', answer: finalText }, stillActive);
+    if (updated === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
     if (finalText) {
         const saved = trySaveReport(session.sessionId, { text: finalText, sources: finalReport.sources });
-        if (saved.ok) appendArtifactRecord(session.sessionId, saved.descriptor);
+        if (saved.ok) {
+            const appended = await appendArtifactRecordAsync(session.sessionId, saved.descriptor, stillActive);
+            if (appended === DEADLINE_PASSED) return buildResumeTimeoutEnvelope(session, page);
+        }
         else warnings.push(`artifact-save-failed:${saved.stage}:${saved.error}`);
     }
     return {
@@ -461,4 +536,12 @@ export async function resumeDeepResearch(page, deps, { session, timeoutMs = TIER
         warnings: [...warnings, 'deep-research-resume-timeout'],
         status: 'timeout',
     };
+}
+
+/**
+ * @param {{ expired?: boolean, hardDeadline?: number }|null} token
+ */
+export function isDeepResearchResumeActive(token) {
+    if (!token) return true;
+    return !(token.expired || Date.now() >= token.hardDeadline);
 }

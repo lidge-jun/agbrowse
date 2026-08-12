@@ -1,0 +1,2003 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createSession, getSession, listSessions, resolveTimeoutBudgetSec, saveBaseline, updateSession } from '../../web-ai/session.mjs';
+import { pollWebAi } from '../../web-ai/chatgpt.mjs';
+
+// This file drives the REAL session store. Without an isolated home it reads
+// and writes `~/.browser-agent`, so it inherits whatever sessions the developer
+// (or an earlier test file) left behind — and `findActiveSession` falls back to
+// `active.at(-1)`, which hands one of those strays to a poll that created its
+// own. That produced failures that moved between tests from run to run.
+const ORIGINAL_AGBROWSE_HOME = process.env.BROWSER_AGENT_HOME;
+process.env.BROWSER_AGENT_HOME = mkdtempSync(join(tmpdir(), 'agbrowse-activity-poll-'));
+
+/**
+ * Behavioural poll-loop harness for the activity strata (G8).
+ *
+ * Source-shape assertions cannot prove the safety property that matters here:
+ * deleting `finished &&` from the completion condition leaves every string check
+ * green. These tests drive `pollWebAi` for real against a page double whose
+ * activity verdict, answer text and terminal evidence are controlled, on a
+ * virtual clock so a 5s weak window costs milliseconds.
+ */
+function makePage({ activity, text, finished, turnOrdering = 'ordered' }) {
+    // The virtual clock advances only through `waitForTimeout`, which the poll
+    // loop awaits every iteration. Mocking Date.now globally made the suite
+    // allocate unboundedly when run in parallel with other files, so the clock is
+    // driven by a real elapsed-time offset instead.
+    const start = Date.now();
+    let offset = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+
+    const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+    const page = {
+        url: () => 'https://chatgpt.com/c/activity',
+        waitForTimeout: async (ms) => {
+            offset += Math.max(Number(ms) || 250, 250);
+            // Yield to the event loop so the loop cannot spin synchronously.
+            await new Promise(resolve => setImmediate(resolve));
+        },
+        evaluate: async (fn, arg) => {
+            const source = String(fn);
+            if (source.startsWith('function readChatGptStreamingState')) {
+                return typeof activity === 'function' ? activity(offset) : activity;
+            }
+            if (arg?.finishedSelector) {
+                return finished
+                    ? { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }
+                    : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+            }
+            if (source.startsWith('function readAssistantSnapshotSources')) {
+                return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+            }
+            if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+            // The ordering probe must be MODELLED, not waved through. A fixture
+            // that returns a catch-all truthy value leaves the gate unexercised:
+            // deleting the production call would not fail a single test.
+            if (source.startsWith('function readAssistantTurnOrderingInPage')) {
+                return typeof turnOrdering === 'function' ? turnOrdering(offset) : turnOrdering;
+            }
+            return true;
+        },
+        locator: () => ({
+            first: () => ({ isVisible: async () => false }),
+            all: async () => [],
+        }),
+    };
+    return { page, advance: (ms) => { offset += ms; } };
+}
+
+function poll(page, timeoutSec = 30) {
+    const session = createSession(
+        { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+        {
+            targetId: 'target-activity',
+            conversationUrl: 'https://chatgpt.com/c/activity',
+            deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+            envelopeSummary: { assistantCount: 0 },
+        },
+    );
+    return pollWebAi(
+        { getPage: async () => page, getTargetId: async () => 'target-activity' },
+        { vendor: 'chatgpt', session: session.sessionId, timeout: timeoutSec, skipFinalize: true },
+    ).then(result => ({ result, session }));
+}
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+
+afterAll(() => {
+    if (ORIGINAL_AGBROWSE_HOME === undefined) delete process.env.BROWSER_AGENT_HOME;
+    else process.env.BROWSER_AGENT_HOME = ORIGINAL_AGBROWSE_HOME;
+});
+
+describe('ChatGPT poll loop activity strata (G8 behavioural)', () => {
+    it('completes quickly when there is no activity and terminal evidence exists', async () => {
+        const { page } = makePage({ activity: { strength: 'none', evidence: '' }, text: 'final answer', finished: true });
+        const { result } = await poll(page);
+        expect(result).toMatchObject({ ok: true, status: 'complete', answerText: 'final answer' });
+    });
+
+    it('completes under WEAK activity once the longer window is satisfied', async () => {
+        // The stale-sidecar hang this row exists to fix: weak activity used to
+        // freeze the stability window forever.
+        const { page } = makePage({ activity: { strength: 'weak', evidence: 'panel-text' }, text: 'final answer', finished: true });
+        const { result } = await poll(page);
+        expect(result).toMatchObject({ ok: true, status: 'complete', answerText: 'final answer' });
+    });
+
+    it('never completes under STRONG activity', async () => {
+        const { page } = makePage({ activity: { strength: 'strong', evidence: 'stop-button' }, text: 'still writing', finished: true });
+        const { result } = await poll(page, 2);
+        // The loop must never reach the stable-completion branch. A timeout-path
+        // recovery result is acceptable; `status: 'complete'` is not.
+        expect(result.status).not.toBe('complete');
+    });
+
+    it('never completes without terminal evidence, even when quiet and stable', async () => {
+        // Guards the `finished &&` half of the completion condition: deleting it
+        // must fail here.
+        const { page } = makePage({ activity: { strength: 'none', evidence: '' }, text: 'looks done but is not', finished: false });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+        // Explicit: the completion branch also stamps `finishedEvidence`-bearing
+        // fields, so its absence proves the branch never ran.
+        expect(result.responseStableMs === undefined || result.ok !== true).toBe(true);
+    });
+
+    it('counts terminal evidence probes, proving `finished` is consulted', async () => {
+        // A direct guard on the `finished &&` conjunct: if it were deleted, the
+        // loop would complete on the FIRST stable window and this probe count
+        // would collapse to zero-or-one.
+        let finishedProbes = 0;
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'stable text',
+            finished: false,
+        });
+        const original = page.evaluate;
+        page.evaluate = async (fn, arg) => {
+            if (arg?.finishedSelector) finishedProbes += 1;
+            return original(fn, arg);
+        };
+
+        const { result } = await poll(page, 2);
+
+        expect(result.status).not.toBe('complete');
+        expect(finishedProbes).toBeGreaterThan(1);
+    });
+
+    it('never completes under weak activity without terminal evidence', async () => {
+        const { page } = makePage({ activity: { strength: 'weak', evidence: 'panel-trace' }, text: 'partial', finished: false });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+    });
+
+    it('reaches the 1s window under no activity within a 2s budget', async () => {
+        const { page } = makePage({ activity: { strength: 'none', evidence: '' }, text: 'answer', finished: true });
+        const { result } = await poll(page, 2);
+        expect(result.status).toBe('complete');
+    });
+
+    it('cannot reach the 5s window under weak activity within a 2s budget', async () => {
+        // The window is genuinely longer: same page, same evidence, same budget,
+        // only the strength differs.
+        const { page } = makePage({ activity: { strength: 'weak', evidence: 'panel-text' }, text: 'answer', finished: true });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+    });
+});
+
+describe('wrapperless completion through the poll loop (G11 behavioural)', () => {
+    /**
+     * The split reader returns ONLY a wrapperless candidate, the wrapped-turn
+     * lookup finds nothing (turnIndex -1), and the ordering probe returns FALSE —
+     * so this only completes if `isResponseFinished` honours wrapperless
+     * provenance AND the poll loop skips the ordering gate for it.
+     */
+    function makeWrapperlessPage({ finishedResult = { finished: false, messageId: null, turnId: null, turnIndex: -1 } } = {}) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const candidate = {
+            text: 'wrapperless answer',
+            messageId: null,
+            turnId: null,
+            turnIndex: -1,
+            source: 'wrapperless',
+            domOrder: 0,
+        };
+        return {
+            url: () => 'https://chatgpt.com/c/wrapperless',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return finishedResult;
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [], wrapperless: [candidate] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [];
+                // Ordering probe: NO wrapped assistant turn exists, so the real
+                // helper would report `stale`. Returning it proves the gate is
+                // skipped for wrapperless candidates.
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'stale';
+                return false;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [] }),
+        };
+    }
+
+    it('completes on a wrapperless candidate the ordering gate would have vetoed', async () => {
+        const page = makeWrapperlessPage();
+        const { result } = await poll(page, 10);
+        expect(result).toMatchObject({ ok: true, status: 'complete', answerText: 'wrapperless answer' });
+    });
+
+    it('does not let a successful empty read reach the completion branch', async () => {
+        // ok:true with both lists empty means "nothing yet": the poll loop must
+        // keep polling instead of letting the legacy reader supply a candidate.
+        // (The post-timeout recovery path has its own readers and is out of scope
+        // here; what matters is that the LOOP never completes.)
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        let terminalProbes = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/empty',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) {
+                    terminalProbes += 1;
+                    return { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) return { ok: true, wrapped: [], wrapperless: [] };
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    return [{ text: 'legacy invention', messageId: null, turnId: null, turnIndex: 0 }];
+                }
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [] }),
+        };
+
+        const { result } = await poll(page, 2);
+
+        expect(result.status).not.toBe('complete');
+        // The loop itself never had a candidate: with the old both-empty fallback
+        // it would have adopted the legacy one and probed for terminal evidence on
+        // EVERY iteration. Post-deadline recovery probes once, so a single probe
+        // proves the loop stayed empty.
+        expect(terminalProbes).toBeLessThanOrEqual(1);
+    });
+
+});
+
+/**
+ * Fail-closed sentinels (issue #88, boundaries B03 and B06).
+ *
+ * The defect these cover is not slowness — it is a WRONG ANSWER. When a read
+ * fails, the old code reported "quiet" and "ordered", the two facts the poll
+ * uses to decide an answer is final. A stall therefore disguised itself as a
+ * finished response.
+ */
+/**
+ * The poll can finish two ways: the LOOP completes (no fallback recorded), or
+ * the post-deadline recovery does (`usedFallbacks: ['recovery']`). These tests
+ * care about the loop, so they assert on that distinction rather than on
+ * `status` alone — recovery completing on its own terminal evidence is correct
+ * behaviour, not a leak of the sentinel.
+ */
+const completedInLoop = (result) =>
+    result.status === 'complete' && !(result.usedFallbacks || []).includes('recovery');
+
+describe('activity read failure is not quiet (B03)', () => {
+    it('T1: a throwing activity read reports unknown, not none', async () => {
+        const { page } = makePage({
+            activity: () => { throw new Error('evaluate stalled'); },
+            text: 'looks final',
+            finished: true,
+        });
+        const { result } = await poll(page, 2);
+        // `unknown` buys the longer quiet window, so a 2s budget cannot complete
+        // IN THE LOOP. Under the old `none` collapse it completed there at 1s.
+        expect(completedInLoop(result)).toBe(false);
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T2/T10: malformed and out-of-contract verdicts normalize to unknown', async () => {
+        for (const activity of [{ strength: 'bogus' }, { nope: 1 }, 'weird']) {
+            const { page } = makePage({ activity, text: 'looks final', finished: true });
+            const { result } = await poll(page, 2);
+            expect(completedInLoop(result)).toBe(false);
+            expect(result.warnings).toContain('activity-read-unverified');
+        }
+    });
+
+    it('T3: unknown demands the 5s window, not the 1s one', async () => {
+        // Same page, same terminal evidence, only the read outcome differs.
+        // `finished: true` is required: without it the `finished` conjunct alone
+        // blocks completion and this would pass even with the sentinel deleted.
+        const short = makePage({ activity: () => { throw new Error('stalled'); }, text: 'answer', finished: true });
+        const shortRun = await poll(short.page, 2);
+        expect(completedInLoop(shortRun.result)).toBe(false);
+
+        const long = makePage({ activity: () => { throw new Error('stalled'); }, text: 'answer', finished: true });
+        const longRun = await poll(long.page, 12);
+        expect(completedInLoop(longRun.result)).toBe(true);
+    });
+
+    it('T4/T13: an unverified read surfaces in warnings even on success', async () => {
+        const { page } = makePage({ activity: () => { throw new Error('stalled'); }, text: 'answer', finished: true });
+        const { result } = await poll(page, 12);
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T5: a genuine quiet read still means none, with no warning', async () => {
+        const { page } = makePage({ activity: { strength: 'none', evidence: '' }, text: 'answer', finished: true });
+        const { result } = await poll(page, 2);
+        expect(completedInLoop(result)).toBe(true);
+        expect(result.warnings || []).not.toContain('activity-read-unverified');
+    });
+});
+
+describe('ordering read failure is not ordered (B06)', () => {
+    it('T6/T9: an unreadable ordering gate blocks completion and times out', async () => {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'possibly stale answer',
+            finished: true,
+            turnOrdering: () => { throw new Error('ordering evaluate stalled'); },
+        });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('assistant-ordering-unverified');
+    });
+
+    it('T7: a stale verdict blocks completion', async () => {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'old answer',
+            finished: true,
+            turnOrdering: 'stale',
+        });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+    });
+
+    it('T8: "no user turn" is unverifiable, not a failure, and still completes', async () => {
+        // Over-applying fail-closed is its own defect: system-initiated
+        // conversations legitimately have no user turn.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'unverifiable',
+        });
+        const { result } = await poll(page, 2);
+        expect(completedInLoop(result)).toBe(true);
+    });
+
+    it('T11: a blocked ordering gate still paces the loop instead of spinning', async () => {
+        // The regression this guards: `continue` skipped `waitForTimeout`, and the
+        // virtual clock only advances there — so the deadline was never reached.
+        let waits = 0;
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'stale',
+        });
+        const originalWait = page.waitForTimeout;
+        page.waitForTimeout = async (ms) => { waits += 1; return originalWait(ms); };
+
+        const { result } = await poll(page, 2);
+
+        // The loop paced itself to the deadline and never completed; recovery
+        // then deferred rather than handing back the stale text.
+        expect(completedInLoop(result)).toBe(false);
+        expect(['timeout', 'polling']).toContain(result.status);
+        expect(waits).toBeGreaterThan(1);
+    });
+
+    it('T15: a recovered ordering read completes, keeping only the warning', async () => {
+        let calls = 0;
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+            turnOrdering: () => {
+                calls += 1;
+                if (calls <= 2) throw new Error('transient');
+                return 'ordered';
+            },
+        });
+        const { result } = await poll(page, 12);
+        expect(completedInLoop(result)).toBe(true);
+        expect(result.warnings).toContain('assistant-ordering-unverified');
+    });
+
+    it('proves the gate is consulted: deleting it would let a stale answer through', async () => {
+        let orderingProbes = 0;
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+            turnOrdering: () => { orderingProbes += 1; return 'stale'; },
+        });
+        await poll(page, 2);
+        expect(orderingProbes).toBeGreaterThan(1);
+    });
+});
+
+describe('an unsatisfied --output-image is never a textual complete', () => {
+    /**
+     * Post-deadline recovery and the copy fallback both collect NO images. If
+     * either returns text as `complete` while an explicit `--output-image` was
+     * requested, the caller is told a file exists that was never written. The
+     * public contract
+     * (devlog/_fin/260508_oracle_parity/11_generated_images_public_contract.md)
+     * requires a failure there.
+     *
+     * The text is deliberately substantive: gating on image-chrome strings alone
+     * would let this through, which is exactly the hole being closed.
+     */
+    /**
+     * Drives a poll to the deadline WITHOUT blocking on ordering, so the
+     * output-image invariant is the only thing that can stop completion.
+     *
+     * A failing activity read buys the 5s quiet window, which a 2s budget cannot
+     * satisfy; ordering stays `ordered` so recovery's own gate lets the candidate
+     * through. Blocking with `turnOrdering: 'stale'` instead would mask the
+     * invariant: recovery would defer even with it deleted.
+     */
+    function pollPastDeadline(extraInput = {}) {
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'a real substantive answer',
+            finished: true,
+            turnOrdering: 'ordered',
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        return pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            {
+                vendor: 'chatgpt',
+                session: session.sessionId,
+                timeout: 2,
+                skipFinalize: true,
+                ...extraInput,
+            },
+        );
+    }
+
+    it('T12a/T12c/T12g: recovery defers instead of completing', async () => {
+        const result = await pollPastDeadline({ outputImage: '/tmp/agbrowse-never-written.png' });
+        expect(result.status).not.toBe('complete');
+    });
+
+    it('proves the invariant is load-bearing: the same poll completes without it', async () => {
+        // Identical page, identical deadline overrun, only `outputImage` differs.
+        // Deleting the recovery invariant makes the test above match this one.
+        const result = await pollPastDeadline();
+        expect(result.status).toBe('complete');
+        expect(result.usedFallbacks).toContain('recovery');
+    });
+
+    it('completes normally when no output image was requested', async () => {
+        // The guard must not fire on ordinary text polls.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'a real substantive answer',
+            finished: true,
+        });
+        const { result } = await poll(page, 2);
+        expect(result.status).toBe('complete');
+    });
+
+    /**
+     * The copy fallback is a SEPARATE post-deadline exit. A no-session poll skips
+     * recovery entirely, so guarding recovery alone leaves this route open.
+     */
+    // Unique per page: a shared conversation URL let `findActiveSession` adopt a
+    // session left behind by an earlier poll, which is the opposite of what the
+    // session-free copy route is supposed to exercise.
+    let copyPageSeq = 0;
+
+    function makeCopyPage({ text, activity }) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        const conversationUrl = `https://chatgpt.com/c/copy-${Date.now()}-${copyPageSeq += 1}`;
+        return {
+            url: () => conversationUrl,
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    return typeof activity === 'function'
+                        ? activity(offset)
+                        : activity || { strength: 'none', evidence: '' };
+                }
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                if (arg?.selectorSet?.copyButtonSelectors) return { ok: true, text };
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+        };
+    }
+
+    /**
+     * `findActiveSession` adopts the most recent active ChatGPT session when the
+     * caller passes none, so leftovers from earlier tests would silently make
+     * this a session-bound poll — and session-bound polls exit through recovery,
+     * never reaching the copy route this covers.
+     */
+    function retireActiveSessions() {
+        // `findActiveSession` falls back to `active.at(-1)` when nothing matches
+        // by target or conversation URL, so ANY active ChatGPT session left by an
+        // earlier test gets adopted and the route stops being session-free.
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    }
+
+    /**
+     * Weak activity inside the loop demands the 5s window, which a 2s budget
+     * cannot reach; the post-deadline read then reports quiet so `stableText`
+     * survives into the copy route.
+     *
+     * The switch must fall AFTER the deadline (offset 2000): flipping to quiet
+     * on the last in-budget tick drops the window to 1s and the loop completes
+     * before the copy route is ever reached.
+     */
+    // The loop yields its final tick to the recovery reserve, so a 2s budget
+    // leaves the loop at 1500ms. Keying on 2000ms would never flip to quiet.
+    const weakThenQuiet = (offset) => (offset >= 1_500
+        ? { strength: 'none', evidence: '' }
+        : { strength: 'weak', evidence: 'panel-text' });
+
+    function pollCopyNoSession(page, extraInput = {}) {
+        retireActiveSessions();
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: page.url(),
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        return pollWebAi(
+            { getPage: async () => page },
+            {
+                vendor: 'chatgpt',
+                timeout: 2,
+                skipFinalize: true,
+                allowCopyMarkdownFallback: true,
+                ...extraInput,
+            },
+        );
+    }
+
+    it('T12d/T12f: the no-session copy route never completes an unsatisfied output image', async () => {
+        // Both shapes must fail closed. Image chrome may raise the typed
+        // `provider.image-output` error before copy is reached — that is the
+        // contract's own failure mode and equally acceptable. What is NOT
+        // acceptable is `status: 'complete'`.
+        for (const text of ['Edit', 'a real substantive markdown answer']) {
+            const page = makeCopyPage({ text, activity: weakThenQuiet });
+            const outcome = await pollCopyNoSession(page, { outputImage: '/tmp/agbrowse-never-written.png' })
+                .then(result => {
+                    // Proves this really is the session-free copy route.
+                    expect(result.sessionId).toBeUndefined();
+                    return result.status;
+                }, err => `threw:${err?.errorCode || 'unknown'}`);
+            expect(outcome).not.toBe('complete');
+        }
+    });
+
+    it('T12e: image-chrome text still completes when no output image was asked for', async () => {
+        // Classification is observational. Over-blocking on the chrome string
+        // alone would break ordinary polls whose answer happens to be short.
+        const page = makeCopyPage({ text: 'Edit', activity: weakThenQuiet });
+        const result = await pollCopyNoSession(page);
+        expect(result.status).toBe('complete');
+        expect(result.sessionId).toBeUndefined();
+        expect(result.usedFallbacks).toContain('copy-markdown');
+    });
+});
+
+/**
+ * An observation that reaches only the top-level `warnings` is half-recorded.
+ * The same list is copied into `answerArtifact` at construction time, persisted
+ * to the session by the deferred builder, and handed to the finalizer before the
+ * return — so each has to be checked separately.
+ */
+describe('observation warnings reach every envelope', () => {
+    function makeSession() {
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('T17: answerArtifact carries the same warnings as the result', async () => {
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+        });
+        const { result } = await poll(page, 12);
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('activity-read-unverified');
+        expect(result.answerArtifact.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T18/T14a: a deferred result and its persisted session agree', async () => {
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'stale',
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+        expect(result.status).toBe('polling');
+        expect(result.warnings).toContain('activity-read-unverified');
+        expect(getSession(session.sessionId).warnings).toContain('activity-read-unverified');
+    });
+
+    it('T19: the finalizer receives the observation too', async () => {
+        // The finalizer runs BEFORE the return and stores what it is given, so
+        // merging after the fact would leave the stored copy short.
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: true,
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 12 },
+        );
+        expect(result.status).toBe('complete');
+        expect(getSession(session.sessionId).warnings).toContain('activity-read-unverified');
+    });
+
+    it('T16: an early target-mismatch return still reports the earlier failed read', async () => {
+        // Mismatch exits before every other envelope; a per-return merge is easy
+        // to forget exactly here.
+        const { page } = makePage({
+            activity: () => { throw new Error('stalled'); },
+            text: 'answer',
+            finished: false,
+        });
+        const session = makeSession();
+        let calls = 0;
+        const result = await pollWebAi(
+            {
+                getPage: async () => page,
+                getTargetId: async () => { calls += 1; return calls > 1 ? 'moved-target' : 'target-activity'; },
+                getPort: () => 9222,
+            },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, skipFinalize: true },
+        );
+        expect(result.status).toBe('target-mismatch');
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    /**
+     * The loop, recovery and the copy fallback each perform their OWN activity
+     * read. A test whose loop read already fails cannot tell whether the later
+     * two record anything — the ledger is already populated. These keep the loop
+     * clean so only the later read can produce the observation.
+     */
+    it('T14a: recovery records an unknown the loop never saw', async () => {
+        // Every read INSIDE the loop succeeds; only the post-deadline read fails.
+        // The loop hands its last tick to the recovery reserve, so it exits at
+        // 1500ms of a 2s budget and the recovery read is the first at that mark.
+        const { page } = makePage({
+            activity: (offset) => {
+                if (offset >= 1_500) throw new Error('stalled after the deadline');
+                return { strength: 'none', evidence: '' };
+            },
+            text: 'answer',
+            finished: true,
+            turnOrdering: 'stale', // hold the loop off completion until the deadline
+        });
+        const session = makeSession();
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-activity' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+
+    it('T14b: the no-session copy route records its own first unknown', async () => {
+        // No session means recovery never runs, so the copy fallback's read is
+        // the only one that can produce this observation.
+        const text = 'a real substantive markdown answer';
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        const page = {
+            url: () => 'https://chatgpt.com/c/copy',
+            waitForTimeout: async (ms) => {
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    // Inside the budget: weak, so the 5s window holds the loop off.
+                    // After it: the read fails, which is the copy route's own read.
+                    if (offset >= 1_500) throw new Error('stalled after the deadline');
+                    return { strength: 'weak', evidence: 'panel-text' };
+                }
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                if (arg?.selectorSet?.copyButtonSelectors) return { ok: true, text };
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+        };
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/copy',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true, allowCopyMarkdownFallback: true },
+        );
+
+        expect(result.sessionId).toBeUndefined();
+        expect(result.warnings).toContain('activity-read-unverified');
+    });
+});
+
+/**
+ * Target identity sentinels (issue #88, boundary B24).
+ *
+ * `deps.getTargetId().catch(() => null)` made an unreadable target look exactly
+ * like a matching one: the mismatch check is `if (currentTargetId && ...)`, so
+ * `null` switched the whole check off. It switched off precisely when CDP was
+ * unstable — the moment a tab is most likely to have changed underneath.
+ *
+ * The session branch also skips the conversation-URL check in its `else`, so a
+ * tick with no identity evidence has NO identity evidence at all.
+ */
+describe('target identity failure is not a passing check (B24)', () => {
+    function pollWithTargetProbe(getTargetId, extraInput = {}) {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        return pollWebAi(
+            { getPage: async () => page, getTargetId, getPort: () => 9222 },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true, ...extraInput },
+        );
+    }
+
+    it('U1: a throwing target probe blocks completion and is recorded', async () => {
+        const result = await pollWithTargetProbe(async () => { throw new Error('cdp unstable'); });
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('target-identity-unverified');
+    });
+
+    it('U2: a null target probe is treated exactly like a throw', async () => {
+        // The diagnostic differs; the identity evidence — none — does not.
+        const result = await pollWithTargetProbe(async () => null);
+        expect(result.status).not.toBe('complete');
+        expect(result.warnings).toContain('target-identity-unverified');
+    });
+
+    it('U2b: a matching target completes normally', async () => {
+        const result = await pollWithTargetProbe(async () => 'target-activity');
+        expect(result.status).toBe('complete');
+        expect(result.warnings || []).not.toContain('target-identity-unverified');
+    });
+
+    it('U3: a differing target still returns mismatch with its evidence', async () => {
+        const result = await pollWithTargetProbe(async () => 'someone-elses-tab');
+        expect(result.status).toBe('target-mismatch');
+        // `actualTargetId` comes from the SAME read as the verdict; re-probing to
+        // recover it would race with the tab changing again.
+        expect(JSON.stringify(result)).toContain('someone-elses-tab');
+    });
+
+    it('U1b: recovery does not restore a candidate the loop disqualified', async () => {
+        // Without the recovery-side gate the loop refuses for the whole budget
+        // and then recovery hands back the same text as `complete`.
+        let calls = 0;
+        const result = await pollWithTargetProbe(async () => {
+            calls += 1;
+            throw new Error('cdp unstable');
+        });
+        expect(calls).toBeGreaterThan(1);
+        expect(result.status).not.toBe('complete');
+    });
+});
+
+/**
+ * Remaining observation contracts (issue #88, boundaries B23 and B25).
+ *
+ * Neither is fully fail-closed — both still return an answer. What they must not
+ * do is stay silent, because the caller cannot otherwise tell that the poll read
+ * a borrowed baseline or skipped artifact capture.
+ */
+describe('degraded reads are reported, not hidden', () => {
+    it('U10: a baseline borrowed from the host is recorded', async () => {
+        // `session-store` turns a corrupt store into an empty one, so this same
+        // path is reached when the store fails to read — the poll then answers
+        // against whatever conversation on this host was newest.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer from some other conversation',
+            finished: true,
+        });
+        // A conversation no earlier test has recorded a baseline for, so the
+        // exact lookup must miss and the host-wide fallback must be used.
+        const unseenUrl = `https://chatgpt.com/c/unseen-${Date.now()}`;
+        page.url = () => unseenUrl;
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        // A baseline for a DIFFERENT conversation on the same host.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/someone-else',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings).toContain('baseline-inferred-from-host');
+    });
+
+    it('U10b: an exact baseline is not reported as inferred', async () => {
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/activity',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings || []).not.toContain('baseline-inferred-from-host');
+    });
+
+    it('U10c: a corrupt session store is reported even when an exact baseline exists', async () => {
+        // B23 proper: the store file exists but cannot be parsed. The lookup
+        // collapses to "no session" and the exact legacy baseline still
+        // answers — but the failed read must be visible on the envelope,
+        // because the caller cannot otherwise tell a broken store from a
+        // genuinely fresh one.
+        const { writeFileSync: writeRaw } = await import('node:fs');
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer',
+            finished: true,
+        });
+        const corruptUrl = `https://chatgpt.com/c/corrupt-${Date.now()}`;
+        page.url = () => corruptUrl;
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: corruptUrl,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), '{ not json', 'utf8');
+
+        const result = await pollWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.warnings).toContain('session-store-read-failed');
+        // Repair the store so later tests see an empty-but-valid file.
+        writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), '{"version":1,"sessions":[]}\n', 'utf8');
+    });
+
+    it('U10d: a schema-invalid store shape is reported; a valid empty store is not', async () => {
+        // Valid JSON, broken shape: rows existed in a form the reader cannot
+        // use. This must be reported like a parse failure — silently reading
+        // it as empty was the last silent collapse branch.
+        const { writeFileSync: writeRaw } = await import('node:fs');
+        const makeCase = async (storeBody) => {
+            const { page } = makePage({
+                activity: { strength: 'none', evidence: '' },
+                text: 'answer',
+                finished: true,
+            });
+            const caseUrl = `https://chatgpt.com/c/shape-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            page.url = () => caseUrl;
+            saveBaseline({
+                vendor: 'chatgpt',
+                url: caseUrl,
+                assistantCount: 0,
+                envelope: { vendor: 'chatgpt', prompt: 'q' },
+            });
+            writeRaw(join(process.env.BROWSER_AGENT_HOME, 'web-ai-sessions.json'), storeBody, 'utf8');
+            return pollWebAi(
+                { getPage: async () => page },
+                { vendor: 'chatgpt', timeout: 2, skipFinalize: true },
+            );
+        };
+
+        const broken = await makeCase('{"version":1,"sessions":"invalid"}\n');
+        expect(broken.warnings).toContain('session-store-read-failed');
+
+        const clean = await makeCase('{"version":1,"sessions":[]}\n');
+        expect(clean.warnings || []).not.toContain('session-store-read-failed');
+    });
+
+    it('U4: skipped file capture is reported instead of passing silently', async () => {
+        // Opportunistic capture, so the answer still completes — but a plain
+        // success would hide that attachments were never collected.
+        const { page } = makePage({
+            activity: { strength: 'none', evidence: '' },
+            text: 'answer with attachments',
+            finished: true,
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-activity',
+                conversationUrl: 'https://chatgpt.com/c/activity',
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+
+        const result = await pollWebAi(
+            {
+                getPage: async () => page,
+                getTargetId: async () => 'target-activity',
+                getCdpSession: async () => null,
+            },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 12 },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('file-artifact-cdp-unavailable');
+    });
+});
+
+/**
+ * An unreadable assistant count is not zero (issue #88, boundaries B01/B02).
+ *
+ * `baseline.assistantCount` is the positional slice point: the poll takes
+ * `wrapped.slice(baseline.assistantCount)` to decide which turns are new. A
+ * failed read used to store 0, which re-admits the entire conversation as fresh
+ * candidates. WP10's ordering gate catches most of that, but not when ordering
+ * is `unverifiable` or when the image shortcut runs first — and relying on a
+ * later gate to undo a poisoned candidate set is the wrong place to fix it.
+ */
+describe('an uncountable baseline stops the send (B01/B02)', () => {
+    /**
+     * Every read path fails: split, snapshot retries, and the locator fallback.
+     *
+     * Drives a virtual clock so `waitForStableAssistantCount` reaches its 8s
+     * deadline in milliseconds. That also makes the null-reset observable: if an
+     * unreadable count were treated as stable, the wait would return after two
+     * reads instead of spending the whole budget.
+     */
+    function unreadablePage() {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        let waits = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/unreadable',
+            waitForTimeout: async (ms) => {
+                waits += 1;
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async () => { throw new Error('evaluate detached'); },
+            locator: () => ({
+                all: async () => { throw new Error('detached'); },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+            innerText: async () => '',
+        };
+        return Object.assign(page, { waitCount: () => waits });
+    }
+
+    it('X8: send fails typed instead of writing a zero baseline', async () => {
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { getBaseline } = await import('../../web-ai/session.mjs');
+        const url = `https://chatgpt.com/c/unreadable-${Date.now()}`;
+        const page = unreadablePage();
+        page.url = () => url;
+
+        const failure = await sendWebAi(
+            { getPage: async () => page },
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+        ).then(() => null, err => err);
+
+        expect(failure).toMatchObject({
+            errorCode: 'snapshot.unavailable',
+            stage: 'baseline-snapshot',
+            retryHint: 're-snapshot',
+        });
+        // Throwing the right error after already writing the baseline would be
+        // no better than not throwing at all.
+        expect(getBaseline('chatgpt', url)).toBeFalsy();
+        // X10: an unreadable count is never "stable". Counting it as stable
+        // would end the wait after two reads; it must spend the full budget.
+        expect(page.waitCount()).toBeGreaterThan(4);
+    });
+
+    it('X8b: deep research fails before creating a session or a lease', async () => {
+        // Ordering matters: `envelopeSummary.assistantCount` is read back later
+        // through `sessionToBaseline`, where `Number(null) || 0` would resurrect
+        // the false zero.
+        const { deepResearchWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { listLeases } = await import('../../web-ai/tab-lease-store.mjs');
+        const before = listSessions({ vendor: 'chatgpt' }).length;
+        const page = unreadablePage();
+        // A target id is required for the lease path to be reachable at all;
+        // without it the "no lease" assertion would pass vacuously.
+        const targetId = `target-deepresearch-${Date.now()}`;
+
+        const failure = await deepResearchWebAi(
+            { getPage: async () => page, getTargetId: async () => targetId, getPort: () => 9222 },
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+        ).then(() => null, err => err);
+
+        expect(failure).toMatchObject({
+            errorCode: 'snapshot.unavailable',
+            stage: 'baseline-snapshot',
+            retryHint: 're-snapshot',
+        });
+        expect(listSessions({ vendor: 'chatgpt' }).length).toBe(before);
+        expect((await listLeases()).some(lease => lease.targetId === targetId)).toBe(false);
+    });
+});
+
+/**
+ * The read-failure branches themselves (issue #88, boundaries B01/B02).
+ *
+ * The tests above prove the typed failure at the send boundary, but only when
+ * EVERY read fails. These cover the mixed cases, which are the ones that decide
+ * whether a real answer is found or a false zero is stored.
+ */
+describe('mixed snapshot read outcomes (B01/B02)', () => {
+    /**
+     * A page whose two snapshot attempts can be scripted independently.
+     * `readAssistantSnapshots` calls the plain-selectors form first, then the
+     * `{selectors, resolverSource}` form.
+     *
+     * @param {{ first: 'throw'|'malformed'|'empty'|'rows', second: 'throw'|'malformed'|'empty'|'rows', split?: 'ok'|'fail' }} plan
+     */
+    function scriptedPage(plan) {
+        const rows = [{ text: 'recovered answer', messageId: 'm1', turnId: 'conversation-turn-1', turnIndex: 0 }];
+        const outcome = (mode) => {
+            if (mode === 'throw') throw new Error('evaluate detached');
+            if (mode === 'malformed') return null;
+            return mode === 'rows' ? rows : [];
+        };
+        // `waitForStableAssistantCount` polls the counter repeatedly, so a
+        // one-shot counter would desync: every round calls attempt 1 then
+        // attempt 2, so use parity instead of absolute call order.
+        let snapshotCalls = 0;
+        return {
+            url: () => 'https://chatgpt.com/c/mixed',
+            waitForTimeout: async () => { await new Promise(resolve => setImmediate(resolve)); },
+            innerText: async () => '',
+            evaluate: async (fn) => {
+                const source = String(fn);
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    if ((plan.split || 'fail') === 'fail') throw new Error('split detached');
+                    return { ok: true, wrapped: [], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    snapshotCalls += 1;
+                    return outcome(snapshotCalls % 2 === 1 ? plan.first : plan.second);
+                }
+                throw new Error('evaluate detached');
+            },
+            locator: () => ({
+                all: async () => { throw new Error('detached'); },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+        };
+    }
+
+    /** @param {any} page */
+    async function countThroughSend(page) {
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        // Reaching the composer is out of scope; what matters is whether the
+        // baseline read threw before it.
+        return sendWebAi({ getPage: async () => page }, { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' })
+            .then(() => 'no-throw', err => err?.stage === 'baseline-snapshot' ? 'baseline-throw' : 'other-throw');
+    }
+
+    it('X2: a failed first attempt still falls back to the second', async () => {
+        // The two-step fallback predates this work and must survive it.
+        await expect(countThroughSend(scriptedPage({ first: 'throw', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2b: a successful empty read is not undone by a failing retry', async () => {
+        // The first attempt observed the page. The second failing adds nothing,
+        // and treating that as unknown would block sends on genuinely new chats.
+        await expect(countThroughSend(scriptedPage({ first: 'empty', second: 'throw' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2c: a malformed first result is a failed attempt, not an empty page', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'malformed', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+
+    it('X2d: both attempts malformed is unknown, not zero', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'malformed', second: 'malformed' })))
+            .resolves.toBe('baseline-throw');
+    });
+
+    it('X7: a failed split with a working snapshot read still counts', async () => {
+        await expect(countThroughSend(scriptedPage({ first: 'rows', second: 'rows' })))
+            .resolves.not.toBe('baseline-throw');
+    });
+});
+
+describe('poll loop when every reader fails (B01)', () => {
+    /**
+     * `failFrom`/`failUntil` describe a WINDOW of blind ticks so a read can
+     * succeed, then fail, then recover — the only sequence where a stale
+     * candidate from before the failure could still be consumed.
+     *
+     * @param {{ splitFails?: boolean, snapshotFails?: boolean, failFrom?: number, failUntil?: number }} plan
+     */
+    function pollPage(plan) {
+        const start = Date.now();
+        let offset = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => start + offset);
+        const snapshot = { text: 'answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        let waits = 0;
+        let reads = 0;
+        // `failFrom`/`failUntil` describe a WINDOW of blind ticks: reads succeed,
+        // then fail, then recover. That sequence is the only one where a stale
+        // candidate left over from before the failure could actually be used.
+        const blind = () => plan.failFrom !== undefined
+            && reads > plan.failFrom
+            && (plan.failUntil === undefined || reads <= plan.failUntil);
+        const page = {
+            url: () => 'https://chatgpt.com/c/activity',
+            waitForTimeout: async (ms) => {
+                waits += 1;
+                offset += Math.max(Number(ms) || 250, 250);
+                await new Promise(resolve => setImmediate(resolve));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    reads += 1;
+                    if (plan.splitFails || blind()) throw new Error('split detached');
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    if (plan.snapshotFails || blind()) throw new Error('snapshot detached');
+                    return [snapshot];
+                }
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({
+                all: async () => {
+                    if (plan.snapshotFails || blind()) throw new Error('detached');
+                    return [];
+                },
+                first: () => ({ isVisible: async () => false }),
+                count: async () => 0,
+            }),
+        };
+        return { page, waitCount: () => waits };
+    }
+
+    it('X11: an unreadable tick paces the loop and reaches the deadline', async () => {
+        // A `continue` that skipped the wait would spin forever here: the virtual
+        // clock only advances inside `waitForTimeout`.
+        const { page, waitCount } = pollPage({ splitFails: true, snapshotFails: true });
+        const { result } = await poll(page, 2);
+        expect(result.status).not.toBe('complete');
+        expect(waitCount()).toBeGreaterThan(1);
+        expect(result.warnings).toContain('assistant-read-unverified');
+    });
+
+    it('X11b: blind ticks do not count toward the quiet window once reads recover', async () => {
+        // Ticks 1-2 build stability, 3-6 read nothing, then reads recover with
+        // the SAME text. Keeping the earlier `stableSince` would let the blind
+        // interval count as quiet time and complete on evidence the poll never
+        // actually observed; it has to re-earn the window instead.
+        const { page, waitCount } = pollPage({ failFrom: 2, failUntil: 6 });
+        const { result } = await poll(page, 12);
+
+        expect(result.warnings).toContain('assistant-read-unverified');
+        expect(waitCount()).toBeGreaterThan(6);
+    });
+
+    it('X10: an unreadable count does not settle the pre-send stability wait', async () => {
+        // `waitForStableAssistantCount` returns as soon as two reads agree. A
+        // null count counted as agreement would let two blind ticks look like a
+        // settled page and hand a guessed baseline to the send.
+        const { sendWebAi } = await import('../../web-ai/chatgpt.mjs');
+        const { page } = pollPage({ splitFails: true, snapshotFails: true });
+        let waits = 0;
+        const originalWait = page.waitForTimeout;
+        page.waitForTimeout = async (ms) => { waits += 1; return originalWait(ms); };
+
+        await sendWebAi({ getPage: async () => page }, {
+            vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only',
+        }).catch(() => undefined);
+
+        // Two agreeing nulls would have returned after two waits.
+        expect(waits).toBeGreaterThan(2);
+    });
+
+    it('X12: a failed split with a working fallback still completes', async () => {
+        // The paired case: over-applying the guard would break the legacy path.
+        const { page } = pollPage({ splitFails: true, snapshotFails: false });
+        const { result } = await poll(page, 12);
+        expect(result.status).toBe('complete');
+        expect(result.warnings || []).not.toContain('assistant-read-unverified');
+    });
+});
+
+/**
+ * The poll returns within `--timeout` even when a read never settles
+ * (issue #88, the reported symptom).
+ *
+ * Everything earlier in this series fixed reads that THROW. A `page.evaluate`
+ * that simply hangs was untouched, because the loop only checks its deadline
+ * between ticks. Measured before the fix: a 2s budget was still running at 8s.
+ *
+ * The bound is on the RETURN, not the stall — the losing evaluate stays
+ * pending. That limit is deliberate and recorded in the plan.
+ */
+describe('a stalled read cannot outlive --timeout (#88)', () => {
+    // Sessions left `polling` by EARLIER describes in this file are still
+    // active when these tests run, and `findActiveSession` falls back to
+    // `active.at(-1)`. A poll here would adopt one of those, so the assertions
+    // would read a session this block never created. Retire the leftovers
+    // before each test as well as after.
+    beforeEach(() => {
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
+    afterEach(() => {
+        // These polls end in `polling`, so `findActiveSession` would hand them
+        // to later tests that expect none. Retire them explicitly.
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
+    /** @param {{ stall?: boolean, rejectAfterMs?: number, url?: string }} plan */
+    function stallingPage(plan = {}) {
+        let waits = 0;
+        return {
+            waitCount: () => waits,
+            page: {
+                url: () => plan.url || 'https://chatgpt.com/c/stall',
+                waitForTimeout: async (ms) => {
+                    waits += 1;
+                    await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 60)));
+                },
+                evaluate: async () => {
+                    if (plan.rejectAfterMs !== undefined) {
+                        await new Promise(resolve => setTimeout(resolve, plan.rejectAfterMs));
+                        throw new Error('late page failure');
+                    }
+                    if (plan.stall) return new Promise(() => {});
+                    return [];
+                },
+                locator: () => ({
+                    first: () => ({ isVisible: async () => false }),
+                    all: async () => [],
+                    count: async () => 0,
+                }),
+                innerText: async () => '',
+            },
+        };
+    }
+
+    function stallSession(slug) {
+        // Unique per test: a shared baseline URL becomes the newest
+        // same-host baseline and other tests in this file pick it up.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: `https://chatgpt.com/c/stall-${slug}`,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: `target-${slug}`,
+                conversationUrl: `https://chatgpt.com/c/stall-${slug}`,
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+    }
+
+    it('Y1: a never-settling evaluate returns timeout at the deadline', async () => {
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y1' });
+        const session = stallSession('y1');
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y1' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(result.warnings).toContain('poll-deadline-exceeded');
+        // Generous upper bound: the assertion is "bounded", not "instant".
+        expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    it('Y2c: a late rejection does not escape past the deadline', async () => {
+        // Normalising only fulfilled results would let the poll reject with the
+        // page error instead of the timeout envelope.
+        const { page } = stallingPage({ rejectAfterMs: 3_000, url: 'https://chatgpt.com/c/stall-y2c' });
+        const session = stallSession('y2c');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y2c' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+    });
+
+    it('Y5: the deadline path returns without writing the session store', async () => {
+        // Taking the synchronous store lock inside the timer callback would
+        // stall the event loop — the failure this whole change is about.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y5' });
+        const session = stallSession('y5');
+        const before = getSession(session.sessionId).status;
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y5' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(getSession(session.sessionId).status).toBe(before);
+    });
+
+    it('Y7: two concurrent polls on different sessions both finish', async () => {
+        // The run context is per-invocation. Module-level state would let one
+        // poll expire the other — an accidental single-flight this change
+        // explicitly does not introduce.
+        const a = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y7a' });
+        const b = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y7b' });
+        const sa = stallSession('y7a');
+        const sb = stallSession('y7b');
+
+        const [ra, rb] = await Promise.all([
+            pollWebAi({ getPage: async () => a.page, getTargetId: async () => 'target-y7a' },
+                { vendor: 'chatgpt', session: sa.sessionId, timeout: 2, skipFinalize: true }),
+            pollWebAi({ getPage: async () => b.page, getTargetId: async () => 'target-y7b' },
+                { vendor: 'chatgpt', session: sb.sessionId, timeout: 2, skipFinalize: true }),
+        ]);
+
+        expect(ra.status).toBe('timeout');
+        expect(rb.status).toBe('timeout');
+    });
+
+    /**
+     * Y1/Y2c/Y5/Y7 all pass `skipFinalize: true`, which skips the ONLY path that
+     * writes an answer to the session. They prove the return is bounded; they
+     * cannot prove the loser is fenced. These do.
+     */
+
+    it('Y8: a losing run cannot write the session after the deadline', async () => {
+        // The stall clears just after the bound, then the run walks straight
+        // into completion — the exact shape that used to finalize under a
+        // caller who had already been handed a timeout.
+        const session = stallSession('y8');
+        // Hold every read until AFTER the 2s bound, then answer cleanly. A
+        // single blocked read is not enough: the readers are individually
+        // bounded, so the loop would recover and complete before the deadline.
+        //
+        // Anchored to the FIRST read, not to the test body. The deadline starts
+        // when `pollWebAi` is called, so a fixed offset taken here drifts by
+        // however long session setup takes; under a loaded full-suite run that
+        // drift pushed the clear time BEFORE the deadline, the run finalized
+        // legitimately and only then lost the race. That made this test fail
+        // roughly two runs in five while proving nothing about the fence.
+        let clearAt = null;
+        const untilClear = async () => {
+            if (clearAt === null) clearAt = Date.now() + 2_600;
+            const remaining = clearAt - Date.now();
+            if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+        };
+        const page = {
+            url: () => 'https://chatgpt.com/c/stall-y8',
+            waitForTimeout: async (ms) => {
+                await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 60)));
+            },
+            evaluate: async (fn, arg) => {
+                await untilClear();
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return 'idle';
+                if (arg?.finishedSelector) {
+                    return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ text: 'late answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) {
+                    return [{ text: 'late answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }];
+                }
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+            // Held by the SAME gate as `evaluate`. This is the text fallback:
+            // leaving it unblocked let the loop read a complete answer without
+            // ever waiting, finish legitimately before the bound, and then lose
+            // the race — a pass/fail that depended on machine load and said
+            // nothing about the fence.
+            innerText: async () => { await untilClear(); return 'late answer'; },
+        };
+
+        // The ledger covers every observable the loser could touch, not just the
+        // session: checking three session fields would miss the trace, the
+        // artifacts, the diagnostics and the heartbeat.
+        const stderrWrites = [];
+        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+            stderrWrites.push(String(chunk));
+            return true;
+        });
+
+        let result;
+        try {
+            result = await pollWebAi(
+                { getPage: async () => page, getTargetId: async () => 'target-y8' },
+                { vendor: 'chatgpt', session: session.sessionId, timeout: 2 },
+            );
+            expect(result.status).toBe('timeout');
+
+            // Let the loser run to completion, then look at what it managed to do.
+            await new Promise(resolve => setTimeout(resolve, 1_500));
+        } finally {
+            stderrSpy.mockRestore();
+        }
+
+        const after = getSession(session.sessionId);
+        expect(after.answer ?? null).toBeNull();
+        expect(after.status).not.toBe('complete');
+        expect(after.completedAt ?? null).toBeNull();
+        expect(after.archived ?? false).toBe(false);
+        // Nothing may be narrated to the caller after their poll returned.
+        expect(stderrWrites.filter(line => line.includes('[poll]'))).toEqual([]);
+    });
+
+    it('Y9: the hard deadline honours a stored session budget, not a 1s default', async () => {
+        // `poll`, `watch` and `resume` pass `timeout: undefined` on purpose so
+        // the stored deadline is inherited (cli.mjs:730-738). Defaulting to 1s
+        // in the wrapper capped every one of those calls at a second.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y9' });
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y9',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y9',
+                conversationUrl: 'https://chatgpt.com/c/stall-y9',
+                deadlineAt: new Date(Date.now() + 3_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y9' },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        // Bracket the STORED budget specifically. A loose lower bound would also
+        // accept a hardcoded 2s, which is a different bug wearing this fix's
+        // clothes; the window is tight enough that only ~3s can land in it.
+        expect(elapsed).toBeGreaterThan(2_600);
+        expect(elapsed).toBeLessThan(4_500);
+    }, 20_000);
+
+    it('Y12: the inherited budget is anchored at the wrapper, not after the store read', async () => {
+        // The resolver turns a stored deadline into a REMAINDER against the
+        // clock it is handed. The wrapper adds that remainder to a `started`
+        // captured before the store read, so handing the resolver a LATER clock
+        // subtracts the read twice: once from the remainder, once from the
+        // anchor. The session store's lock retries 200 times at 25ms, so a
+        // contended read really can cost seconds.
+        //
+        // Asserted on the resolver's arithmetic: this pins the CONTRACT that a
+        // remainder is only correct against the anchor it will be added to.
+        // Y13 covers the wiring — that `pollWebAi` actually passes its own
+        // anchor — because this test alone stays green if the call site drops
+        // the argument.
+        const startedAt = 1_000_000;
+        const storeReadMs = 900;
+        const session = /** @type {any} */ ({
+            vendor: 'chatgpt',
+            deadlineAt: new Date(startedAt + 5_000).toISOString(),
+        });
+
+        // What the fix does: the resolver sees the wrapper's own anchor, so
+        // anchor + budget lands exactly on the stored deadline.
+        const anchored = resolveTimeoutBudgetSec({}, session, 'chatgpt', startedAt);
+        expect(startedAt + anchored * 1_000).toBe(startedAt + 5_000);
+
+        // What it did: the resolver read the clock after the store read, and
+        // that remainder was still added to the earlier anchor.
+        const afterRead = resolveTimeoutBudgetSec({}, session, 'chatgpt', startedAt + storeReadMs);
+        expect(startedAt + afterRead * 1_000).toBe(startedAt + 5_000 - storeReadMs);
+    });
+
+    it('Y13: pollWebAi hands the resolver its own start, not a later clock', async () => {
+        // Y12 pins the arithmetic but not the wiring — it calls the resolver
+        // directly, so dropping the argument at the call site leaves it green.
+        // This runs the real `pollWebAi` against a mocked resolver, captures
+        // the clock it was given, and compares it to the wrapper's own start.
+        //
+        // The resolver throws a sentinel so the poll stops before any browser
+        // work: the assertion is about one argument, and nothing after it needs
+        // to run. That keeps this in milliseconds instead of a real store delay.
+        vi.resetModules();
+        const sentinel = new Error('stop-after-budget-resolution');
+        /** @type {number|undefined} */
+        let observedNow;
+        vi.doMock('../../web-ai/session.mjs', async () => {
+            const actual = /** @type {any} */ (await vi.importActual('../../web-ai/session.mjs'));
+            return {
+                ...actual,
+                resolveTimeoutBudgetSec: (/** @type {any} */ _input, /** @type {any} */ _session, /** @type {any} */ _vendor, /** @type {any} */ nowMs) => {
+                    observedNow = nowMs;
+                    throw sentinel;
+                },
+            };
+        });
+        try {
+            const { pollWebAi: freshPoll } = await import('../../web-ai/chatgpt.mjs?y13');
+            const before = Date.now();
+            await expect(freshPoll(
+                { getPage: async () => { throw new Error('the poll must not reach the browser'); } },
+                { vendor: 'chatgpt' },
+            )).rejects.toBe(sentinel);
+            const after = Date.now();
+
+            // The wrapper's `started` is taken as its first instruction, so the
+            // clock it forwards must sit at or before the call, never after the
+            // store read that follows it.
+            expect(observedNow).toBeGreaterThanOrEqual(before);
+            expect(observedNow).toBeLessThanOrEqual(after);
+            expect(observedNow).not.toBeUndefined();
+        } finally {
+            vi.doUnmock('../../web-ai/session.mjs');
+            vi.resetModules();
+        }
+    });
+
+    it('Y14: a sub-second stored remainder is not rounded up to a full second', async () => {
+        // `resolveTimeoutBudgetSec` floors its answer at one second. That is
+        // right for a polling BUDGET — a session with 200ms left should still
+        // get a usable slice — and wrong for a hard bound, which cannot be
+        // rounded up past what the caller was promised. 400ms left used to
+        // become a 1000ms deadline.
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y14' });
+        /** @type {number|null} */
+        let pageOpenedAt = null;
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y14',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y14',
+                conversationUrl: 'https://chatgpt.com/c/stall-y14',
+                // Placeholder. The real one is written AFTER setup, below.
+                deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        // Set after all store work is done, so the 400ms window cannot be
+        // consumed by session creation or lock contention before the poll even
+        // starts. Anchoring a short deadline across setup is precisely the
+        // drift that made an earlier test in this file flake under load: with
+        // slow setup the session is legitimately expired on arrival and the
+        // poll correctly returns early, failing a test that demanded it run.
+        const deadlineAt = Date.now() + 400;
+        updateSession(session.sessionId, { deadlineAt: new Date(deadlineAt).toISOString() });
+
+        const result = await pollWebAi(
+            {
+                getPage: async () => { pageOpenedAt ??= Date.now(); return page; },
+                getTargetId: async () => 'target-y14',
+            },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+        const finishedAt = Date.now();
+
+        expect(result.status).toBe('timeout');
+        // The poll actually ran: this is the deterministic half of the lower
+        // bound, and it fails outright if a regression returns early for every
+        // stored deadline — a different bug with the same symptom as the fix.
+        expect(pageOpenedAt).not.toBeNull();
+        // The bound itself: finishing at or before the stored deadline plus a
+        // tick. Compared against the DEADLINE, not against elapsed time, so
+        // slow setup cannot move it. The old floor produced ~1004ms, which
+        // lands well past this.
+        expect(finishedAt).toBeLessThan(deadlineAt + 500);
+    }, 20_000);
+
+    it('Y15: an already expired stored deadline returns without opening the page', async () => {
+        // The floor turned a deadline that had already passed into a fresh
+        // second, so an expired session still drove a full poll. Nothing it
+        // finds can be delivered inside a bound that is already gone, and
+        // opening the page is work nobody is waiting for.
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: 'https://chatgpt.com/c/stall-y15',
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        const session = createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: 'target-y15',
+                conversationUrl: 'https://chatgpt.com/c/stall-y15',
+                deadlineAt: new Date(Date.now() - 5_000).toISOString(),
+                envelopeSummary: { assistantCount: 0 },
+            },
+        );
+        let pageRequests = 0;
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            {
+                getPage: async () => { pageRequests += 1; throw new Error('the poll must not open a page'); },
+                getTargetId: async () => 'target-y15',
+            },
+            { vendor: 'chatgpt', session: session.sessionId, skipFinalize: true },
+        );
+
+        expect(result.status).toBe('timeout');
+        expect(result.errorCode).toBe('provider.poll-timeout');
+        expect(pageRequests).toBe(0);
+        expect(Date.now() - started).toBeLessThan(500);
+    });
+
+    it('Y11: the recovery reserve scales with the budget instead of one tick', async () => {
+        // `Math.max(PACING_INTERVAL_MS, budgetMs % PACING_INTERVAL_MS)` is always
+        // exactly PACING_INTERVAL_MS — the remainder is smaller by definition.
+        // That term pinned the reserve to 500ms and made RECOVERY_RESERVE_MS
+        // unreachable at every budget, so recovery ran on one tick no matter how
+        // long the caller waited.
+        //
+        // Observed through the loop's own pacing: the loop stops at
+        // `hardDeadline - reserve`, so a bigger reserve means an earlier stop.
+        const session = stallSession('y11');
+        let ticks = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/stall-y11',
+            waitForTimeout: async (ms) => {
+                ticks += 1;
+                await new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 500)));
+            },
+            evaluate: async () => { throw new Error('unreadable'); },
+            locator: () => ({
+                first: () => ({ isVisible: async () => false }),
+                all: async () => [],
+                count: async () => 0,
+            }),
+            innerText: async () => '',
+        };
+        const started = Date.now();
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-y11' },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 8, skipFinalize: true },
+        );
+        const elapsed = Date.now() - started;
+
+        expect(result.status).toBe('timeout');
+        expect(ticks).toBeGreaterThan(0);
+        // 8s budget, 2s reserve → the loop must leave by ~6s. The dead term
+        // capped the reserve at 500ms, which lands past 7s.
+        expect(elapsed).toBeLessThan(7_000);
+    }, 30_000);
+
+    it('Y10: a frozen clock still returns, instead of re-arming forever', async () => {
+        // `arm()` re-reads `Date.now` every tick. A frozen or mocked clock never
+        // reaches the deadline, so the timer re-armed indefinitely and the poll
+        // returned NOTHING — worse than the overrun this wrapper prevents.
+        const frozen = Date.now();
+        const { page } = stallingPage({ stall: true, url: 'https://chatgpt.com/c/stall-y10' });
+        const session = stallSession('y10');
+        vi.spyOn(Date, 'now').mockImplementation(() => frozen);
+
+        const started = performance.now();
+        const outcome = await Promise.race([
+            pollWebAi(
+                { getPage: async () => page, getTargetId: async () => 'target-y10' },
+                { vendor: 'chatgpt', session: session.sessionId, timeout: 2, skipFinalize: true },
+            ).then(r => r.status),
+            new Promise(resolve => setTimeout(() => resolve('STILL-HANGING'), 8_000)),
+        ]);
+        const elapsedMs = performance.now() - started;
+
+        expect(outcome).toBe('timeout');
+        // The bound has to hold on REAL time, not on the clock the poll reads —
+        // that is the whole point when the clock is frozen. A loose watchdog
+        // would pass while the caller waited several times the budget.
+        expect(elapsedMs).toBeLessThan(3_000);
+    }, 20_000);
+});
+
+/**
+ * The require-all contract has to hold on EVERY completing path. Wiring only
+ * the ordinary one would let an answer that arrived through recovery report
+ * success without the files the caller asked for.
+ */
+describe('required file artifacts gate every completion path (B25)', () => {
+    afterEach(() => {
+        for (const stored of listSessions({ vendor: 'chatgpt', active: true })) {
+            updateSession(stored.sessionId, { status: 'complete', completedAt: new Date().toISOString() });
+        }
+    });
+
+    /** A page that answers immediately and cleanly. */
+    function answeringPage(url) {
+        const snapshot = { text: 'here is the answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        return {
+            url: () => url,
+            waitForTimeout: async (ms) => { await new Promise(r => setTimeout(r, Math.min(Number(ms) || 0, 40))); },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                if (source.startsWith('function readChatGptStreamingState')) return { strength: 'none', evidence: '' };
+                if (arg?.finishedSelector) return { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return [snapshot];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [], count: async () => 0 }),
+            innerText: async () => 'here is the answer',
+        };
+    }
+
+    function pollSession(slug, extraSummary = {}) {
+        saveBaseline({
+            vendor: 'chatgpt',
+            url: `https://chatgpt.com/c/${slug}`,
+            assistantCount: 0,
+            envelope: { vendor: 'chatgpt', prompt: 'q' },
+        });
+        return createSession(
+            { vendor: 'chatgpt', prompt: 'q', attachmentPolicy: 'inline-only' },
+            {
+                targetId: `target-${slug}`,
+                conversationUrl: `https://chatgpt.com/c/${slug}`,
+                deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+                envelopeSummary: { assistantCount: 0, ...extraSummary },
+            },
+        );
+    }
+
+    it('Z1: a complete answer fails when the required files cannot be captured', async () => {
+        const session = pollSession('z1');
+        const page = answeringPage('https://chatgpt.com/c/z1');
+
+        const result = await pollWebAi(
+            // No CDP at all: the files cannot even be looked for.
+            { getPage: async () => page, getTargetId: async () => 'target-z1', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+        expect(result.evidence.reason).toBe('cdp-unavailable');
+        // The hint has to name the actual remedy, not a generic retry.
+        expect(result.retryHint).toBe('start-headed');
+    }, 20_000);
+
+    it('Z2: the same answer succeeds when nobody asked for files', async () => {
+        // The paired case. Over-blocking a plain text answer would be as wrong
+        // as the silence this contract removes.
+        const session = pollSession('z2');
+        const page = answeringPage('https://chatgpt.com/c/z2');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z2', getCdpSession: async () => null },
+            // No `skipFinalize`: that flag bypasses capture entirely, so it
+            // would prove nothing about the best-effort path.
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5 },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.warnings).toContain('file-artifact-cdp-unavailable');
+    }, 20_000);
+
+    it('Z3: the requirement is inherited from the session, not just the flag', async () => {
+        // `poll` never repeats the flag, so this is how a send-time requirement
+        // reaches the poll that enforces it.
+        const session = pollSession('z3', { fileArtifactPolicy: 'require-all' });
+        const page = answeringPage('https://chatgpt.com/c/z3');
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z3', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5 },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+    }, 20_000);
+
+    it('Z4: a late-settling answer is gated too', async () => {
+        // Drives an answer that only appears near the end of the budget.
+        //
+        // Honest scope: this still lands on the ORDINARY completion, verified by
+        // mutation — disabling the recovery wiring leaves it green, disabling
+        // the normal wiring turns it red. Recovery and copy are wired from the
+        // same helper and asserted by construction, not by this test.
+        const session = pollSession('z4');
+        const snapshot = { text: 'recovered answer', messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 };
+        let elapsed = 0;
+        const page = {
+            url: () => 'https://chatgpt.com/c/z4',
+            waitForTimeout: async (ms) => {
+                elapsed += Math.max(Number(ms) || 0, 250);
+                await new Promise(r => setTimeout(r, 10));
+            },
+            evaluate: async (fn, arg) => {
+                const source = String(fn);
+                // Nothing readable until the loop has given up.
+                // Past the LOOP deadline (budget minus the recovery reserve),
+                // so the loop never sees it and only recovery can.
+                const settled = elapsed >= 1_600;
+                if (source.startsWith('function readChatGptStreamingState')) {
+                    return settled ? { strength: 'none', evidence: '' } : { strength: 'weak', evidence: 'panel-text' };
+                }
+                if (arg?.finishedSelector) {
+                    return settled
+                        ? { finished: true, messageId: 'm1', turnId: 'conversation-turn-2', turnIndex: 1 }
+                        : { finished: false, messageId: null, turnId: null, turnIndex: -1 };
+                }
+                if (source.startsWith('function readAssistantSnapshotSources')) {
+                    return settled
+                        ? { ok: true, wrapped: [{ ...snapshot, source: 'wrapped', domOrder: 0 }], wrapperless: [] }
+                        : { ok: true, wrapped: [], wrapperless: [] };
+                }
+                if (source.startsWith('function readTopLevelAssistantSnapshots')) return settled ? [snapshot] : [];
+                if (source.startsWith('function readAssistantTurnOrderingInPage')) return 'ordered';
+                return true;
+            },
+            locator: () => ({ first: () => ({ isVisible: async () => false }), all: async () => [], count: async () => 0 }),
+            innerText: async () => 'recovered answer',
+        };
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z4', getCdpSession: async () => null },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 2, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errorCode).toBe('provider.file-artifact');
+        expect(result.usedFallbacks ?? []).not.toContain('copy-markdown');
+    }, 20_000);
+
+    it('Z5: a successful capture reports where the files landed', async () => {
+        // Requiring the files and then not saying where they went is only half
+        // a contract.
+        const session = pollSession('z5');
+        const page = answeringPage('https://chatgpt.com/c/z5');
+        const cdp = {
+            send: async (method) => {
+                if (method === 'Network.getCookies') return { cookies: [{ name: 's', value: '1' }] };
+                return { result: { value: [{ href: 'https://chatgpt.com/backend-api/files/file_a/download', download: 'a.txt', text: '' }] } };
+            },
+            detach: async () => undefined,
+        };
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'text/plain' : null) },
+            arrayBuffer: async () => new TextEncoder().encode('file body').buffer,
+        })));
+
+        const result = await pollWebAi(
+            { getPage: async () => page, getTargetId: async () => 'target-z5', getCdpSession: async () => cdp },
+            { vendor: 'chatgpt', session: session.sessionId, timeout: 5, fileArtifactPolicy: 'require-all' },
+        );
+
+        expect(result.status).toBe('complete');
+        expect(result.artifacts).toHaveLength(1);
+        expect(result.artifacts[0].path).toBe('a.txt');
+        expect(result.artifacts[0].sha256).toBeTruthy();
+    }, 20_000);
+});

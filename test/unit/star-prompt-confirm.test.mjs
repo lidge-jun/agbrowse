@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { PassThrough } from 'node:stream';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { interactiveConfirm } from '../../scripts/interactive-confirm.mjs';
 import { isAgentDriven } from '../../scripts/agent-driven.mjs';
+import { shouldSkipStarPrompt, maybeRunStarPrompt } from '../../scripts/postinstall.mjs';
 
 const postinstallPath = fileURLToPath(new URL('../../scripts/postinstall.mjs', import.meta.url));
 
@@ -109,7 +114,9 @@ describe('postinstall star prompt', () => {
         expect(source).toContain('Star it on GitHub (via gh)?');
 
         const guardIndex = source.indexOf('if (isAgentDriven()) {');
-        const markIndex = source.indexOf('await markPrompted()');
+        // The call gained a `stateFile` argument when the prompt moved from
+        // the npm hook to first CLI run; the ordering check is unchanged.
+        const markIndex = source.indexOf('await markPrompted(');
         expect(guardIndex).toBeGreaterThan(-1);
         // The guard must precede the state write, otherwise an agent-driven
         // install would consume the one-time prompt the user never saw.
@@ -121,5 +128,229 @@ describe('postinstall star prompt', () => {
         const source = await readFile(postinstallPath, 'utf8');
 
         expect(source).toContain('"auth", "status"');
+    });
+});
+
+/**
+ * A fake interactive terminal: like makeTty but with isTTY set on both
+ * streams, which is what shouldSkipStarPrompt gates on.
+ */
+function makeInteractiveTty() {
+    const { input, output, frames } = makeTty();
+    input.isTTY = true;
+    output.isTTY = true;
+    return { input, output, frames };
+}
+
+// Mirror of AGENT_ENV_VARS in scripts/agent-driven.mjs — keep in sync.
+const AGENT_ENV_VARS = [
+    'CLAUDECODE',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CODEX_THREAD_ID',
+    'CODEX_SHELL',
+    'CODEX_CI',
+    'CURSOR_TRACE_ID',
+    'CURSOR_SESSION_TOKEN',
+    'AIDER_CHAT',
+    'REPL_ID',
+    'CI',
+    'GITHUB_ACTIONS',
+];
+
+/**
+ * Delete every agent-harness env var and return a restore function. Vitest
+ * isolates test files per worker process, so this cannot leak into sibling
+ * files; try/finally protects tests within this file.
+ */
+function scrubAgentEnv() {
+    const saved = {};
+    for (const name of AGENT_ENV_VARS) {
+        if (name in process.env) {
+            saved[name] = process.env[name];
+            delete process.env[name];
+        }
+    }
+    return () => {
+        for (const [name, value] of Object.entries(saved)) process.env[name] = value;
+    };
+}
+
+/** A state path with a nested, not-yet-existing parent directory. */
+function tmpStateFile() {
+    return join(mkdtempSync(join(tmpdir(), 'agbrowse-star-')), 'nested', 'state', 'star-prompt.json');
+}
+
+function silentStderr() {
+    const frames = [];
+    return { frames, stream: { isTTY: true, write: chunk => { frames.push(String(chunk)); return true; } } };
+}
+
+describe('shouldSkipStarPrompt', () => {
+    const tty = { isTTY: true };
+    const noTty = {};
+
+    test('non-TTY streams skip (agents, pipes, CI spawns)', () => {
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: {}, stdin: noTty, stdout: tty })).toBe(true);
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: {}, stdin: tty, stdout: noTty })).toBe(true);
+    });
+
+    test('--json and --help skip even on a TTY', () => {
+        expect(shouldSkipStarPrompt({ argv: ['status', '--json'], env: {}, stdin: tty, stdout: tty })).toBe(true);
+        expect(shouldSkipStarPrompt({ argv: ['start', '--help'], env: {}, stdin: tty, stdout: tty })).toBe(true);
+    });
+
+    test('AGBROWSE_JSON_ERRORS=1 machine consumers skip', () => {
+        expect(shouldSkipStarPrompt({ argv: ['status'], env: { AGBROWSE_JSON_ERRORS: '1' }, stdin: tty, stdout: tty })).toBe(true);
+    });
+
+    test('AGBROWSE_STAR_PROMPT=0 opts out', () => {
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: { AGBROWSE_STAR_PROMPT: '0' }, stdin: tty, stdout: tty })).toBe(true);
+    });
+
+    test('CI skips unless explicitly forced', () => {
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: { CI: 'true' }, stdin: tty, stdout: tty })).toBe(true);
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: { CI: 'true', AGBROWSE_STAR_PROMPT: '1' }, stdin: tty, stdout: tty })).toBe(false);
+    });
+
+    test('MCP stdio, help-class, empty, flag, and unknown commands skip', () => {
+        const skipped = [
+            ['web-ai', 'mcp-server'],
+            ['help'],
+            ['skills'],
+            ['install-skills'],
+            ['research', 'plan'],
+            [],
+            ['--version'],
+            ['not-a-command'],
+        ];
+        for (const argv of skipped) {
+            expect(shouldSkipStarPrompt({ argv, env: {}, stdin: tty, stdout: tty })).toBe(true);
+        }
+    });
+
+    test('an interactive human command does not skip', () => {
+        expect(shouldSkipStarPrompt({ argv: ['start'], env: {}, stdin: tty, stdout: tty })).toBe(false);
+    });
+});
+
+describe('maybeRunStarPrompt (injected streams)', () => {
+    test('agent-driven TTY defers to stderr and writes no state', async () => {
+        const { input, output, frames } = makeInteractiveTty();
+        const stderr = silentStderr();
+        const stateFile = tmpStateFile();
+        process.env.CODEX_THREAD_ID = 'test-thread';
+        let ran;
+        try {
+            ran = await maybeRunStarPrompt({
+                argv: ['start'],
+                env: {},
+                stdin: input,
+                stdout: output,
+                stderr: stderr.stream,
+                stateFile,
+                ghInstalled: () => true,
+            });
+        } finally {
+            delete process.env.CODEX_THREAD_ID;
+        }
+        expect(ran).toBe(false);
+        expect(frames.join('')).toBe('');
+        expect(stderr.frames.join('')).toContain('do not answer this yourself');
+        expect(existsSync(stateFile)).toBe(false);
+    });
+
+    test('human first run prompts once, then stays silent', async () => {
+        const restore = scrubAgentEnv();
+        const stateFile = tmpStateFile();
+        try {
+            const first = makeInteractiveTty();
+            const pending = maybeRunStarPrompt({
+                argv: ['start'],
+                env: {},
+                stdin: first.input,
+                stdout: first.output,
+                stderr: silentStderr().stream,
+                stateFile,
+                ghInstalled: () => true,
+            });
+            first.input.write('n');
+            expect(await pending).toBe(true);
+            expect(first.frames.join('')).toContain('Star it on GitHub (via gh)?');
+            expect(existsSync(stateFile)).toBe(true);
+
+            const second = makeInteractiveTty();
+            const ranAgain = await maybeRunStarPrompt({
+                argv: ['start'],
+                env: {},
+                stdin: second.input,
+                stdout: second.output,
+                stderr: silentStderr().stream,
+                stateFile,
+                ghInstalled: () => true,
+            });
+            expect(ranAgain).toBe(false);
+            expect(second.frames.join('')).toBe('');
+        } finally {
+            restore();
+        }
+    });
+
+    test('human yes stars through the injected star function', async () => {
+        const restore = scrubAgentEnv();
+        try {
+            const { input, output, frames } = makeInteractiveTty();
+            let starCalls = 0;
+            const pending = maybeRunStarPrompt({
+                argv: ['start'],
+                env: {},
+                stdin: input,
+                stdout: output,
+                stderr: silentStderr().stream,
+                stateFile: tmpStateFile(),
+                ghInstalled: () => true,
+                star: () => {
+                    starCalls += 1;
+                    return { ok: true };
+                },
+            });
+            input.write('y');
+            expect(await pending).toBe(true);
+            expect(starCalls).toBe(1);
+            expect(frames.join('')).toContain('Thanks for the');
+        } finally {
+            restore();
+        }
+    });
+
+    test('non-TTY, --json, and opted-out invocations exit before any probe', async () => {
+        const cases = [
+            { argv: ['start'], env: {}, stdin: {}, stdout: { isTTY: true } },
+            { argv: ['status', '--json'], env: {}, stdin: { isTTY: true }, stdout: { isTTY: true } },
+            { argv: ['start'], env: { AGBROWSE_STAR_PROMPT: '0' }, stdin: { isTTY: true }, stdout: { isTTY: true } },
+        ];
+        for (const opts of cases) {
+            const ran = await maybeRunStarPrompt({
+                ...opts,
+                stderr: silentStderr().stream,
+                stateFile: tmpStateFile(),
+                ghInstalled: () => {
+                    throw new Error('must not probe gh on skipped surfaces');
+                },
+            });
+            expect(ran).toBe(false);
+        }
+    });
+});
+
+describe('postinstall direct execution', () => {
+    test('node scripts/postinstall.mjs is a silent no-op when non-TTY', () => {
+        const res = spawnSync(process.execPath, [postinstallPath], {
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+            timeout: 15000,
+            env: { ...process.env, CI: '1' },
+        });
+        expect(res.status).toBe(0);
+        expect(res.stdout).toBe('');
     });
 });

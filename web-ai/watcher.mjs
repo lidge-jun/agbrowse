@@ -12,8 +12,9 @@ import { pollWebAi } from './chatgpt.mjs';
 import { isWorkSession, pollWorkSession } from './chatgpt-work-picker.mjs';
 import { geminiPollWebAi } from './gemini-live.mjs';
 import { grokPollWebAi } from './grok-live.mjs';
-import { getSession, updateSession } from './session.mjs';
-import { withSessionPage, urlsCompatible } from './tab-recovery.mjs';
+import { DEADLINE_PASSED, getSession, resolvePollTimeoutSec, updateSession, updateSessionAsync } from './session.mjs';
+import { isRecoverableCdpDisconnect, probeCdpLiveness } from './cdp-liveness.mjs';
+import { isCdpDisconnectError, reattachSessionPage, storedDeadlineStillActive, withSessionPage, withSessionPageGuarded, urlsCompatible } from './tab-recovery.mjs';
 import { withSessionCommandLock } from './session-store.mjs';
 import { WebAiError, wrapError } from './errors.mjs';
 import {
@@ -92,6 +93,14 @@ export async function watchSession(deps, input = {}, notifier = null) {
                 await emit({ type: `watch.${tick.status}`, status: tick.status, terminal: true, vendor: tick.vendor });
                 break;
             }
+            // A typed fail-closed result ends the watch. Continuing to poll
+            // would spin on a condition the caller already has to act on, and
+            // the final `ok: true` below would then report success.
+            if (tick.errorCode === 'provider.file-artifact') {
+                final = { ...tick, terminal: true };
+                await emit({ type: 'watch.file-artifact-unsatisfied', status: tick.status, terminal: true, vendor: tick.vendor });
+                break;
+            }
             if (options.once) {
                 final = { ...tick, ok: true, status: 'watch-once', watchStatus: tick.status, terminal: false };
                 break;
@@ -104,7 +113,9 @@ export async function watchSession(deps, input = {}, notifier = null) {
             await sleep(options.intervalMs);
         }
         return {
-            ok: true,
+            // Not unconditionally true: a fail-closed tick has to reach the
+            // caller as a failure.
+            ok: final?.errorCode !== 'provider.file-artifact',
             status: final?.status || 'watch-complete',
             sessionId: options.sessionId,
             final,
@@ -119,8 +130,9 @@ export async function watchSession(deps, input = {}, notifier = null) {
 /**
  * @param {any} deps
  * @param {any} input
+ * @param {{ probeCdpLiveness?: typeof probeCdpLiveness, reattachSessionPage?: typeof reattachSessionPage, callVendorPoll?: typeof callVendorPoll }} [recoveryDeps]
  */
-export async function watchSessionOnce(deps, input = {}) {
+export async function watchSessionOnce(deps, input = {}, recoveryDeps = {}) {
     const options = normalizeWatchOptions(input);
     const session = getSession(options.sessionId);
     if (!session) {
@@ -151,11 +163,11 @@ export async function watchSessionOnce(deps, input = {}) {
         await withSessionCommandLock(session.sessionId, async () => {
             const refreshed = getSession(session.sessionId) || session;
             if (refreshed.status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt)) {
-                updateSession(session.sessionId, {
+                const restored = await restorePollingBeforeDeadline(session.sessionId, refreshed.deadlineAt, {
                     status: 'polling',
                     warnings: appendUniqueWarning(refreshed.warnings || [], 'watcher-resumed-transient-timeout'),
                 });
-                session.status = 'polling';
+                session.status = restored === DEADLINE_PASSED ? refreshed.status : (restored?.status || refreshed.status);
             } else {
                 session.status = refreshed.status;
             }
@@ -190,7 +202,12 @@ export async function watchSessionOnce(deps, input = {}) {
     // returns the updated session; use that healed copy for the attach check instead
     // of the stale outer `session`, which previously re-introduced a false
     // reattach-mismatch (issue #77 watch-path).
-    return withSessionPage(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
+    const pollVendor = recoveryDeps.callVendorPoll || callVendorPoll;
+    let consumedDisconnect = null;
+    try {
+        // The recovery inside the resolver performs binding writes; under a
+        // stored deadline those writes are refused post-lock once it passes.
+        const result = await withSessionPageGuarded(deps, options.sessionId, async ({ page, targetId, session: resolvedSession }) => {
         const profileLockSummary = await readProfileLockSummary()
             .catch(err => ({ state: 'unknown', error: err?.message || String(err) }));
         const reattach = await ensureWatcherAttached(page, resolvedSession || session, options);
@@ -226,10 +243,23 @@ export async function watchSessionOnce(deps, input = {}) {
             ...deps,
             getPage: async () => page,
             getTargetId: async () => targetId,
+            // Bound to the RESOLVED page like `poll` and `sessions resume` do.
+            // Inheriting the outer `getCdpSession` attaches to whatever page
+            // that closure captured, so artifact detection could read a
+            // different tab's DOM — or report no CDP at all.
+            getCdpSession: async () => {
+                const context = (/** @type {any} */ (page))?.context?.();
+                if (!context?.newCDPSession) return deps.getCdpSession?.();
+                return context.newCDPSession(page);
+            },
         };
 
         const domHashBefore = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
-        const pollResult = await callVendorPoll(sessionDeps, vendor, session, options);
+        const pollResult = await pollVendor(sessionDeps, vendor, resolvedSession || session, options);
+        if (pollResult?.status === 'tab-crashed' && isCdpDisconnectError(pollResult.error)) {
+            consumedDisconnect = { error: pollResult.error, pollResult };
+            return pollResult;
+        }
         const domHashAfter = await domHashAround(/** @type {any} */ (page), ['body'], { maxChars: options.domHashMaxChars }).catch(() => null);
         const answerText = typeof (/** @type {any} */ (pollResult)).answerText === 'string'
             ? (/** @type {any} */ (pollResult)).answerText
@@ -240,14 +270,15 @@ export async function watchSessionOnce(deps, input = {}) {
         const watcherWarnings = [];
 
         if (status === 'timeout' && !isDeadlineExpired(refreshed.deadlineAt || session.deadlineAt)) {
-            status = 'polling';
-            updateSession(session.sessionId, {
-                status,
+            const deadlineAtValue = refreshed.deadlineAt || session.deadlineAt;
+            const restored = await restorePollingBeforeDeadline(session.sessionId, deadlineAtValue, {
+                status: 'polling',
                 warnings: appendUniqueWarning(
                     refreshed.warnings || [],
                     `watcher-transient-poll-timeout:${options.pollTimeoutSec}s`,
                 ),
             });
+            if (restored !== DEADLINE_PASSED) status = restored?.status || status;
         }
         if (status === 'complete' && await hasStreamingIndicator(page, vendor)) {
             const latest = getSession(session.sessionId) || refreshed;
@@ -278,10 +309,139 @@ export async function watchSessionOnce(deps, input = {}) {
             url: (/** @type {any} */ (page)).url?.() || null,
             answerText,
             warnings: mergeWarnings(reattach.warnings || [], pollResult.warnings || [], watcherWarnings),
+            // Typed failures have to survive this adapter. Dropping the code,
+            // stage, hint and evidence turned a fail-closed poll result into an
+            // ordinary non-terminal tick, which is the silence the contract
+            // exists to remove.
+            ...(pollResult.errorCode ? { errorCode: pollResult.errorCode } : {}),
+            ...(pollResult.stage ? { stage: pollResult.stage } : {}),
+            ...(pollResult.retryHint ? { retryHint: pollResult.retryHint } : {}),
+            ...(pollResult.evidence ? { evidence: pollResult.evidence } : {}),
+            ...(pollResult.artifacts ? { artifacts: pollResult.artifacts } : {}),
             preflight,
             profileLock: profileLockSummary,
         };
+        }, { stillActive: storedDeadlineStillActive(session) });
+        if (!consumedDisconnect) return result;
+    } catch (err) {
+        if (!isCdpDisconnectError(err)) throw err;
+        return recoverCdpDisconnect(deps, options, vendor, err, null, recoveryDeps);
+    }
+    return recoverCdpDisconnect(
+        deps,
+        options,
+        vendor,
+        consumedDisconnect.error,
+        consumedDisconnect.pollResult,
+        recoveryDeps,
+    );
+}
+
+/**
+ * One durable, target-preserving recovery attempt. This intentionally does not
+ * re-run attach checks, preflight, or the original harvest callback.
+ * @param {any} deps
+ * @param {any} options
+ * @param {string} vendor
+ * @param {unknown} disconnect
+ * @param {any} consumedResult
+ * @param {{ probeCdpLiveness?: typeof probeCdpLiveness, reattachSessionPage?: typeof reattachSessionPage, callVendorPoll?: typeof callVendorPoll }} recoveryDeps
+ */
+async function recoverCdpDisconnect(deps, options, vendor, disconnect, consumedResult, recoveryDeps) {
+    const preserved = getSession(options.sessionId);
+    if (!preserved) throw disconnect;
+    const fingerprint = cdpDisconnectFingerprint(preserved.targetId, disconnect);
+    if (preserved.cdpRecovery?.fingerprint === fingerprint) {
+        return consumedResult || {
+            ok: false, sessionId: preserved.sessionId, vendor,
+            status: preserved.status || 'polling', terminal: false,
+            warnings: appendUniqueWarning(preserved.warnings || [], 'watcher-cdp-recovery-already-attempted'),
+        };
+    }
+
+    const attemptedAt = new Date().toISOString();
+    updateSession(preserved.sessionId, { cdpRecovery: { fingerprint, attemptedAt } });
+    const probe = recoveryDeps.probeCdpLiveness || probeCdpLiveness;
+    const liveness = await probe({ port: deps.getPort(), targetId: preserved.targetId });
+    const recoverable = isRecoverableCdpDisconnect(liveness);
+    const warning = recoverable ? 'watcher-cdp-reattach-once' : 'watcher-cdp-recovery-skipped';
+    updateSession(preserved.sessionId, {
+        status: recoverable ? 'polling' : preserved.status,
+        lastError: {
+            errorCode: 'watcher.cdp-disconnected',
+            message: recoverable
+                ? 'CDP client disconnected; saved target is still reachable'
+                : 'CDP connection lost and saved target liveness was not proven',
+            evidence: { ...liveness, recoverable, fingerprint },
+        },
+        warnings: appendUniqueWarning(preserved.warnings || [], warning),
     });
+    if (!recoverable) {
+        if (consumedResult) return { ...consumedResult, warnings: mergeWarnings(consumedResult.warnings || [], [warning]) };
+        throw disconnect;
+    }
+
+    const reattach = recoveryDeps.reattachSessionPage || reattachSessionPage;
+    const resolved = await reattach(deps, preserved.sessionId);
+    const checkpoint = getSession(preserved.sessionId) || preserved;
+    if (hasFinalizedSession(checkpoint)) {
+        return {
+            ok: true, sessionId: checkpoint.sessionId, vendor,
+            status: checkpoint.status, terminal: true,
+            answerText: checkpoint.answer || null,
+            warnings: checkpoint.warnings || [],
+        };
+    }
+
+    const sessionDeps = {
+        ...deps,
+        getPage: async () => resolved.page,
+        getTargetId: async () => resolved.targetId,
+        // Same reason as the ordinary tick: after a reattach the outer
+        // `getCdpSession` still points at the page this recovery replaced.
+        getCdpSession: async () => {
+            const context = (/** @type {any} */ (resolved.page))?.context?.();
+            if (!context?.newCDPSession) return deps.getCdpSession?.();
+            return context.newCDPSession(resolved.page);
+        },
+    };
+    const pollVendor = recoveryDeps.callVendorPoll || callVendorPoll;
+    const pollResult = await pollVendor(sessionDeps, vendor, checkpoint, options);
+    const refreshed = getSession(checkpoint.sessionId) || checkpoint;
+    const status = refreshed.status || pollResult.status || 'polling';
+    const answerText = typeof pollResult.answerText === 'string'
+        ? pollResult.answerText
+        : (typeof pollResult.answer === 'string' ? pollResult.answer : null);
+    return {
+        ok: pollResult.ok !== false,
+        sessionId: checkpoint.sessionId,
+        vendor,
+        status,
+        terminal: TERMINAL_SESSION_STATUSES.has(status),
+        url: resolved.page?.url?.() || null,
+        answerText,
+        warnings: mergeWarnings(pollResult.warnings || [], [warning]),
+        // Carried through the recovery adapter for the same reason as the
+        // ordinary tick: dropping them turns a fail-closed poll into a plain
+        // non-terminal result.
+        ...(pollResult.errorCode ? { errorCode: pollResult.errorCode } : {}),
+        ...(pollResult.stage ? { stage: pollResult.stage } : {}),
+        ...(pollResult.retryHint ? { retryHint: pollResult.retryHint } : {}),
+        ...(pollResult.evidence ? { evidence: pollResult.evidence } : {}),
+        ...(pollResult.artifacts ? { artifacts: pollResult.artifacts } : {}),
+    };
+}
+
+/** @param {any} session */
+function hasFinalizedSession(session) {
+    return TERMINAL_SESSION_STATUSES.has(session?.status) || Boolean(session?.completedAt) || Boolean(session?.answer);
+}
+
+/** @param {string|null|undefined} targetId @param {unknown} err */
+function cdpDisconnectFingerprint(targetId, err) {
+    const message = String((/** @type {any} */ (err))?.message || err || '')
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+    return `${targetId || 'missing-target'}:${message}`;
 }
 
 /**
@@ -488,7 +648,16 @@ async function ensureWatcherAttached(page, session, options) {
     if (urlsCompatible(targetUrl, currentUrl)) return { ok: true, url: currentUrl, warnings: [] };
     if (options.navigate) {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: options.navigateTimeoutMs });
-        return { ok: true, url: targetUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
+        // G9: Verify conversation readiness after navigation (Oracle 83c3ca2).
+        // Catches login pages, error pages, and incomplete loads that domcontentloaded misses.
+        try {
+            const readySelector = 'textarea[data-id="root"], [data-testid="prompt-textarea"], [id="prompt-textarea"], [data-message-author-role="assistant"]';
+            await page.locator(readySelector).first()
+                .waitFor({ state: 'visible', timeout: 10_000 })
+                .catch(() => undefined);
+        } catch { /* best-effort readiness check */ }
+        const finalUrl = page.url?.() || targetUrl;
+        return { ok: true, url: finalUrl, warnings: [`reattached:navigated-from=${currentUrl}`] };
     }
     return {
         ok: false,
@@ -512,21 +681,49 @@ async function callVendorPoll(deps, vendor, session, options) {
         return await pollFn(deps, {
             vendor,
             session: session.sessionId,
-            timeout: String(options.pollTimeoutSec),
+            // Clamped to the stored deadline, and fractional. This is a PER-POLL
+            // slice — 30s by default — and passing it straight through let a
+            // session with 400ms left poll for another 30 seconds, because the
+            // provider treats an explicit timeout as the caller's authority.
+            // A whole-second floor here was the same bug one order smaller: it
+            // rounded 400ms back up to a full second.
+            timeout: String(resolvePollTimeoutSec(
+                { timeout: options.pollTimeoutSec },
+                session,
+                vendor,
+            )),
             allowCopyMarkdownFallback: options.allowCopyMarkdownFallback === true,
             navigate: options.navigate === true,
         });
     } catch (rawErr) {
         const err = wrapError(rawErr);
         if (err.errorCode === 'provider.poll-timeout' && !isDeadlineExpired(session.deadlineAt)) {
-            updateSession(session.sessionId, {
+            const restored = await restorePollingBeforeDeadline(session.sessionId, session.deadlineAt, {
                 status: 'polling',
                 lastError: err.toJSON ? err.toJSON() : { errorCode: err.errorCode, message: err.message },
             });
-            return { ok: true, status: 'polling', warnings: [`transient-poll-timeout:${options.pollTimeoutSec}s`] };
+            if (restored !== DEADLINE_PASSED) {
+                return { ok: true, status: 'polling', warnings: [`transient-poll-timeout:${options.pollTimeoutSec}s`] };
+            }
+            return { ok: true, status: 'timeout', warnings: ['deadline-reached'] };
         }
         throw err;
     }
+}
+
+/**
+ * Restore a transient timeout only while the stored absolute deadline is live.
+ * The predicate is re-checked after the store lock is acquired.
+ * @param {string} sessionId
+ * @param {string|null|undefined} deadlineAtValue
+ * @param {Record<string, unknown>} patch
+ */
+export function restorePollingBeforeDeadline(sessionId, deadlineAtValue, patch) {
+    return updateSessionAsync(
+        sessionId,
+        patch,
+        () => Date.now() < Date.parse(/** @type {string} */ (deadlineAtValue)),
+    );
 }
 
 /**
