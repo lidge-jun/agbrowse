@@ -32,7 +32,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `web-ai/trace/` | 5 | 444 | trace ID, redaction, report, writer helpers |
 | `scripts/` | 14 | 2463 | eval runner, release scripts, named release gates, strict-baseline / module-graph / bin smoke checks |
 | `test/unit/` | 168 | 29334 | deterministic module tests |
-| `test/integration/` | 25 | 5450 | CLI, MCP, policy, provider fixture tests |
+| `test/integration/` | 25 | 5476 | CLI, MCP, policy, provider fixture tests |
 | `test/e2e/` | 1 | 50 | browser smoke coverage |
 | `test/spec/` | 2 | 35 | high-level contract specs |
 | `docs/` | 41 | 3898 | adoption, trace, production-readiness, comparison, benchmark, EXTERNAL_CDP, migration docs, GitHub Pages developer docs |
