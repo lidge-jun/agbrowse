@@ -1,7 +1,8 @@
 # 020 — Release train: dev push -> main merge -> preview publish -> latest publish
 
-> DIFFLEVEL-ROADMAP-01: command-level precision below. v3 after A-round-2
-> FAIL (staging-order + vitest-root + stale-worktree fixes folded in).
+> DIFFLEVEL-ROADMAP-01: command-level precision below. v4: conflict inventory
+> refreshed at wp3-P after the wp2 commits landed on dev (3 new conflict
+> files, all theirs/dev). v3 folded A-round-2 fixes.
 > User authorization: "dev 푸시후 main preview 머지후 npm 배포까지 완료" —
 > dev push, main merge, preview publish, latest publish are all explicitly
 > approved for this unit.
@@ -49,13 +50,16 @@ git push origin dev
 git -C <main-wt> merge --no-ff origin/dev
 ```
 
-**Full conflict inventory** (from a real `git merge-tree` + scratch-worktree
-materialization by the analyst subagent — 10 files, 32 hunks; package.json
-auto-merges):
+**Full conflict inventory** (v4 refresh: `git merge-tree --write-tree
+--messages origin/main dev` after the wp2 commits — 13 files; package.json
+and docs/migration/module-graph.json auto-merge):
 
 | File | Hunks | Class | Resolution |
 | --- | ---: | --- | --- |
 | README.md | 2 | parallel-divergent (main's top "Current ChatGPT picker contract" block is duplicated by dev's canonical Model-aliases section) | theirs (dev), both hunks |
+| scripts/postinstall.mjs | — | dev-superset: main-side changes (Yes/No selector + agent-deferral, b33ae32 lineage) are the exact base dev's wp2 refactor rewrote; verified by `git diff $(merge-base) origin/main` | theirs (dev) |
+| test/integration/bin-shim-contract.test.mjs | — | dev-superset: dev contains main's frozen-manifest entries + relative-imports test AND the new no-lifecycle-scripts test | theirs (dev) |
+| test/unit/star-prompt-confirm.test.mjs | add/add | equivalent-then-extended: `git diff origin/main dev~5` is EMPTY (byte-identical); dev adds the new describes on top | theirs (dev) |
 | test/fixtures/provider-dom/chatgpt-gpt56-chat.html | 1 | dev-superset (whitespace-only conflict) | theirs (dev) |
 | test/unit/chatgpt-attachments.test.mjs | 1 | dev-superset | theirs (dev) |
 | web-ai/chatgpt-attachments.mjs | 7 | parallel-divergent; main's timeout threading is preserved through dev's `budgets.handoffMs` | theirs (dev), all hunks |
@@ -73,7 +77,9 @@ and would have omitted the regenerated files from the merge commit):
 git -C <wt> checkout --theirs README.md test/fixtures/provider-dom/chatgpt-gpt56-chat.html \
   test/unit/chatgpt-attachments.test.mjs web-ai/chatgpt-attachments.mjs \
   web-ai/chatgpt-upload-surface.mjs web-ai/chatgpt.mjs web-ai/cli.mjs web-ai/gemini-live.mjs \
-  package-lock.json structure/str_func.md
+  package-lock.json structure/str_func.md \
+  scripts/postinstall.mjs test/integration/bin-shim-contract.test.mjs \
+  test/unit/star-prompt-confirm.test.mjs
 ( cd <wt> && npm install --package-lock-only && npm run fix:counts )
 # verify merged package.json: version == 0.1.22 AND no postinstall hook (hard checks)
 [ "$(node -p "require('<wt>/package.json').version")" = "0.1.22" ] \
