@@ -282,6 +282,12 @@ npm install -g agbrowse@latest
 Set `AGBROWSE_UPDATE_CHECK=0` to hide the notice. The check is skipped for JSON
 output, MCP stdio, CI, and help commands.
 
+`agbrowse` ships no npm lifecycle scripts (`postinstall` and friends), so
+`npm install -g` never prints npm's `allow-scripts` warnings and keeps working
+as npm tightens script defaults. On your first interactive run the CLI may
+ask once whether to star the GitHub repo; agents, pipes, CI, and `--json`
+runs never see it. Set `AGBROWSE_STAR_PROMPT=0` to opt out.
+
 From this repository:
 
 ```bash
@@ -1252,6 +1258,7 @@ the target host before mutation.
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `CDP connection failed` | Chrome is not running on the selected port | `agbrowse start` |
+| `command not found: agbrowse` right after install | the shell session predates the install, or npm's global bin dir is not on `PATH` | open a new terminal tab (or run `rehash`); confirm the shim with `ls "$(npm prefix -g)/bin/agbrowse"` and make sure that bin dir is on `PATH` |
 | port in use but not CDP | another process owns `9222` | choose `CDP_PORT=9333` or stop the process |
 | provider says sign in | profile is not logged in | open the provider URL and log in manually |
 | wrong tab was used | stale active target | run `tabs`, then `tab-switch <targetId>` |
