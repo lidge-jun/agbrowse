@@ -1,7 +1,25 @@
-import { rmSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { pollWebAi, queryWebAi } from '../../web-ai/chatgpt.mjs';
-import { getSession, saveBaseline } from '../../web-ai/session.mjs';
+import { getSession, listSessions, saveBaseline, updateSession } from '../../web-ai/session.mjs';
+
+// Isolate the on-disk baseline store. web-ai/session.mjs resolves
+// BROWSER_AGENT_HOME per call and persists web-ai-baselines.json there;
+// without isolation this file races sibling test workers on the shared
+// default home (CI flake: a sessionless poll read another worker's baseline
+// and returned conversation-mismatch instead of timeout). Every sibling
+// baseline-touching test file already isolates this way.
+const ORIGINAL_BROWSER_HOME = process.env.BROWSER_AGENT_HOME;
+const TEMP_BROWSER_HOME = mkdtempSync(join(tmpdir(), 'agbrowse-fake-chatgpt-'));
+process.env.BROWSER_AGENT_HOME = TEMP_BROWSER_HOME;
+
+afterAll(() => {
+    if (ORIGINAL_BROWSER_HOME === undefined) delete process.env.BROWSER_AGENT_HOME;
+    else process.env.BROWSER_AGENT_HOME = ORIGINAL_BROWSER_HOME;
+    rmSync(TEMP_BROWSER_HOME, { recursive: true, force: true });
+});
 
 describe('web-ai fake ChatGPT fixture', () => {
     it('fills composer, stores baseline, filters placeholder, and returns final answer', async () => {
@@ -99,6 +117,14 @@ describe('web-ai fake ChatGPT fixture', () => {
         saveBaseline({
             vendor: 'chatgpt', url: page.url(), envelope: {}, assistantCount: 1, textHash: 'fake',
         });
+        // Hermetic "without a session": earlier fixture tests leave sent/polling
+        // sessions behind, and a sessionless poll adopts the newest active one
+        // (pickActiveSession falls back to active.at(-1)), then fails closed on
+        // that session's different conversation URL instead of reaching the
+        // timeout path this test asserts.
+        for (const leaked of listSessions({ vendor: 'chatgpt' })) {
+            updateSession(leaked.sessionId, { status: 'complete' });
+        }
         const result = await pollWebAi({ getPage: async () => page }, { vendor: 'chatgpt', timeout: 1 });
         expect(result).toMatchObject({
             status: 'timeout', recoverable: true, error: 'timed out waiting for answer',
