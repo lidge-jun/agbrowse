@@ -39,7 +39,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.mjs",
     "test": "vitest run --reporter=verbose",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",

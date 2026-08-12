@@ -89,6 +89,7 @@ import { runSearchCli } from './search.mjs';
 import { runExtractCli } from './extract.mjs';
 import { runRunwayCli } from './runway.mjs';
 import { maybeEmitUpdateNotice } from './update-check.mjs';
+import { maybeRunStarPrompt } from '../../scripts/postinstall.mjs';
 import { planKoreanResearch } from './search-research/search-strategy.mjs';
 import { normalizeSearchResults } from './search-research/normalizer.mjs';
 import { enrichSearchResultsWithFetch } from './search-research/fetch-enrichment.mjs';
@@ -2368,6 +2369,7 @@ try {
         dataDir: DATA_DIR,
         packageRoot: PACKAGE_ROOT,
     });
+    await maybeRunStarPrompt({ argv: process.argv.slice(2) });
     switch (sub) {
         case 'research': {
             const result = await runResearchCli(process.argv.slice(3));

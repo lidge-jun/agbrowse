@@ -8,14 +8,14 @@ const DEFAULT_TIMEOUT_MS = 1200;
 const CACHE_FILE = 'update-check.json';
 const PACKAGE_NAME = 'agbrowse';
 
-const SKIP_COMMANDS = new Set([
+export const SKIP_COMMANDS = new Set([
     'help',
     'skills',
     'install-skills',
     'research',
 ]);
 
-const KNOWN_ROOT_COMMANDS = new Set([
+export const KNOWN_ROOT_COMMANDS = new Set([
     'active-tab',
     'action-memory',
     'check',
