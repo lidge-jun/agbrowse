@@ -81,6 +81,12 @@ export function scoreReaderCandidate(candidate, options = {}) {
         if (marker.kind === 'auth') score -= 35;
         if (marker.kind === 'paywall') score -= 25;
     }
+    // Penalise network_api candidates whose text is raw JSON — these are
+    // typically SPA-internal API responses (settings, auth checks, config)
+    // that leaked past the endpoint filter, not user-facing content.
+    if (candidate.source === 'network_api' && isLikelyJsonBlob(text)) {
+        score -= 30;
+    }
     score = Math.max(0, score);
     const verdict = verdictFromScore({ score, markers, textLength }, options);
     return {
@@ -158,4 +164,18 @@ function buildScoreEvidence(candidate, scored) {
         ...(scored.extra || []),
         ...(candidate.evidence || []),
     ].filter(Boolean);
+}
+
+/**
+ * Heuristic: text that starts with '{' or '[' and is valid JSON is likely a
+ * raw API response rather than user-facing content.  Used to down-score
+ * network_api candidates that slipped past the endpoint filter.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isLikelyJsonBlob(text) {
+    const trimmed = text.trimStart();
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') return false;
+    try { JSON.parse(trimmed); return true; } catch { return false; }
 }

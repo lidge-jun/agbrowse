@@ -24,7 +24,8 @@ export async function collectBrowserCandidate(url, options = {}) {
             const finalUrl = validateFetchUrl(response.url?.() || url, {
                 allowPrivateNetwork: options.allowPrivateNetwork,
             }).href;
-            if (isTrackingEndpoint(finalUrl) || isAuthEndpoint(finalUrl)) return;
+           if (isTrackingEndpoint(finalUrl) || isAuthEndpoint(finalUrl)) return;
+            if (isSpaInternalEndpoint(finalUrl)) return;
             const contentType = response.headers?.()['content-type'] || '';
             if (!/\bjson\b/i.test(contentType)) return;
             const text = await response.text();
@@ -61,12 +62,12 @@ export async function collectBrowserCandidate(url, options = {}) {
             }
         }
 
-        const challengeInfo = options.challengeInfo;
-        if (challengeInfo?.primary?.behavior?.jsChallengeSolvable) {
-            await waitForChallengeResolution(page, 10000);
-        } else if (typeof page.waitForTimeout === 'function') {
-            await page.waitForTimeout(300).catch(() => undefined);
-        }
+       const challengeInfo = options.challengeInfo;
+       if (challengeInfo?.primary?.behavior?.jsChallengeSolvable) {
+           await waitForChallengeResolution(page, 10000);
+       } else if (typeof page.waitForTimeout === 'function') {
+            await waitForSpaContent(page, 3000).catch(() => undefined);
+       }
 
         const finalUrl = typeof page.url === 'function' ? page.url() : url;
         try {
@@ -195,6 +196,54 @@ async function waitForChallengeResolution(page, timeoutMs) {
  */
 function isTrackingEndpoint(url) {
     return /analytics|tracking|telemetry|beacon|pixel|statsig|feature[-_]?flag|experiment|optimizely|launchdarkly|config|metrics|events?|collect|sentry|datadog|segment|braze|adservice|doubleclick|log\b/i.test(url);
+}
+
+/**
+ * Wait for SPA content to render.  Starts with a short 300ms pause; if the
+ * visible text is still very short (< 200 chars) — typical of an SPA shell
+ * before JS hydration — poll every 500ms up to the given budget.
+ *
+ * @param {any} page
+ * @param {number} budgetMs
+ */
+async function waitForSpaContent(page, budgetMs) {
+    const INITIAL_WAIT = 300;
+    const POLL_INTERVAL = 500;
+    const MIN_TEXT_LENGTH = 200;
+
+    if (typeof page.waitForTimeout === 'function') {
+        await page.waitForTimeout(INITIAL_WAIT).catch(() => undefined);
+    } else {
+        await new Promise(r => setTimeout(r, INITIAL_WAIT));
+    }
+
+    // Check if we already have enough content
+    if (typeof page.evaluate !== 'function') return;
+    const initialText = await page.evaluate(() =>
+        document.body?.innerText || ''
+    ).catch(() => '');
+    if (initialText.length >= MIN_TEXT_LENGTH) return;
+
+    // SPA shell detected — poll for content
+    const deadline = Date.now() + budgetMs - INITIAL_WAIT;
+    while (Date.now() < deadline) {
+        if (typeof page.waitForTimeout === 'function') {
+            await page.waitForTimeout(POLL_INTERVAL).catch(() => undefined);
+        } else {
+            await new Promise(r => setTimeout(r, POLL_INTERVAL));
+        }
+        const text = await page.evaluate(() =>
+            document.body?.innerText || ''
+        ).catch(() => '');
+        if (text.length >= MIN_TEXT_LENGTH) return;
+    }
+}
+
+/**
+ * @param {string} url
+ */
+function isSpaInternalEndpoint(url) {
+    return /\/backend-api\/|\/backend-anon\/|\/_next\/data\/|\/api\/auth\/|\/api\/v\d+\//i.test(url);
 }
 
 /**
