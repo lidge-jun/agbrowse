@@ -2471,17 +2471,36 @@ try {
             break;
         }
         case 'start': {
-            const { values } = parseArgs({
-                args: process.argv.slice(3),
-                options: {
-                    port: { type: 'string', default: String(DEFAULT_CDP_PORT) },
-                    headless: { type: 'boolean', default: false },
-                    headed: { type: 'boolean', default: false },
-                    'chrome-path': { type: 'string' },
-                    'heavy-site-compat': { type: 'boolean', default: false },
-                    'keep-bg-networking': { type: 'boolean', default: false },
-                }, strict: false,
-            });
+            let values;
+            try {
+                ({ values } = parseArgs({
+                    args: process.argv.slice(3),
+                    options: {
+                        port: { type: 'string', default: String(DEFAULT_CDP_PORT) },
+                        headless: { type: 'boolean', default: false },
+                        headed: { type: 'boolean', default: false },
+                        'chrome-path': { type: 'string' },
+                        'heavy-site-compat': { type: 'boolean', default: false },
+                        'keep-bg-networking': { type: 'boolean', default: false },
+                    },
+                    strict: true,
+                    allowPositionals: false,
+                }));
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                if (/profile/i.test(msg)) {
+                    console.error(
+                        '\`agbrowse start --profile\` is not supported.\n' +
+                        'agbrowse uses its dedicated persistent profile at\n' +
+                        '  $BROWSER_AGENT_HOME/browser-profile\n' +
+                        '  (default: ~/.browser-agent/browser-profile)\n' +
+                        'Use BROWSER_AGENT_HOME and CDP_PORT for another managed profile.'
+                    );
+                } else {
+                    console.error('agbrowse start: ' + msg);
+                }
+                process.exit(1);
+            }
             if (values['heavy-site-compat']) process.env.AGBROWSE_HEAVY_SITE_COMPAT = '1';
             if (values['keep-bg-networking']) process.env.AGBROWSE_KEEP_BG_NETWORKING = '1';
             await launchChrome(Number(values.port), {

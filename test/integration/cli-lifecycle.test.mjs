@@ -57,4 +57,22 @@ describe.sequential('browser lifecycle regressions', () => {
         const status = await execBrowser(['status'], { env });
         expect(status.stdout).toContain('running: false');
     });
+
+    it('rejects --profile flag with a clear error (strict parseArgs)', async () => {
+        const r = await execBrowser(['start', '--profile', 'default'], { env });
+        expect(r.code).not.toBe(0);
+        expect(r.stderr).toContain('--profile');
+        expect(r.stderr).toContain('not supported');
+    });
+
+    it('rejects unknown flags like --headde (typo protection)', async () => {
+        const r = await execBrowser(['start', '--headde'], { env });
+        expect(r.code).not.toBe(0);
+        expect(r.stderr).toContain('Unknown option');
+    });
+
+    it('rejects positional arguments on start', async () => {
+        const r = await execBrowser(['start', 'default'], { env });
+        expect(r.code).not.toBe(0);
+    });
 });
