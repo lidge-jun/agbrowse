@@ -5,9 +5,19 @@
             "cdp": 0,
             "nonLiteralSend": 0
         },
+        "skills/browser/browser-lifecycle.mjs": {
+            "sync": 8,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
         "skills/browser/browser.mjs": {
             "sync": 53,
             "cdp": 18,
+            "nonLiteralSend": 0
+        },
+        "skills/browser/endpoint-identity.mjs": {
+            "sync": 8,
+            "cdp": 0,
             "nonLiteralSend": 0
         },
         "skills/browser/extract.mjs": {
@@ -161,6 +171,11 @@
             "cdp": 0,
             "nonLiteralSend": 0
         },
+        "web-ai/state-encryption.mjs": {
+            "sync": 10,
+            "cdp": 0,
+            "nonLiteralSend": 0
+        },
         "web-ai/tab-lease-store.mjs": {
             "sync": 20,
             "cdp": 0,
@@ -173,7 +188,7 @@
         }
     },
     "totals": {
-        "sync": 305,
+        "sync": 331,
         "cdp": 54
     }
 }
