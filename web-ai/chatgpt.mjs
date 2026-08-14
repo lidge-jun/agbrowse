@@ -1984,10 +1984,42 @@ async function waitForStableAssistantCount(page, timeoutMs = 8_000) {
 }
 
 /**
+ * Race a page.evaluate call against a hard timeout.
+ *
+ * page.evaluate cannot be cancelled, but the poll loop must not hang past
+ * its deadline waiting for a single DOM read on a very large conversation.
+ * The losing evaluate may finish later; this only guarantees the CALLER
+ * stops waiting.
+ *
+ * @param {any} page
+ * @param {any} fn
+ * @param {any} [arg]
+ * @param {number} [timeoutMs]
+ * @returns {Promise<any>}
+ */
+async function evaluateWithTimeout(page, fn, arg, timeoutMs = 10000) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('evaluate timeout')), timeoutMs);
+    });
+    try {
+        return await Promise.race([
+            page.evaluate(fn, arg),
+            timeout,
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
  * @param {any} page
  * @returns {Promise<{ ok: boolean, messages: string[] }>}
  */
 async function readAssistantMessages(page) {
+    // #88: every page.evaluate in this function tree is bounded by
+    // evaluateWithTimeout so a stalled DOM read cannot hang the poll
+    // past the caller's deadline.
     // Either reader actually observing the page is enough; the result is only
     // unknown when NEITHER could read it.
     const snapshots = await readAssistantSnapshots(page);
@@ -2014,7 +2046,7 @@ async function readAssistantSnapshots(page) {
     // was actually read.
     const attempt = async (/** @type {any} */ arg) => {
         try {
-            const result = await page.evaluate(readTopLevelAssistantSnapshots, arg);
+            const result = await evaluateWithTimeout(page, readTopLevelAssistantSnapshots, arg);
             return Array.isArray(result) ? result : null;
         } catch {
             return null;
@@ -2052,7 +2084,7 @@ async function readAssistantSnapshotsSplit(page) {
     // that found nothing. Only the failure case may fall back to a legacy reader.
     const failed = { ok: false, wrapped: [], wrapperless: [] };
     try {
-        const result = await page.evaluate(readAssistantSnapshotSources, {
+        const result = await evaluateWithTimeout(page, readAssistantSnapshotSources, {
             assistantSelectors: ASSISTANT_SELECTORS,
             resolverSource: resolveTopLevelAssistantTurns.toString(),
         });
