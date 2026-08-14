@@ -94,6 +94,7 @@ import { planKoreanResearch } from './search-research/search-strategy.mjs';
 import { normalizeSearchResults } from './search-research/normalizer.mjs';
 import { enrichSearchResultsWithFetch } from './search-research/fetch-enrichment.mjs';
 import { planBrowseEscalation } from './search-research/browse-escalation.mjs';
+import { recordManagedLaunch, recordExternalConnect, isOwnedEndpoint, clearEndpointIdentity, readEndpointIdentity } from './endpoint-identity.mjs';
 
 // ─── Config ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -819,6 +820,7 @@ async function launchChrome(port = DEFAULT_CDP_PORT, opts = {}) {
                 headless,
                 lockToken: lockResult.token,
             });
+            recordManagedLaunch({ port, pid: /** @type {number} */ (chromeProc.pid), profileDir: PROFILE_DIR });
             if (!headless) await foregroundCdpWindow(port, chrome);
         } else {
             const stderr = existsSync(stderrPath)
@@ -2512,9 +2514,57 @@ try {
             console.log(r.running ? `🌐 Chrome started (CDP: ${r.cdpUrl})` : '❌ Failed');
             break;
         }
+        case 'connect': {
+            const { values: connectVals } = parseArgs({
+                args: process.argv.slice(3),
+                options: {
+                    'browser-url': { type: 'string' },
+                    'ws-endpoint': { type: 'string' },
+                    auto: { type: 'boolean', default: false },
+                    port: { type: 'string', default: String(DEFAULT_CDP_PORT) },
+                },
+                strict: true,
+                allowPositionals: false,
+            });
+            const targetUrl = connectVals['browser-url'] || connectVals['ws-endpoint'];
+            if (!targetUrl && !connectVals.auto) {
+                console.error('Usage: agbrowse connect --browser-url <url> | --ws-endpoint <url> | --auto');
+                process.exit(1);
+            }
+            const connectPort = targetUrl
+                ? Number(new URL(targetUrl).port || DEFAULT_CDP_PORT)
+                : Number(connectVals.port);
+            const endpoint = targetUrl || ('http://127.0.0.1:' + connectPort);
+            const listening = await isPortListening(connectPort);
+            if (!listening) {
+                console.error('❌ No Chrome listening on port ' + connectPort);
+                process.exit(1);
+            }
+            const cdpReady = await waitForCdpReady(connectPort, 5000);
+            if (!cdpReady) {
+                console.error('❌ Port ' + connectPort + ' is listening but not responding as CDP');
+                process.exit(1);
+            }
+            recordExternalConnect({ endpoint, port: connectPort });
+            console.log('🌐 Connected to external Chrome at ' + endpoint);
+            break;
+        }
         case 'stop':
-            await closeBrowser();
-            console.log('🌐 Chrome stopped');
+            if (!isOwnedEndpoint()) {
+                const identity = readEndpointIdentity();
+                if (identity) {
+                    console.log('🌐 External endpoint — disconnecting without stopping Chrome');
+                    clearEndpointIdentity();
+                    cached = null;
+                } else {
+                    await closeBrowser();
+                    console.log('🌐 Chrome stopped');
+                }
+            } else {
+                await closeBrowser();
+                clearEndpointIdentity();
+                console.log('🌐 Chrome stopped');
+            }
             break;
         case 'status': {
             const r = await getBrowserStatus();
@@ -2523,10 +2573,17 @@ try {
             // to accept the flag and silently emit the human format, so an
             // agent parsing it got a JSON.parse error instead of a status.
             if (process.argv.includes('--json')) {
+                const identity = readEndpointIdentity();
                 console.log(JSON.stringify({
                     running: r.running,
                     tabs: r.tabs,
                     cdpUrl: r.cdpUrl || null,
+                    endpoint: identity ? {
+                        mode: identity.mode,
+                        owned: identity.owned,
+                        connectedAt: identity.connectedAt,
+                        ownedTabs: identity.ownedTabIds?.length || 0,
+                    } : null,
                 }, null, 2));
             } else {
                 console.log(`running: ${r.running}\ntabs: ${r.tabs}\ncdpUrl: ${r.cdpUrl || 'n/a'}`);
