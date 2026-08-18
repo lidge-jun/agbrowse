@@ -476,6 +476,12 @@ export async function selectChatGptModel(page, model, options = {}) {
             attempt += 1;
             const option = await findModelOption(page, requested);
             if (!option) {
+                // findModelOption may have attempted (and failed) to open the Effort
+                // portal, which can dismiss the shell. Re-open before the slider
+                // fallback so a closed shell cannot masquerade as "option missing".
+                if (!(await isChatGptPowerPickerOpen(page))) {
+                    await openModelMenu(page, usedFallbacks).catch(() => undefined);
+                }
                 if (await isChatGptPowerPickerOpen(page)
                     && await selectChatGptPowerTierBySlider(page, requested, {
                         effort: requestedEffort || null,
@@ -542,20 +548,52 @@ export async function selectChatGptModel(page, model, options = {}) {
                 ? `${targetModel}-effort-simplified-direct`
                 : `${targetModel}-effort-power-slider`);
         } else {
-            try {
-                selectedEffort = await selectChatGptEffort(page, /** @type {string} */ (targetModel), requestedEffort, usedFallbacks);
+            // The Power shell's 5-stop slider IS the effort control for thinking.
+            // This must run independently of the model-equality gate above: Medium,
+            // High and Extra High all normalize to 'thinking', so a thinking-effort
+            // request never enters the model retry block and would otherwise never
+            // reach the slider at all.
+            let sliderApplied = false;
+            if (targetModel === 'thinking') {
                 await openModelMenu(page, usedFallbacks);
-            } catch (err) {
-                if (!isSelectionUnavailable(err)) throw err;
-                usedFallbacks.push('reasoning-effort-unavailable-current-effort');
-                warnings.push(`reasoning effort ${requestedEffort} was not enforced: ${errorMessage(err)}`);
-                await closeModelMenu(page);
+                if (await isChatGptPowerPickerOpen(page)
+                    && await selectChatGptPowerTierBySlider(page, 'thinking', {
+                        effort: requestedEffort,
+                        usedFallbacks,
+                    })) {
+                    const stop = await readChatGptPowerSliderState(page);
+                    if (effortChoiceFromPowerTierLabel(stop.label, stop.index) === requestedEffort) {
+                        selectedEffort = { requested: requestedEffort, selected: requestedEffort, changed: true };
+                        usedFallbacks.push('thinking-effort-power-slider-direct');
+                        sliderApplied = true;
+                    }
+                }
+            }
+            if (!sliderApplied) {
+                try {
+                    selectedEffort = await selectChatGptEffort(page, /** @type {string} */ (targetModel), requestedEffort, usedFallbacks);
+                    await openModelMenu(page, usedFallbacks);
+                } catch (err) {
+                    if (!isSelectionUnavailable(err)) throw err;
+                    usedFallbacks.push('reasoning-effort-unavailable-current-effort');
+                    warnings.push(`reasoning effort ${requestedEffort} was not enforced: ${errorMessage(err)}`);
+                    await closeModelMenu(page);
+                }
             }
         }
         }
     }
     const afterEvidence = await readCheckedModelEvidence(page, targetModel);
     const after = afterEvidence?.choice || null;
+    // Effort observation MUST be captured HERE, while the Power shell is still open:
+    // the tier string lives inside the shell that closeModelMenu() unmounts below.
+    // Carry a plain value forward; never re-read the page for effort after that call.
+    /** @type {EffortChoice|null} */
+    let observedEffort = null;
+    if (requestedEffort && targetModel === 'thinking' && await isChatGptPowerPickerOpen(page)) {
+        const stop = await readChatGptPowerSliderState(page);
+        observedEffort = effortChoiceFromPowerTierLabel(stop.label, stop.index);
+    }
     let finalFamilyEvidence = familyEvidence;
     if (requestedFamily) {
         await openSimplifiedIntelligenceSubmenu(page, { forceFamily: true });
@@ -583,12 +621,32 @@ export async function selectChatGptModel(page, model, options = {}) {
         usedFallbacks.push('model-verification-unavailable-current-model');
         warnings.push(`model ${targetModel} was not verified; current detected model is ${after || 'unknown'}`);
     }
-    const verified = after === targetModel && (!requestedFamily || finalFamilyEvidence?.verified === true);
+    // Effort is its own verification axis. Medium/High/Extra High all normalize to
+    // 'thinking', so a model-axis-only check reports a wrong tier as verified.
+    // Two independent confirmations are accepted: the effort selector verified its own
+    // click (legacy portal path, which re-reads the checked row), or the Power shell's
+    // tier stop shows the requested effort. Fail closed only when NEITHER confirms —
+    // that is exactly the live case where openEffortMenu threw and was downgraded to a
+    // warning, leaving the tier untouched while the model axis still matched.
+    const effortVerified = !requestedEffort
+        || targetModel !== 'thinking'
+        || selectedEffort?.selected === requestedEffort
+        || observedEffort === requestedEffort;
+    if (requestedEffort && !effortVerified) {
+        usedFallbacks.push('effort-verification-unavailable-current-effort');
+        warnings.push('effort-selection-unverified');
+        warnings.push(`effort ${requestedEffort} was not applied; observed ${observedEffort || 'unknown'}`);
+    }
+    const verified = after === targetModel
+        && effortVerified
+        && (!requestedFamily || finalFamilyEvidence?.verified === true);
+    // An unverified effort must not be reported as applied, nor as "already selected".
+    const effortReportable = effortVerified ? selectedEffort : null;
     return {
         requested: requested || targetModel,
         selected: after,
-        alreadySelected: !modelChanged && !selectedEffort?.changed,
-        effort: selectedEffort?.selected || null,
+        alreadySelected: !modelChanged && !effortReportable?.changed && effortVerified,
+        effort: effortReportable?.selected || null,
         requestedEffort: requestedEffort || null,
         usedFallbacks,
         warnings,
@@ -599,7 +657,9 @@ export async function selectChatGptModel(page, model, options = {}) {
             familyLabel: finalFamilyEvidence?.label || null,
             tierLabel: afterEvidence?.label || after || null,
             normalizedModel: after,
-            status: verified ? (modelChanged ? 'switched' : 'already-selected') : (modelChanged ? 'switched-best-effort' : 'unavailable'),
+            status: verified
+                ? (modelChanged ? 'switched' : 'already-selected')
+                : (modelChanged || selectedEffort ? 'switched-best-effort' : 'unavailable'),
             verified,
         }),
     };
@@ -911,11 +971,69 @@ async function findPowerPickerSubmenuTrigger(page, heading) {
  * @returns {Promise<boolean>}
  */
 async function openPowerPickerSubmenu(page, heading) {
+    if (await isPowerSubmenuPortalOpen(page, heading)) return true;
     const trigger = await findPowerPickerSubmenuTrigger(page, heading);
     if (!trigger) return false;
-    await trigger.click({ timeout: 2_000 }).catch(() => undefined);
+    // Live, the submenu rows are pointer-intercepted until the shell's "Advanced"
+    // toggle is expanded, so a plain click times out. Swallowing that timeout and
+    // returning true made callers believe a portal opened when none did. Ladder:
+    // expand Advanced, then hover, then keyboard, then a forced click as last
+    // resort — asserting an actual portal after every step.
+    await expandPowerPickerAdvanced(page);
+    if (await isPowerSubmenuPortalOpen(page, heading)) return true;
+    await trigger.hover({ timeout: 2_000 }).catch(() => undefined);
     await page.waitForTimeout(300).catch(() => undefined);
-    return true;
+    if (await isPowerSubmenuPortalOpen(page, heading)) return true;
+    await trigger.focus({ timeout: 1_000 }).catch(() => undefined);
+    await page.keyboard.press('ArrowRight').catch(() => undefined);
+    await page.waitForTimeout(300).catch(() => undefined);
+    if (await isPowerSubmenuPortalOpen(page, heading)) return true;
+    await trigger.click({ timeout: 2_000, force: true }).catch(() => undefined);
+    await page.waitForTimeout(300).catch(() => undefined);
+    if (await isPowerSubmenuPortalOpen(page, heading)) return true;
+    // A forced click can tear the shell down. Never leave the picker half-open:
+    // the Chat Power shell reuses the Work picker's slider testids, so a closed
+    // shell with those markers still visible would raise a spurious Work-surface
+    // error on a Chat page.
+    if (!(await isChatGptPowerPickerOpen(page))) {
+        await openModelMenu(page, []).catch(() => undefined);
+    }
+    return false;
+}
+
+/**
+ * Expand the Power shell's "Advanced" section. The submenu rows only become
+ * hoverable once it is open. Idempotent: a shell already showing "Show compact
+ * options" is left alone.
+ * @param {Page} page
+ */
+async function expandPowerPickerAdvanced(page) {
+    const collapsed = page.locator('[role="menuitem"][aria-label="Show advanced options"]').first();
+    if (!(await collapsed.isVisible().catch(() => false))) return;
+    await collapsed.click({ timeout: 2_000, force: true }).catch(() => undefined);
+    await page.waitForTimeout(400).catch(() => undefined);
+}
+
+/**
+ * True when a DETACHED submenu portal for `heading` is actually open. Delegates to
+ * the existing portal predicates so there is one definition per portal kind.
+ * @param {Page} page
+ * @param {'Model'|'Effort'} heading
+ * @returns {Promise<boolean>}
+ */
+async function isPowerSubmenuPortalOpen(page, heading) {
+    if (heading === 'Model') {
+        const familyLabels = Object.values(CHATGPT_FAMILY_OPTIONS).map(option => option.label);
+        return Boolean(await findOpenFamilySubmenu(page, familyLabels));
+    }
+    const menus = await page.locator('[role="menu"][data-state="open"]').all()
+        .catch(() => /** @type {Locator[]} */ ([]));
+    for (let index = menus.length - 1; index >= 0; index -= 1) {
+        const menu = menus[index];
+        if (!(await menu.isVisible().catch(() => false))) continue;
+        if (await isPowerEffortPortalMenu(menu)) return true;
+    }
+    return false;
 }
 
 /**
@@ -950,11 +1068,54 @@ async function chatGptLegacyMenuRootOpenedByComposer(page) {
  * portal. Prefer the portal when present; otherwise drive the Power control.
  * @type {Readonly<Record<ModelChoice, number>>}
  */
-const CHATGPT_POWER_TIER_INDEX = Object.freeze({
+export const CHATGPT_POWER_TIER_INDEX = Object.freeze({
     instant: 0,
     thinking: 2,
     pro: 4,
 });
+
+/**
+ * 0-based Power slider stop -> thinking effort. Stops 0 (Instant) and 4 (Pro) are
+ * not thinking stops and intentionally map to null.
+ * @type {Readonly<Record<number, EffortChoice|null>>}
+ */
+const CHATGPT_POWER_STOP_EFFORT = Object.freeze({
+    0: null,
+    1: 'medium',
+    2: 'high',
+    3: 'xhigh',
+    4: null,
+});
+
+/**
+ * Resolve the thinking effort actually shown by the Power shell.
+ *
+ * Label first (`"Extra High, 4 of 5."`), `aria-valuenow` as cross-check. Fails CLOSED:
+ * when both are available and disagree, the caller must not treat the effort as
+ * verified. Pure + browser-free so the mapping is unit-testable without a page double.
+ *
+ * @param {string|null|undefined} label
+ * @param {number|null|undefined} index
+ * @returns {EffortChoice|null}
+ */
+export function effortChoiceFromPowerTierLabel(label, index) {
+    const firstLine = String(label || '').split(/\r?\n/)[0] || '';
+    const stripped = firstLine.replace(/,\s*\d+\s+of\s+\d+\.?$/i, '').trim();
+    /** @type {EffortChoice|null} */
+    let fromLabel = null;
+    for (const effort of /** @type {EffortChoice[]} */ (['medium', 'high', 'xhigh'])) {
+        if (menuTextHasAnyExactLine(stripped, effortLabels(effort))) {
+            fromLabel = effort;
+            break;
+        }
+    }
+    const hasIndex = Number.isFinite(index);
+    const fromIndex = hasIndex
+        ? (CHATGPT_POWER_STOP_EFFORT[/** @type {number} */ (index)] ?? null)
+        : null;
+    if (fromLabel && hasIndex) return fromLabel === fromIndex ? fromLabel : null;
+    return fromLabel || fromIndex;
+}
 
 /**
  * @param {string} text
@@ -1009,12 +1170,12 @@ async function readChatGptPowerSliderState(page) {
  * @returns {number}
  */
 function powerTierIndexForChoice(choice, effort = null) {
-    if (choice === 'instant') return 0;
-    if (choice === 'pro') return 4;
+    if (choice === 'instant') return CHATGPT_POWER_TIER_INDEX.instant;
+    if (choice === 'pro') return CHATGPT_POWER_TIER_INDEX.pro;
     if (effort === 'medium') return 1;
     if (effort === 'xhigh') return 3;
     if (effort === 'high') return 2;
-    return 2;
+    return CHATGPT_POWER_TIER_INDEX.thinking;
 }
 
 /**

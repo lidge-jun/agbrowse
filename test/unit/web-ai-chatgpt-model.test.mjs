@@ -131,6 +131,9 @@ describe('web-ai ChatGPT model selector policy', () => {
     });
 
     it('selects Pro through the current Chat Power effort submenu', async () => {
+        // Regression pair for the 260818 live-repro: the Power shell's tier stops are
+        // the ONLY effort control that reliably works, and a tier that was never
+        // applied must never come back as verified.
         const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
         const clock = useAdvancingClock();
         try {
@@ -665,9 +668,16 @@ describe('web-ai ChatGPT model selector policy', () => {
             selected: 'thinking',
             effort: null,
             requestedEffort: 'medium',
-            warnings: [expect.stringContaining('reasoning effort medium was not enforced')],
+            // An effort that was never applied must ALSO report the unverified axis:
+            // a model-axis-only "verified" is what let a wrong tier pass silently.
+            warnings: [
+                expect.stringContaining('reasoning effort medium was not enforced'),
+                'effort-selection-unverified',
+                expect.stringContaining('effort medium was not applied'),
+            ],
         });
         expect(result.usedFallbacks).toContain('reasoning-effort-unavailable-current-effort');
+        expect(result.modelSelection.verified).toBe(false);
     });
 
     it('opens visible-text-only effort controls without data-testid or aria-label hooks', async () => {
@@ -1038,6 +1048,17 @@ function createFakeModelPage({
     familyPortalAvailable = true,
     unrelatedCheckedPowerText = null,
         workSliderMarkersInPowerShell = false,
+    // Live Power shell (260818): the simple view carries "<Tier>, N of 5." AND owns the
+    // [role="slider"] whose aria-valuenow is the 0..4 stop. Enabling this models the real
+    // control, so the slider-driven success path executes instead of being asserted as a
+    // source string.
+    powerSliderStops = false,
+    // Live (260818): the Effort row is pointer-intercepted, so its detached portal
+    // never opens. Modelling that is what makes the slider the ONLY working control,
+    // which is the exact condition the old code could not handle.
+    powerEffortPortalBlocked = false,
+    // Slider accepts focus and arrow keys but never changes its stop.
+    powerSliderFrozen = false,
     unrelatedFamilyMenuTexts = [],
 } = {}) {
     const missingModelTestIdSet = new Set(missingModelTestIds);
@@ -1059,6 +1080,15 @@ function createFakeModelPage({
         shellEffortTriggerClicks: 0,
         shellModelTriggerInteractions: 0,
         genericEffortTriggerClicks: 0,
+        // 0..4 Power stop, kept in sync with currentModel/selectedEffort so arrow
+        // keys move the real selection the way the live slider does.
+        get sliderIndex() {
+            if (state.currentModel === 'instant') return 0;
+            if (state.currentModel === 'pro') return 4;
+            if (state.selectedEffort === 'medium') return 1;
+            if (state.selectedEffort === 'xhigh') return 3;
+            return 2;
+        },
     };
     const legacyModelRows = [
         createElement({
@@ -1173,6 +1203,18 @@ function createFakeModelPage({
     });
     const shellEffortTrigger = createElement({
         text: () => `Effort\n${shellTierLabel()}`,
+        // Live (260818) the Effort row opens its portal on HOVER; a plain click is
+        // pointer-intercepted. The double accepts either interaction and counts both,
+        // so the production ladder (advanced -> hover -> keyboard -> forced click) is
+        // exercised the same way a real shell would answer it.
+        onHover: () => {
+            state.shellEffortTriggerClicks += 1;
+            openEffortRows('shell');
+        },
+        onFocus: () => {
+            state.shellEffortTriggerClicks += 1;
+            openEffortRows('shell');
+        },
         onClick: () => {
             state.shellEffortTriggerClicks += 1;
             openEffortRows('shell');
@@ -1213,6 +1255,13 @@ function createFakeModelPage({
                     }
                 }
                 if (key === 'ArrowRight' && keyboardOpensEffort) openEffortRows('target');
+                if (powerSliderStops && (key === 'ArrowLeft' || key === 'ArrowRight') && state.sliderFocused) {
+                    // A frozen slider models a shell that accepts the key but does not
+                    // move — the only honest answer is "not applied", never a silent pass.
+                    if (powerSliderFrozen) return;
+                    const next = Math.max(0, Math.min(4, state.sliderIndex + (key === 'ArrowRight' ? 1 : -1)));
+                    applyPowerStop(next);
+                }
             },
         },
         mouse: {
@@ -1232,6 +1281,9 @@ function createFakeModelPage({
     };
 
     function openEffortRows(source) {
+        // A blocked Effort row never mounts its portal, exactly like the live shell
+        // whose trigger is covered by an overlay.
+        if (powerEffortPortalBlocked && source === 'shell') return;
         state.effortMenuOpen = true;
         state.effortMenuSource = source;
     }
@@ -1253,7 +1305,25 @@ function createFakeModelPage({
         state.modelMenuOpen = false;
     }
 
+    // Move the live Power slider to a 0..4 stop. Stops 1..3 are thinking efforts;
+    // 0 and 4 are the Instant and Pro tiers, which carry no effort.
+    function applyPowerStop(index) {
+        if (index === 0) { state.currentModel = 'instant'; state.selectedEffort = null; return; }
+        if (index === 4) { state.currentModel = 'pro'; state.selectedEffort = null; return; }
+        state.currentModel = 'thinking';
+        state.selectedEffort = index === 1 ? 'medium' : index === 2 ? 'high' : 'xhigh';
+    }
+
+    // "Medium, 2 of 5." — the string the live simple view renders, 1-based for humans.
+    function powerSliderSimpleText() {
+        return `${shellTierLabel()}, ${state.sliderIndex + 1} of 5.\nUse Left and Right arrow keys to adjust power.`;
+    }
+
     function modelPillText() {
+        // A live Power shell's composer pill shows the TIER label ("Pro", "Extra High"),
+        // never the internal model key. openModelMenu only recognizes tier labels, so a
+        // slider-backed double must speak the same vocabulary.
+        if (powerSliderStops && !composerProPillLabel) return shellTierLabel();
         return composerProPillLabel || (state.selectedEffort
             ? `${activePillTexts?.[state.selectedEffort] || effortTexts[state.selectedEffort] || currentEffortTexts()[state.selectedEffort] || state.currentModel}`
             : state.currentModel);
@@ -1295,7 +1365,13 @@ function createFakeModelPage({
             text: () => `Power\n${familyTrigger.text}\n${shellEffortTrigger.text}`,
             selectChildren: selector => {
             if (selector.includes('[role="menuitem"][aria-label="Power"]')) {
-                return [createElement({ text: 'Power' })];
+                return [createElement({
+                    text: 'Power',
+                    // Live, the keyboard target is the Power menuitem (it carries
+                    // aria-keyshortcuts="ArrowLeft ArrowRight"), not the slider role.
+                    onFocus: () => { state.sliderFocused = true; },
+                    onClick: () => { state.sliderFocused = true; },
+                })];
             }
             if (selector === '[role="menuitem"][data-has-submenu]') {
                 return [familyTrigger, shellEffortTrigger];
@@ -1362,6 +1438,32 @@ function createFakeModelPage({
             return [createElement({
                 text: selector.includes('simple-view') ? 'Pro, 5 of 5.' : 'Model\nGPT-5.6 Sol\nEffort\nPro',
                 visible: true,
+            })];
+        }
+        // Live Power shell: the simple view carries the tier string AND owns the slider.
+        // The slider selector names the simple view too, so it must be matched FIRST or
+        // the tier text would be returned where an aria-valuenow carrier is expected.
+        if (powerSliderStops && selector.includes('[role="slider"]')) {
+            if (!state.modelMenuOpen) return [];
+            return [createElement({
+                text: '',
+                visible: true,
+                attributes: { 'aria-valuenow': () => String(state.sliderIndex), 'aria-valuemin': '0', 'aria-valuemax': '4' },
+                onFocus: () => { state.sliderFocused = true; },
+            })];
+        }
+        if (powerSliderStops && selector.includes('composer-model-picker-slider-simple-view')) {
+            if (!state.modelMenuOpen) return [];
+            return [createElement({ text: () => powerSliderSimpleText(), visible: true })];
+        }
+        // The slider driver resolves the Power control PAGE-scoped, not through the
+        // shell root, so the double must answer that selector too.
+        if (powerSliderStops && selector === '[role="menuitem"][aria-label="Power"]') {
+            if (!state.modelMenuOpen) return [];
+            return [createElement({
+                text: 'Power',
+                onFocus: () => { state.sliderFocused = true; },
+                onClick: () => { state.sliderFocused = true; },
             })];
         }
         if (powerPickerShell && selector.includes('[role="menu"]') && selector.includes('aria-label="Power"')) {
@@ -1472,6 +1574,9 @@ function createElement(input = {}) {
         selectChildren: input.selectChildren || null,
         visible: input.visible ?? true,
         rect: input.rect || { x: 10, y: 10, width: 120, height: 32 },
+        // Live attributes such as aria-valuenow are read through locator.getAttribute;
+        // values may be functions so a slider can report its current stop.
+        attributes: input.attributes || null,
     };
 }
 
@@ -1492,6 +1597,12 @@ function makeLocator(elements, selector = '') {
             return child;
         }),
         isVisible: async () => Boolean(elements[0]?.visible),
+        getAttribute: async name => {
+            const attributes = elements[0]?.attributes;
+            if (!attributes || !(name in attributes)) return null;
+            const value = attributes[name];
+            return typeof value === 'function' ? value() : value;
+        },
         click: async () => {
             if (elements[0]?.visible === false) throw new Error('element not visible');
             return elements[0]?.onClick();
@@ -1539,5 +1650,209 @@ describe('selectChatGptModel hardening (32.2 source contract)', () => {
         expect(src).toContain('MODEL_SELECT_MAX_ATTEMPTS = 3');
         expect(src).toMatch(/while \(currentModel !== requested && attempt < MODEL_SELECT_MAX_ATTEMPTS\)/);
         expect(src).toContain("warnings.push('model-selection-unverified')");
+    });
+});
+
+describe('Power tier contract (260818 live repair)', () => {
+    // Live repro: `--model thinking --effort high` starting from Medium left the tier on
+    // Medium yet reported `verified: true`. Two defects had to line up: the slider was
+    // unreachable for effort-only moves, and `verified` only checked the model axis,
+    // where Medium/High/Extra High all collapse to 'thinking'.
+    const src = readFileSync(join(process.cwd(), 'web-ai/chatgpt-model.mjs'), 'utf8');
+
+    it('maps Power slider stops to thinking efforts and fails closed on disagreement', async () => {
+        const { effortChoiceFromPowerTierLabel } = await import('../../web-ai/chatgpt-model.mjs');
+
+        expect(effortChoiceFromPowerTierLabel('Medium, 2 of 5.', 1)).toBe('medium');
+        expect(effortChoiceFromPowerTierLabel('High, 3 of 5.', 2)).toBe('high');
+        expect(effortChoiceFromPowerTierLabel('Extra High, 4 of 5.', 3)).toBe('xhigh');
+        // Instant and Pro are not thinking stops.
+        expect(effortChoiceFromPowerTierLabel('Instant, 1 of 5.', 0)).toBeNull();
+        expect(effortChoiceFromPowerTierLabel('Pro, 5 of 5.', 4)).toBeNull();
+        // One source is enough when the other is absent.
+        expect(effortChoiceFromPowerTierLabel('High, 3 of 5.', null)).toBe('high');
+        expect(effortChoiceFromPowerTierLabel(null, 3)).toBe('xhigh');
+        // Disagreement must not be resolved by guessing.
+        expect(effortChoiceFromPowerTierLabel('Medium, 2 of 5.', 3)).toBeNull();
+        // The real shell string is multi-line; the tier is on the first line.
+        expect(effortChoiceFromPowerTierLabel(
+            'Extra High, 4 of 5.\nUse Left and Right arrow keys to adjust power.', 3,
+        )).toBe('xhigh');
+    });
+
+    it('keeps one source of truth for the tier index', async () => {
+        const { CHATGPT_POWER_TIER_INDEX } = await import('../../web-ai/chatgpt-model.mjs');
+        expect(CHATGPT_POWER_TIER_INDEX).toMatchObject({ instant: 0, thinking: 2, pro: 4 });
+        // powerTierIndexForChoice must read the constant, not re-hardcode the numbers.
+        expect(src).toContain('return CHATGPT_POWER_TIER_INDEX.instant');
+        expect(src).toContain('return CHATGPT_POWER_TIER_INDEX.pro');
+    });
+
+    it('drives the Power slider from the effort branch, not only the model-switch branch', () => {
+        // The model-equality gate (`currentModel !== requested`) is false for every
+        // thinking-effort move, so the effort branch needs its own slider call.
+        expect(src).toContain('thinking-effort-power-slider-direct');
+        const effortBranch = src.slice(src.indexOf('if (requestedEffort) {'));
+        expect(effortBranch).toContain("selectChatGptPowerTierBySlider(page, 'thinking'");
+    });
+
+    it('captures the effort observation before the menu is closed', () => {
+        // The tier string lives inside the Power shell that closeModelMenu() unmounts.
+        // Reading it afterwards would make every effort look unverified.
+        const observe = src.indexOf('let observedEffort = null;');
+        const close = src.indexOf('await closeModelMenu(page);', observe);
+        const verify = src.indexOf('const effortVerified =', observe);
+        expect(observe).toBeGreaterThan(-1);
+        expect(close).toBeGreaterThan(observe);
+        expect(verify).toBeGreaterThan(close);
+        // No page read for effort may appear after the close.
+        expect(src.slice(close, verify)).not.toContain('readChatGptPowerSliderState');
+    });
+
+    it('folds the effort axis into verified so a wrong tier cannot report success', () => {
+        expect(src).toContain('const effortVerified = !requestedEffort');
+        expect(src).toContain('const verified = after === targetModel');
+        expect(src).toContain('&& effortVerified');
+        expect(src).toContain("warnings.push('effort-selection-unverified')");
+        // An unverified effort must not leak into the reported fields.
+        expect(src).toContain('const effortReportable = effortVerified ? selectedEffort : null;');
+        expect(src).toContain('effort: effortReportable?.selected || null');
+    });
+
+    it('never reports an unopened submenu as opened', () => {
+        // The old implementation swallowed a timed-out click and returned true.
+        const fn = src.slice(src.indexOf('async function openPowerPickerSubmenu('));
+        expect(fn).toContain('await expandPowerPickerAdvanced(page)');
+        expect(fn).toContain('if (await isPowerSubmenuPortalOpen(page, heading)) return true;');
+        // The old body ended with an unconditional `return true`; the new one ends
+        // with `return false` after every rung of the ladder has been tried.
+        expect(fn.slice(0, fn.indexOf('\n}'))).toContain('return false;');
+    });
+});
+
+describe('live Power shell 260818 (behavioral)', () => {
+    // These drive the SUCCESS path of the repair through a shell that owns a real
+    // 5-stop slider, so the fix is executed rather than asserted as a source string.
+    const powerShellPage = (overrides = {}) => createFakeModelPage({
+        family: 'gpt-5.6-sol',
+        powerPickerShell: true,
+        powerSliderStops: true,
+        genericEffortTrigger: false,
+        genericTriggerMode: 'disabled',
+        keyboardOpensEffort: false,
+        // The live Effort portal never opens (pointer-intercepted), so the slider is
+        // the only control that can move the tier.
+        powerEffortPortalBlocked: true,
+        // The live composer pill shows the TIER label ("Pro", "Extra High"), which is
+        // what openModelMenu matches on; the default double emits the raw model key.
+        composerProPillLabel: undefined,
+        ...overrides,
+    });
+
+    for (const [effort, tier, stop] of [['medium', 'Medium', 1], ['high', 'High', 2], ['xhigh', 'Extra High', 3]]) {
+        it(`drives the Power slider to ${tier} for --effort ${effort} when the effort portal never opens`, async () => {
+            const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+            const clock = useAdvancingClock();
+            try {
+                // Start on a DIFFERENT thinking stop. Both normalize to 'thinking', so
+                // the model-equality gate is false and the old code never moved the tier.
+                const page = powerShellPage({
+                    model: 'thinking',
+                    initialSelectedEffort: effort === 'medium' ? 'xhigh' : 'medium',
+                    advanceClock: clock.advance,
+                });
+
+                const result = await selectChatGptModel(page, 'thinking', { effort });
+
+                expect(result).toMatchObject({ selected: 'thinking', effort });
+                expect(result.modelSelection.verified).toBe(true);
+                expect(result.warnings).not.toContain('effort-selection-unverified');
+                expect(page.__state.sliderIndex).toBe(stop);
+                expect(page.__state.selectedEffort).toBe(effort);
+            } finally {
+                clock.restore();
+            }
+        });
+    }
+
+    it('reports verified:false when the slider cannot reach the requested stop', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            // The slider accepts the keys but never moves, and the portal never opens:
+            // no path remains by which the requested tier could have been applied.
+            const page = powerShellPage({
+                model: 'thinking',
+                initialSelectedEffort: 'medium',
+                powerSliderFrozen: true,
+                advanceClock: clock.advance,
+            });
+
+            const result = await selectChatGptModel(page, 'thinking', { effort: 'xhigh' });
+
+            // The tier is still Medium, so success must NOT be claimed on either axis.
+            expect(page.__state.selectedEffort).toBe('medium');
+            expect(result.modelSelection.verified).toBe(false);
+            expect(result.effort).toBeNull();
+            expect(result.alreadySelected).toBe(false);
+            // Nothing moved and the control never answered, so the honest status is
+            // 'unavailable'. What matters is that neither success status is claimed.
+            expect(result.modelSelection.status).toBe('unavailable');
+            expect(['switched', 'already-selected']).not.toContain(result.modelSelection.status);
+            expect(result.warnings).toContain('effort-selection-unverified');
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('moves from a thinking stop to Pro and reports no effort', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = powerShellPage({
+                model: 'thinking',
+                initialSelectedEffort: 'xhigh',
+                advanceClock: clock.advance,
+            });
+
+            const result = await selectChatGptModel(page, 'pro');
+
+            expect(result).toMatchObject({ selected: 'pro', effort: null });
+            expect(result.modelSelection.verified).toBe(true);
+            expect(page.__state.sliderIndex).toBe(4);
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('moves from Pro back down to a thinking effort stop', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = powerShellPage({ model: 'pro', initialSelectedEffort: null, advanceClock: clock.advance });
+
+            const result = await selectChatGptModel(page, 'thinking', { effort: 'high' });
+
+            expect(result).toMatchObject({ selected: 'thinking', effort: 'high' });
+            expect(result.modelSelection.verified).toBe(true);
+            expect(page.__state.sliderIndex).toBe(2);
+        } finally {
+            clock.restore();
+        }
+    });
+
+    it('reaches Instant from a thinking stop without a model-option throw', async () => {
+        const { selectChatGptModel } = await import('../../web-ai/chatgpt-model.mjs');
+        const clock = useAdvancingClock();
+        try {
+            const page = powerShellPage({ model: 'thinking', initialSelectedEffort: 'medium', advanceClock: clock.advance });
+
+            const result = await selectChatGptModel(page, 'instant');
+
+            expect(result).toMatchObject({ selected: 'instant' });
+            expect(page.__state.sliderIndex).toBe(0);
+        } finally {
+            clock.restore();
+        }
     });
 });

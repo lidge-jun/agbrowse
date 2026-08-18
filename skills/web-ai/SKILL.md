@@ -731,6 +731,25 @@ ChatGPT current contract (2026-07-10):
 `--model` or `--family` targets the current ChatGPT tier; current Pro fails with
 `provider.model-mismatch`. Gemini and Grok continue to reject model-less effort.
 
+### Chat tier selection is slider-driven (2026-08-18)
+
+The Chat composer picker is a Power shell: one `[role="slider"]` with five stops
+(`aria-valuenow` 0..4 → Instant / Medium / High / Extra High / Pro) plus `Model` and
+`Effort` submenu rows. The slider is the PRIMARY control for both model and effort;
+the detached Effort portal is a fallback that only becomes reachable after the shell's
+`Advanced` toggle is expanded, and its row is pointer-intercepted until then.
+
+Two consequences for callers:
+
+- **Effort is verified on its own axis.** Medium, High and Extra High all normalize to
+  the model choice `thinking`, so a model-axis-only check cannot tell them apart. The
+  selector now reads the tier stop (`"Extra High, 4 of 5."` + `aria-valuenow`) and folds
+  it into `verified`.
+- **`verified: false` means the tier was NOT applied.** It is no longer a soft hint. When
+  it appears, `effort` is `null`, `status` is `switched-best-effort`, and the warnings
+  carry `effort-selection-unverified` plus the observed tier. Treat the run as
+  unconfigured rather than assuming the request landed.
+
 Legacy effort normalization: `light`, `low`, `standard`, `normal`, `regular`,
 `default` remap to `medium`. `extended` remaps to `high` and emits exactly one
 stderr warning. `heavy`, `extra-high`, `extra_high`, `extra high` remap to
