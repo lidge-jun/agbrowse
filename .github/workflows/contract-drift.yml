@@ -16,14 +16,24 @@ on:
   schedule:
     - cron: '0 9 * * 1'
 
+permissions:
+  # Read-only job — checkout and test execution need no write scopes.
+  contents: read
+
+concurrency:
+  group: contract-drift-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fixture-drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Runs on PRs touching the paths above, and weekly on the schedule so
     # dependency updates that move the fixtures still get caught.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # SHA pins: mutable tag refs were the tj-actions attack vector (2025-03).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.2
         with:
           node-version: '22'
           cache: 'npm'

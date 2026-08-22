@@ -26,6 +26,9 @@ on:
         default: true
 
 permissions:
+  # contents:write is required only by the post-publish Create-GitHub-release
+  # step (git tag + push + gh release). id-token:write is the OIDC scope that
+  # npm trusted publishing needs; actions:read lets the run inspect prior runs.
   contents: write
   actions: read
   id-token: write
@@ -44,19 +47,36 @@ jobs:
       DRY_RUN: ${{ inputs['dry-run'] }}
       PACKAGE_NAME: agbrowse
     steps:
+      # v4.3.1 pinned to commit SHA — tag references are mutable and were the
+      # tj-actions/changed-files attack vector (2025-03).
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.2
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Use npm with trusted publishing support
-        run: npm install -g npm@latest
+      - name: Verify npm supports trusted publishing
+        run: |
+          set -euo pipefail
+          npm_version="$(npm --version)"
+          node_version="$(node --version | sed 's/^v//')"
+          echo "npm=${npm_version} node=${node_version}"
+          npm_major="${npm_version%%.*}"
+          npm_minor="$(echo "${npm_version}" | cut -d. -f2)"
+          if [ "${npm_major}" -lt 11 ] || { [ "${npm_major}" -eq 11 ] && [ "${npm_minor}" -lt 5 ]; }; then
+            echo "::error::npm >=11.5.1 required for OIDC trusted publishing; got ${npm_version}"
+            exit 1
+          fi
+          node_major="${node_version%%.*}"
+          if [ "${node_major}" -lt 22 ]; then
+            echo "::error::node >=22.14.0 required by npm trusted publishing docs; got ${node_version}"
+            exit 1
+          fi
 
       - name: Install
         run: npm ci
