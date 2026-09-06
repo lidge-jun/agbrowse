@@ -34,20 +34,27 @@ export const GROK_MODEL_ALIASES = {
     'grok-43': 'grok-4.3',
     beta: 'grok-4.3',
     heavy: 'heavy',
+    // 한국어 Grok UI: 모델선택 버튼/메뉴 표시 텍스트
+    '자동': 'auto',
+    '빠른': 'fast',
+    '전문가': 'expert',
+    '헤비': 'heavy',
 };
 
 const MODEL_BUTTONS = [
     'button[aria-label="Model select"]',
     'button[aria-label*="Model select" i]',
+    'button[aria-label="모델 선택"]',
+    'button[aria-label*="모델 선택"]',
 ];
 
 /** @type {Record<string, string[]>} */
 const MODEL_OPTIONS = {
-    auto: ['Auto'],
-    fast: ['Fast'],
-    expert: ['Expert'],
+    auto: ['Auto', '자동'],
+    fast: ['Fast', '빠른'],
+    expert: ['Expert', '전문가'],
     'grok-4.3': ['Grok 4.3'],
-    heavy: ['Heavy'],
+    heavy: ['Heavy', '헤비'],
 };
 
 /**
@@ -89,7 +96,7 @@ export async function selectGrokModel(page, model) {
  * @param {string[]} usedFallbacks
  */
 async function openGrokModelMenu(page, usedFallbacks) {
-    const modelItems = page.locator('[role="menuitem"]').filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b/i });
+    const modelItems = page.locator('[role="menuitem"]').filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b|^자동|^빠른|^전문가|^헤비/i });
     if (await modelItems.first().isVisible().catch(() => false)) return;
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -103,7 +110,7 @@ async function openGrokModelMenu(page, usedFallbacks) {
         await page.waitForTimeout(150).catch(() => undefined);
     }
     usedFallbacks.push('model-menu-text-button');
-    const textButton = page.locator('button').filter({ hasText: /^Auto$|^Fast$|^Expert$|^Grok 4\.3|^Heavy$/i }).first();
+    const textButton = page.locator('button').filter({ hasText: /^Auto$|^Fast$|^Expert$|^Grok 4\.3|^Heavy$|^자동|^빠른|^전문가|^헤비/i }).first();
     if (await textButton.isVisible().catch(() => false)) {
         await textButton.click({ timeout: 5_000 });
         await page.waitForTimeout(350).catch(() => undefined);
@@ -129,7 +136,8 @@ async function findGrokModelOption(page, choice) {
     while (Date.now() < deadline) {
         const candidates = await page.locator('[role="menuitem"], button').all().catch(() => []);
         for (const label of MODEL_OPTIONS[choice]) {
-            const pattern = new RegExp(`^${escapeRegExp(label)}\\b`, 'i');
+            // \b 제거: 한글 라벨("전문가")은 단어경계가 한글 뒤에서 매칭되지 않으므로 prefix 매칭으로
+            const pattern = new RegExp(`^${escapeRegExp(label)}`, 'i');
             for (const candidate of candidates) {
                 if (!await candidate.isVisible().catch(() => false)) continue;
                 const text = (await candidate.innerText({ timeout: 500 }).catch(() => '')).trim().replace(/\s+/g, ' ');
@@ -169,7 +177,7 @@ export async function grokModelCapabilityProbe(page, model) {
 async function closeGrokModelMenu(page) {
     for (let i = 0; i < 3; i += 1) {
         const menuVisible = await page.locator('[role="menuitem"]')
-            .filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b/i }).first().isVisible().catch(() => false);
+            .filter({ hasText: /^Auto\b|^Fast\b|^Expert\b|^Grok 4\.3\b|^Heavy\b|^자동|^빠른|^전문가|^헤비/i }).first().isVisible().catch(() => false);
         if (!menuVisible) return;
         await page.keyboard.press('Escape').catch(() => undefined);
         await page.waitForTimeout(250).catch(() => undefined);
