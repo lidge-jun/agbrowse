@@ -68,6 +68,17 @@ export function normalizeGrokModelChoice(model) {
 }
 
 /**
+ * Match a model label at the start of a menu item's text. The label must end
+ * at a non-letter/non-digit so "Fast" does not match "Faster". JS `\b` is
+ * ASCII-only and never matches after Hangul, so use a Unicode-aware lookahead.
+ * @param {string} label
+ * @returns {RegExp}
+ */
+export function grokModelLabelPattern(label) {
+    return new RegExp(`^${escapeRegExp(label)}(?![\\p{L}\\p{N}_])`, 'iu');
+}
+
+/**
  * @param {Page} page
  * @param {unknown} model
  * @returns {Promise<GrokModelSelectResult|null>}
@@ -136,8 +147,7 @@ async function findGrokModelOption(page, choice) {
     while (Date.now() < deadline) {
         const candidates = await page.locator('[role="menuitem"], button').all().catch(() => []);
         for (const label of MODEL_OPTIONS[choice]) {
-            // \b 제거: 한글 라벨("전문가")은 단어경계가 한글 뒤에서 매칭되지 않으므로 prefix 매칭으로
-            const pattern = new RegExp(`^${escapeRegExp(label)}`, 'i');
+            const pattern = grokModelLabelPattern(label);
             for (const candidate of candidates) {
                 if (!await candidate.isVisible().catch(() => false)) continue;
                 const text = (await candidate.innerText({ timeout: 500 }).catch(() => '')).trim().replace(/\s+/g, ' ');

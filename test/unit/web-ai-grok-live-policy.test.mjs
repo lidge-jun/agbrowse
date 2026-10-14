@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { grokModelLabelPattern, normalizeGrokModelChoice } from '../../web-ai/grok-model.mjs';
 
 const root = process.cwd();
 const grokLiveSrc = readFileSync(join(root, 'web-ai/grok-live.mjs'), 'utf8');
@@ -8,6 +9,17 @@ const copyMarkdownSrc = readFileSync(join(root, 'web-ai/copy-markdown.mjs'), 'ut
 const grokModelSrc = readFileSync(join(root, 'web-ai/grok-model.mjs'), 'utf8');
 
 describe('web-ai grok live policy', () => {
+    it('matches Korean and English model labels at a word boundary', () => {
+        expect(grokModelLabelPattern('전문가').test('전문가 깊이 생각합니다')).toBe(true);
+        expect(grokModelLabelPattern('자동').test('자동')).toBe(true);
+        expect(grokModelLabelPattern('Expert').test('Expert Thinks hard')).toBe(true);
+        expect(grokModelLabelPattern('Fast').test('Faster responses')).toBe(false);
+        expect(grokModelLabelPattern('Grok 4.3').test('Grok 4.3 beta')).toBe(true);
+        expect(grokModelLabelPattern('Grok 4.3').test('Grok 4.31')).toBe(false);
+        expect(normalizeGrokModelChoice('헤비')).toBe('heavy');
+        expect(normalizeGrokModelChoice('빠른')).toBe('fast');
+    });
+
     it('uses observed Grok DOM selectors', () => {
         expect(grokLiveSrc).toMatch(/\.ProseMirror\[contenteditable="true"\]/);
         expect(grokLiveSrc).toMatch(/\[data-testid="new-chat"\]/);

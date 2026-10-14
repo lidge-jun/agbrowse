@@ -25,7 +25,7 @@ aliases: [agbrowse source map, agbrowse str_func, agbrowse 파일 구조]
 | `skills/search/` | 5 | 896 | standalone search skill doc (any CLI agent) |
 | `skills/vision-click/` | 4 | 1215 | screenshot to coordinate click helper |
 | `skills/web-ai/` | 3 | 929 | bundled agent workflow skill |
-| `web-ai/` | 122 | 34899 | provider automation, sessions, MCP, eval, policy, trace |
+| `web-ai/` | 122 | 34917 | provider automation, sessions, MCP, eval, policy, trace |
 | `web-ai/context-pack/` | 10 | 1821 | file selection, token budget, context rendering |
 | `web-ai/eval/` | 5 | 553 | offline provider DOM fixture harness |
 | `web-ai/policy/` | 4 | 297 | mutation and content-boundary guardrails |
