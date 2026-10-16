@@ -9,7 +9,7 @@ import { CHATGPT_MODEL_SELECTOR_BUTTONS, CHATGPT_SURFACE_RADIO_SELECTOR, CHATGPT
 import { CHATGPT_MODEL_SELECTOR_OBSERVATION } from './capability-observation-presets.mjs';
 import { buildWebAiSnapshot, summarizeSnapshotForDoctor } from './ax-snapshot.mjs';
 import { observeProviderTargets } from './observe-targets.mjs';
-import { editorContractForVendor } from './vendor-editor-contract.mjs';
+import { editorContractForVendor, GROK_MODEL_SELECTOR_BUTTONS } from './vendor-editor-contract.mjs';
 import { reportCacheMetricsFromEvents } from './cache-metrics.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
@@ -37,7 +37,7 @@ const GEMINI_FEATURES = [
 
 const GROK_FEATURES = [
     { feature: 'composer', selectors: ['.ProseMirror[contenteditable="true"]', '[contenteditable="true"].ProseMirror'] },
-    { feature: 'model-picker', selectors: ['button[aria-label="Model select"]', 'button[aria-label*="Model select" i]'] },
+    { feature: 'model-picker', selectors: GROK_MODEL_SELECTOR_BUTTONS },
     { feature: 'upload', selectors: ['button[aria-label*="Upload" i]', 'button[aria-label*="Attach" i]', 'button[data-testid*="plus" i]'] },
     { feature: 'response-feed', selectors: ['[data-testid="assistant-message"]', '[id^="response-"]:has([data-testid="assistant-message"])'] },
     { feature: 'copy-fallback', selectors: GROK_COPY_SELECTORS.copyButtonSelectors },

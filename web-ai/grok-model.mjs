@@ -41,7 +41,7 @@ export const GROK_MODEL_ALIASES = {
     '헤비': 'heavy',
 };
 
-const MODEL_BUTTONS = [
+export const GROK_MODEL_SELECTOR_BUTTONS = [
     'button[aria-label="Model select"]',
     'button[aria-label*="Model select" i]',
     'button[aria-label="모델 선택"]',
@@ -111,7 +111,7 @@ async function openGrokModelMenu(page, usedFallbacks) {
     if (await modelItems.first().isVisible().catch(() => false)) return;
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-        for (const selector of MODEL_BUTTONS) {
+        for (const selector of GROK_MODEL_SELECTOR_BUTTONS) {
             const loc = page.locator(selector).first();
             if (!await loc.isVisible().catch(() => false)) continue;
             await loc.click({ timeout: 5_000 });
@@ -132,8 +132,8 @@ async function openGrokModelMenu(page, usedFallbacks) {
         stage: 'provider-select-mode',
         vendor: 'grok',
         retryHint: 'model-fallback',
-        message: `Grok model selector not found. Tried: ${MODEL_BUTTONS.join(', ')}`,
-        selectorsTried: [...MODEL_BUTTONS],
+        message: `Grok model selector not found. Tried: ${GROK_MODEL_SELECTOR_BUTTONS.join(', ')}`,
+        selectorsTried: [...GROK_MODEL_SELECTOR_BUTTONS],
     });
 }
 
@@ -199,7 +199,7 @@ async function closeGrokModelMenu(page) {
  * @returns {Promise<string|null>}
  */
 async function readGrokModel(page) {
-    for (const selector of MODEL_BUTTONS) {
+    for (const selector of GROK_MODEL_SELECTOR_BUTTONS) {
         const loc = page.locator(selector).first();
         if (!await loc.isVisible().catch(() => false)) continue;
         return normalizeGrokModelChoice(await loc.innerText({ timeout: 1_000 }).catch(() => ''));

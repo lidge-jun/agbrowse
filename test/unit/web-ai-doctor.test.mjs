@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { featureDefinitionsForVendor, diagnoseFeature, runDoctor } from '../../web-ai/doctor.mjs';
+import { selectGrokModel } from '../../web-ai/grok-model.mjs';
+import { GROK_EDITOR_CONTRACT } from '../../web-ai/vendor-editor-contract.mjs';
+import { observeProviderTargets } from '../../web-ai/observe-targets.mjs';
+import { JSDOM } from 'jsdom';
 
 function fakePageForDoctor(url, locatorMap = {}) {
     return {
@@ -29,6 +33,39 @@ function fakePageForDoctor(url, locatorMap = {}) {
 }
 
 describe('web-ai doctor', () => {
+    it.each([
+        ['모델 선택', '전문가', 'expert'],
+        ['모델 선택 메뉴', '빠른', 'fast'],
+        ['Model select', 'Expert', 'expert'],
+    ])('agrees with Grok runtime and snapshot observation for %s', async (label, text, model) => {
+        const dom = new JSDOM(`<button aria-label="${label}">${text}</button>`);
+        const page = fakePageForDoctor('https://grok.com/');
+        page.locator = selector => {
+            const elements = [...dom.window.document.querySelectorAll(selector)];
+            const first = {
+                isVisible: async () => elements.length > 0,
+                innerText: async () => elements[0]?.textContent || '',
+            };
+            return { count: async () => elements.length, first: () => first, nth: () => first };
+        };
+
+        await expect(selectGrokModel(page, model)).resolves.toMatchObject({
+            selected: model, alreadySelected: true,
+        });
+        const report = await runDoctor({ getPage: async () => page }, { vendor: 'grok', full: true });
+        expect(report.features.find(feature => feature.feature === 'model-picker')?.state).toBe('ok');
+
+        const targets = await observeProviderTargets(page, {
+            featureMap: GROK_EDITOR_CONTRACT,
+            snapshot: { refs: { picker: { ref: 'picker', role: 'button', name: label } } },
+        });
+        expect(targets.modelPicker).toEqual(expect.arrayContaining([
+            expect.objectContaining({ source: 'snapshot-ref', ref: 'picker' }),
+            expect.objectContaining({ source: 'css' }),
+        ]));
+        dom.window.close();
+    });
+
     it('featureDefinitionsForVendor returns 6 features for each vendor', () => {
         expect(featureDefinitionsForVendor('chatgpt').length).toBe(7);
         expect(featureDefinitionsForVendor('gemini').length).toBe(6);

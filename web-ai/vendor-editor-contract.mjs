@@ -9,6 +9,7 @@ import {
 } from './chatgpt-composer.mjs';
 import { CHATGPT_COPY_SELECTORS, GEMINI_COPY_SELECTORS, GROK_COPY_SELECTORS } from './copy-markdown.mjs';
 import { CHATGPT_MODEL_SELECTOR_BUTTONS } from './chatgpt-model.mjs';
+import { GROK_MODEL_SELECTOR_BUTTONS } from './grok-model.mjs';
 import { UPLOAD_BUTTON_SELECTORS as CHATGPT_UPLOAD_BUTTON_SELECTORS } from './chatgpt-attachments.mjs';
 
 /** @typedef {import('playwright-core').Page} Page */
@@ -103,7 +104,7 @@ export const GEMINI_RESPONSE_SELECTORS = ['model-response', '[data-response-inde
 export const GEMINI_STREAMING_SELECTORS = ['.response-footer.complete', 'message-actions', '[aria-label*="Good response" i]'];
 
 export const GROK_COMPOSER_SELECTORS = ['.ProseMirror[contenteditable="true"]', '[contenteditable="true"].ProseMirror'];
-export const GROK_MODEL_SELECTOR_BUTTONS = ['button[aria-label="Model select"]', 'button[aria-label*="Model select" i]'];
+export { GROK_MODEL_SELECTOR_BUTTONS };
 export const GROK_UPLOAD_SELECTORS = ['button[aria-label*="Upload" i]', 'button[aria-label*="Attach" i]', 'button[data-testid*="plus" i]'];
 export const GROK_RESPONSE_SELECTORS = ['[data-testid="assistant-message"]', '[id^="response-"]:has([data-testid="assistant-message"])'];
 export const GROK_STREAMING_SELECTORS = ['button[aria-label*="Stop" i]'];
@@ -144,7 +145,7 @@ export const GROK_EDITOR_CONTRACT = Object.freeze({
     vendor: 'grok',
     semanticTargets: {
         composer: { roles: ['textbox'], names: [/message/i, /prompt/i, /ask/i, /grok/i], excludeNames: [/search/i], cssFallbacks: GROK_COMPOSER_SELECTORS, required: true },
-        modelPicker: { roles: ['button', 'combobox'], names: [/model/i], cssFallbacks: GROK_MODEL_SELECTOR_BUTTONS },
+        modelPicker: { roles: ['button', 'combobox'], names: [/model/i, /모델 선택/], cssFallbacks: GROK_MODEL_SELECTOR_BUTTONS },
         uploadSurface: { roles: ['button'], names: [/upload/i, /attach/i, /file/i], cssFallbacks: GROK_UPLOAD_SELECTORS },
         responseFeed: { roles: ['article', 'region', 'group'], names: [/assistant/i, /response/i], cssFallbacks: GROK_RESPONSE_SELECTORS },
         copyButton: { roles: ['button'], names: [/copy/i], cssFallbacks: GROK_COPY_SELECTORS.copyButtonSelectors },
